@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 — 2026-09-10
 
 - Add an optional deterministic importer for one BMAD `ready-for-dev` Story at
   a time, preserving the normal Triad Card contract and source provenance.
