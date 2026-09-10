@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add an optional deterministic importer for one BMAD `ready-for-dev` Story at
+  a time, preserving the normal Triad Card contract and source provenance.
+
 ## 1.6.0 — 2026-09-05
 
 - Add card-declared repository `required_gates` with additive per-card gate

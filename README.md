@@ -107,6 +107,23 @@ The Orchestrator first shows the feature cards, then delegates the bounded work.
 If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencode)
 and [troubleshooting](docs/troubleshooting.md).
 
+## Optional BMAD Story import
+
+When BMAD planning has already produced a Story with `status: ready-for-dev`,
+you can convert one Story at a time into the normal Triad Card contract:
+
+```bash
+npx triad-plus import-bmad-story \
+  --source /absolute/path/to/story.md \
+  --output /absolute/path/to/control/features/STORY-001.md
+```
+
+The importer is read-only and fail-closed. It preserves the Story's executable
+intent, acceptance criteria, technical context, and references, while any
+required gates or dependencies remain explicit caller options. It does not run
+BMAD workflows or add BMAD semantics to the Core. See the [BMAD integration
+guide](docs/bmad-integration.md).
+
 ## Quick start for every runtime
 
 Requirements: Node.js 20+ and one supported coding-agent host.

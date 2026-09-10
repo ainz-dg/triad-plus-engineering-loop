@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { getAdapter, listAdapters, roleDefinitions, sharedSkillNames } from '../adapters/registry.mjs';
+import { writeImportedCard } from '../integrations/bmad/story-importer.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -20,6 +21,7 @@ Usage:
   npx triad-plus init --host <adapter-id> --control <path> [--global] [--team-config <path>] [--allow-product-repo]
   npx triad-plus doctor --host <adapter-id> --control <path> [--hook-config <path>]
   npx triad-plus upgrade --host <adapter-id> --control <path> [--global] [--apply]
+  npx triad-plus import-bmad-story --source <story.md> --output <card.md> [--target-repository <id>] [--provenance <record.json>] [--required-gate <id>] [--depends-on <card-id>]
 
 Adapters: ${listAdapters().map((adapter) => adapter.id).join(', ')}
 
@@ -31,13 +33,20 @@ Installation refuses every asset overwrite. Upgrade is a dry run unless --apply 
 
 function parseArgs(args) {
   const [command, ...rest] = args;
-  const options = { command, global: false, allowProductRepo: false, apply: false };
+  const options = { command, global: false, allowProductRepo: false, apply: false, requiredGates: [], dependsOn: [] };
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
     if (argument === '--global') options.global = true;
     else if (argument === '--allow-product-repo') options.allowProductRepo = true;
     else if (argument === '--apply') options.apply = true;
-    else if (['--host', '--control', '--team-config', '--hook-config'].includes(argument)) {
+    else if (argument === '--required-gate' || argument === '--depends-on') {
+      const value = rest[index + 1];
+      if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value.`);
+      const target = argument === '--required-gate' ? options.requiredGates : options.dependsOn;
+      target.push(value);
+      index += 1;
+    }
+    else if (['--host', '--control', '--team-config', '--hook-config', '--source', '--output', '--target-repository', '--provenance'].includes(argument)) {
       const value = rest[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value.`);
       options[argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
@@ -395,6 +404,21 @@ async function upgrade(options) {
   if (!options.apply) process.stdout.write('Dry run only. Re-run with --apply to update managed assets.\n');
 }
 
+async function importBmadStory(options) {
+  if (!options.source) throw new Error('Provide --source <bmad-story.md>.');
+  if (!options.output) throw new Error('Provide --output <triad-card.md>.');
+  const result = await writeImportedCard({
+    sourcePath: options.source,
+    outputPath: options.output,
+    targetRepository: options.targetRepository,
+    provenancePath: options.provenance,
+    requiredGates: options.requiredGates,
+    dependsOn: options.dependsOn
+  });
+  process.stdout.write(`Imported BMAD Story ${result.story.id} as Triad Card ${result.outputPath}\n`);
+  process.stdout.write(`Provenance ${result.provenancePath}\n`);
+}
+
 async function doctor(options) {
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
@@ -468,10 +492,11 @@ try {
   if (options.command === 'init') await init(options);
   else if (options.command === 'doctor') await doctor(options);
   else if (options.command === 'upgrade') await upgrade(options);
+  else if (options.command === 'import-bmad-story') await importBmadStory(options);
   else if (!options.command) await interactiveInit();
   else if (options.command === '--help' || options.command === '-h') usage(0);
   else throw new Error(`Unknown command: ${options.command}`);
 } catch (error) {
-  process.stderr.write(`${error.message}\n`);
+  process.stderr.write(`${error.code ? `${error.code}: ` : ''}${error.message}\n`);
   usage(2);
 }
