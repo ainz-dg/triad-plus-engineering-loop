@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.8.0 — 2026-09-12
 
-- Add an optional immutable Quality Contract with deterministic baseline
-  fingerprints, fail-closed source-drift detection, phase-scoped quality
-  criteria, and deterministic Evaluator+/delivery aggregation.
+- Add an optional Immutable Quality Contract with a deterministic Quality
+  Baseline fingerprint and fail-closed source-drift detection.
+- Add phase-scoped `product_quality` and `delivery_closure` criteria,
+  criterion-level Evaluator+ validation, and a deterministic aggregate
+  verdict.
+- Add deterministic Evaluator+/Delivery control-plane validation while
+  preserving legacy Triad+ 1.7 compatibility.
 
 ## 1.7.0 — 2026-09-10
 
