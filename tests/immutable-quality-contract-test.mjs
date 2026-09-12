@@ -127,6 +127,10 @@ async function runVerifier(root, agentId = "developer-quality") {
 
 const root = await mkdtemp(path.join(tmpdir(), "triad-quality-contract-"));
 try {
+  const qualitySchema = JSON.parse(await readFile(path.join(repositoryRoot, "schemas", "quality-baseline.schema.json"), "utf8"));
+  assert.equal(qualitySchema.properties.schema_version.const, 1);
+  assert.deepEqual(qualitySchema.properties.criteria.items.properties.scope.enum, ["product_quality", "delivery_closure"]);
+
   // Canonical JSON ignores object formatting and key order while preserving arrays.
   const semanticA = {
     schema_version: 1, id: "format", revision: 1,
