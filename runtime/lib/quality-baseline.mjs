@@ -47,7 +47,7 @@ function projectRelativePath(root, value, label) {
   }
   const normalized = value.replaceAll("\\", "/");
   const posix = path.posix.normalize(normalized);
-  if (posix === "." || posix === ".." || posix.startsWith("../")) {
+  if (posix === "." || posix === ".." || posix.startsWith("../") || normalized.split("/").includes("..")) {
     throw qualityError("quality_baseline_invalid", `${label} escapes the project root`);
   }
   const resolved = path.resolve(root, normalized);
@@ -63,6 +63,12 @@ function validateSha(value, label) {
   }
 }
 
+function rejectUnknownProperties(value, allowed, label) {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw qualityError("quality_baseline_invalid", `${label} contains unknown property: ${key}`);
+  }
+}
+
 /**
  * Validate the manifest shape and its self-declared fingerprint without
  * touching source files. This is useful to callers that only need to inspect
@@ -70,6 +76,7 @@ function validateSha(value, label) {
  */
 export function validateQualityBaselineManifest(manifest) {
   if (!objectLike(manifest)) throw qualityError("quality_baseline_invalid", "quality baseline must be a JSON object");
+  rejectUnknownProperties(manifest, new Set(["schema_version", "id", "revision", "sources", "criteria", "fingerprint"]), "quality baseline manifest");
   if (manifest.schema_version !== 1) throw qualityError("quality_baseline_invalid", "quality baseline schema_version must be 1");
   if (typeof manifest.id !== "string" || !manifest.id.trim()) throw qualityError("quality_baseline_invalid", "quality baseline id must be non-empty");
   if (!Number.isInteger(manifest.revision) || manifest.revision < 1) throw qualityError("quality_baseline_invalid", "quality baseline revision must be a positive integer");
@@ -79,19 +86,21 @@ export function validateQualityBaselineManifest(manifest) {
   const sourceIds = new Set();
   for (const source of manifest.sources) {
     if (!objectLike(source)) throw qualityError("quality_baseline_invalid", "quality baseline sources must contain objects");
+    rejectUnknownProperties(source, new Set(["id", "role", "path", "sha256"]), "quality baseline source");
     if (typeof source.id !== "string" || !source.id.trim()) throw qualityError("quality_baseline_invalid", "quality baseline source id must be non-empty");
     if (sourceIds.has(source.id)) throw qualityError("quality_baseline_invalid", `duplicate quality baseline source id: ${source.id}`);
     sourceIds.add(source.id);
     if (typeof source.role !== "string" || !source.role.trim()) throw qualityError("quality_baseline_invalid", `quality baseline source role is missing: ${source.id}`);
     if (typeof source.path !== "string" || !source.path.trim() || path.isAbsolute(source.path)) throw qualityError("quality_baseline_invalid", `quality baseline source path must be project-relative: ${source.id}`);
     const normalizedSourcePath = path.posix.normalize(source.path.replaceAll("\\", "/"));
-    if (normalizedSourcePath === "." || normalizedSourcePath === ".." || normalizedSourcePath.startsWith("../")) throw qualityError("quality_baseline_invalid", `quality baseline source path escapes the project root: ${source.id}`);
+    if (normalizedSourcePath === "." || normalizedSourcePath === ".." || normalizedSourcePath.startsWith("../") || source.path.replaceAll("\\", "/").split("/").includes("..")) throw qualityError("quality_baseline_invalid", `quality baseline source path escapes the project root: ${source.id}`);
     validateSha(source.sha256, `quality baseline source ${source.id}`);
   }
 
   const criterionIds = new Set();
   for (const criterion of manifest.criteria) {
     if (!objectLike(criterion)) throw qualityError("quality_baseline_invalid", "quality baseline criteria must contain objects");
+    rejectUnknownProperties(criterion, new Set(["id", "scope", "requirement"]), "quality baseline criterion");
     if (typeof criterion.id !== "string" || !criterion.id.trim()) throw qualityError("quality_baseline_invalid", "quality baseline criterion id must be non-empty");
     if (criterionIds.has(criterion.id)) throw qualityError("quality_baseline_invalid", `duplicate quality baseline criterion id: ${criterion.id}`);
     criterionIds.add(criterion.id);

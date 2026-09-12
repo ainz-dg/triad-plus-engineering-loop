@@ -212,8 +212,38 @@ When `project.quality_contract` is configured, the approved packet additionally
 binds the immutable Quality Baseline fingerprint and includes only criteria whose
 scope is `product_quality`. Never send `delivery_closure` criteria, queue state,
 handoff state, or attempt history to Evaluator+. Validate the returned report
-with `runtime/triad-evaluator-validate.mjs`; the control-plane aggregate (FAIL
-over INDETERMINATE over PASS) is authoritative rather than an LLM-supplied
-summary. Evaluate `delivery_closure` criteria separately during delivery
-closure, record each criterion and its evidence reference in the run/handoff,
+with a fresh source-integrity preflight from the control workspace first:
+
+```bash
+node .triad-runtime/triad-evaluator-validate.mjs --mode baseline \
+  --project /absolute/path/to/control-workspace \
+  --baseline artifacts/quality-baseline.json
+```
+
+Only after that command returns JSON `valid: true` may Evaluator+ be dispatched.
+Then validate the returned report with this exact command (substituting the real
+paths/fingerprint):
+
+```bash
+node .triad-runtime/triad-evaluator-validate.mjs --mode evaluator \
+  --project /absolute/path/to/control-workspace \
+  --baseline artifacts/quality-baseline.json \
+  --result artifacts/evaluator-plus/evaluation.json \
+  --expected-candidate-fingerprint <final-candidate-fingerprint>
+```
+
+The command reloads the baseline and every bound source immediately before
+dispatch; a non-zero result is a closed validation failure. The control-plane
+aggregate (FAIL over INDETERMINATE over PASS) is authoritative rather than an
+LLM-supplied summary. Immediately before delivery closure, run this second exact
+command with the delivery result array:
+
+```bash
+node .triad-runtime/triad-evaluator-validate.mjs --mode delivery \
+  --project /absolute/path/to/control-workspace \
+  --baseline artifacts/quality-baseline.json \
+  --result artifacts/delivery-closure.json
+```
+
+Record each delivery criterion and its evidence reference in the run/handoff,
 and declare delivery only when every required delivery criterion is `PASS`.

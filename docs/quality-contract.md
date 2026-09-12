@@ -91,3 +91,29 @@ and recorded with criterion ID, verdict, and evidence references. A run is not
 `delivered` when any configured delivery criterion is `FAIL` or
 `INDETERMINATE`. Quality Bar evaluation is not a required-gate replacement,
 and an Evaluator+ failure never repairs or reopens Triad automatically.
+
+## Explicit control-plane validation
+
+The installed runtime exposes deterministic commands for the two phase
+boundaries. Run the baseline preflight before dispatch, then run the phase
+validators from the control workspace so the baseline is reloaded from disk:
+
+```bash
+node .triad-runtime/triad-evaluator-validate.mjs --mode baseline \
+  --project /absolute/path/to/control \
+  --baseline artifacts/quality-baseline.json
+
+node .triad-runtime/triad-evaluator-validate.mjs --mode evaluator \
+  --project /absolute/path/to/control \
+  --baseline artifacts/quality-baseline.json \
+  --result artifacts/evaluator-plus/evaluation.json \
+  --expected-candidate-fingerprint <final-candidate-fingerprint>
+
+node .triad-runtime/triad-evaluator-validate.mjs --mode delivery \
+  --project /absolute/path/to/control \
+  --baseline artifacts/quality-baseline.json \
+  --result artifacts/delivery-closure.json
+```
+
+Each command emits one machine-readable JSON result and exits non-zero for an
+invalid contract, source drift, stale candidate binding, or invalid result.

@@ -17,6 +17,7 @@ import {
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const verifier = path.join(repositoryRoot, "runtime", "triad-verify.mjs");
+const evaluatorCli = path.join(repositoryRoot, "runtime", "triad-evaluator-validate.mjs");
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const fileDigest = async (file) => digest(await readFile(file));
 
@@ -125,6 +126,13 @@ async function runVerifier(root, agentId = "developer-quality") {
   return { result, evidence };
 }
 
+function runEvaluatorCli(args, cwd) {
+  const result = spawnSync(process.execPath, [evaluatorCli, ...args], { cwd, encoding: "utf8" });
+  assert.ok(result.stdout.trim(), `quality contract CLI emitted no JSON: ${result.stderr}`);
+  const output = JSON.parse(result.stdout.trim().split("\n").at(-1));
+  return { result, output };
+}
+
 const root = await mkdtemp(path.join(tmpdir(), "triad-quality-contract-"));
 try {
   const qualitySchema = JSON.parse(await readFile(path.join(repositoryRoot, "schemas", "quality-baseline.schema.json"), "utf8"));
@@ -164,6 +172,10 @@ try {
   invalidPath.fingerprint = qualityBaselineFingerprint(invalidPath);
   await writeJson(path.join(root, "artifacts", "quality-baseline.json"), invalidPath);
   await expectAsyncCode(() => loadQualityBaseline("artifacts/quality-baseline.json", { projectRoot: root }), "quality_baseline_invalid");
+  const internalTraversal = structuredClone(valid.manifest);
+  internalTraversal.sources[0].path = "artifacts/../outside.md";
+  internalTraversal.fingerprint = qualityBaselineFingerprint(internalTraversal);
+  expectCode(() => validateQualityBaselineManifest(internalTraversal), "quality_baseline_invalid");
   const duplicateSource = structuredClone(valid.manifest);
   duplicateSource.sources[1].id = duplicateSource.sources[0].id;
   duplicateSource.fingerprint = qualityBaselineFingerprint(duplicateSource);
@@ -179,6 +191,18 @@ try {
   const wrongFingerprint = structuredClone(valid.manifest);
   wrongFingerprint.fingerprint = "0".repeat(64);
   expectCode(() => validateQualityBaselineManifest(wrongFingerprint), "quality_baseline_invalid");
+  const unknownManifest = structuredClone(valid.manifest);
+  unknownManifest.extra = true;
+  unknownManifest.fingerprint = qualityBaselineFingerprint(unknownManifest);
+  expectCode(() => validateQualityBaselineManifest(unknownManifest), "quality_baseline_invalid");
+  const unknownSource = structuredClone(valid.manifest);
+  unknownSource.sources[0].extra = true;
+  unknownSource.fingerprint = qualityBaselineFingerprint(unknownSource);
+  expectCode(() => validateQualityBaselineManifest(unknownSource), "quality_baseline_invalid");
+  const unknownCriterion = structuredClone(valid.manifest);
+  unknownCriterion.criteria[0].extra = true;
+  unknownCriterion.fingerprint = qualityBaselineFingerprint(unknownCriterion);
+  expectCode(() => validateQualityBaselineManifest(unknownCriterion), "quality_baseline_invalid");
   await writeJson(path.join(root, "artifacts", "quality-baseline.json"), valid.manifest);
 
   const legacyRoot = await mkdtemp(path.join(root, "legacy-"));
@@ -224,6 +248,11 @@ try {
   };
   assert.equal(validateEvaluatorResult(validResult, { qualityBaseline: baseline, expectedCandidateFingerprint: candidate }).verdict, "PASS");
   assert.equal(validateEvaluatorResult({ ...baseResult, verdict: "PASS" }).legacy, true);
+  expectCode(() => validateEvaluatorResult(validResult, { qualityBaseline: { manifest: baseline, fingerprint: "0".repeat(64) }, expectedCandidateFingerprint: candidate }), "evaluator_quality_baseline_mismatch");
+  expectCode(() => validateEvaluatorResult({ ...validResult, extra: true }, { qualityBaseline: baseline, expectedCandidateFingerprint: candidate }), "evaluator_result_invalid");
+  expectCode(() => validateEvaluatorResult({ ...validResult, created_at: undefined }, { qualityBaseline: baseline, expectedCandidateFingerprint: candidate }), "evaluator_result_invalid");
+  expectCode(() => validateEvaluatorResult({ ...validResult, criteria: [{ ...productCriteria[0], extra: true }] }, { qualityBaseline: baseline, expectedCandidateFingerprint: candidate }), "evaluator_result_invalid");
+  expectCode(() => validateEvaluatorResult(validResult, { qualityBaseline: baseline }), "evaluator_candidate_binding_missing");
   expectCode(() => validateEvaluatorResult({ ...validResult, quality_baseline_fingerprint: "0".repeat(64) }, { qualityBaseline: baseline, expectedCandidateFingerprint: candidate }), "evaluator_quality_baseline_mismatch");
   expectCode(() => validateEvaluatorResult({ ...validResult, candidate_fingerprint: "d".repeat(64) }, { qualityBaseline: baseline, expectedCandidateFingerprint: candidate }), "evaluator_candidate_fingerprint_mismatch");
   expectCode(() => validateEvaluatorResult({ ...validResult, criteria: [] }, { qualityBaseline: baseline, expectedCandidateFingerprint: candidate }), "evaluator_result_invalid");
@@ -236,8 +265,98 @@ try {
   assert.equal(aggregateEvaluatorVerdict([{ verdict: "FAIL" }, { verdict: "INDETERMINATE" }]), "FAIL");
   const deliveryResults = [{ id: "QB-010", scope: "delivery_closure", verdict: "PASS", summary: "Closed.", evidence_refs: ["handoff"] }];
   assert.equal(validateDeliveryClosureCriteria(baseline, deliveryResults).can_deliver, true);
+  expectCode(() => validateDeliveryClosureCriteria({ manifest: baseline, fingerprint: "0".repeat(64) }, deliveryResults), "delivery_closure_invalid");
   assert.equal(validateDeliveryClosureCriteria(baseline, [{ ...deliveryResults[0], verdict: "FAIL" }]).can_deliver, false);
   assert.equal(validateDeliveryClosureCriteria(baseline, [{ ...deliveryResults[0], verdict: "INDETERMINATE" }]).can_deliver, false);
+
+  // Exercise the explicit control-plane CLI, including a fresh source check on
+  // every invocation rather than relying on a previously loaded object.
+  const evaluatorResultPath = path.join(root, "artifacts", "evaluator-result.json");
+  await writeJson(evaluatorResultPath, validResult);
+  const baselineCli = runEvaluatorCli([
+    "--mode", "baseline", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+  ], root);
+  assert.equal(baselineCli.result.status, 0, JSON.stringify(baselineCli.output));
+  assert.equal(baselineCli.output.quality_baseline_fingerprint, baseline.fingerprint);
+  const validCli = runEvaluatorCli([
+    "--mode", "evaluator", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/evaluator-result.json", "--expected-candidate-fingerprint", candidate,
+  ], root);
+  assert.equal(validCli.result.status, 0, JSON.stringify(validCli.output));
+  assert.deepEqual({ valid: validCli.output.valid, verdict: validCli.output.verdict }, { valid: true, verdict: "PASS" });
+  const missingCandidateBindingRun = runEvaluatorCli([
+    "--mode", "evaluator", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/evaluator-result.json",
+  ], root);
+  assert.notEqual(missingCandidateBindingRun.result.status, 0);
+  assert.equal(missingCandidateBindingRun.output.error.code, "evaluator_candidate_binding_missing");
+
+  const legacyResultPath = path.join(root, "artifacts", "legacy-result.json");
+  await writeJson(legacyResultPath, { ...baseResult, verdict: "PASS" });
+  const legacyCli = runEvaluatorCli(["--mode", "evaluator", "--project", root, "--result", "artifacts/legacy-result.json"], root);
+  assert.equal(legacyCli.result.status, 0);
+  assert.equal(legacyCli.output.legacy, true, "legacy CLI mode must remain available without a Quality Contract");
+
+  const tamperedAggregate = { ...validResult, verdict: "FAIL" };
+  await writeJson(evaluatorResultPath, tamperedAggregate);
+  const tamperedRun = runEvaluatorCli([
+    "--mode", "evaluator", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/evaluator-result.json", "--expected-candidate-fingerprint", candidate,
+  ], root);
+  assert.notEqual(tamperedRun.result.status, 0);
+  assert.equal(tamperedRun.output.error.code, "evaluator_result_invalid");
+
+  await writeJson(evaluatorResultPath, { ...validResult, criteria: [] });
+  const missingCriterionRun = runEvaluatorCli([
+    "--mode", "evaluator", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/evaluator-result.json", "--expected-candidate-fingerprint", candidate,
+  ], root);
+  assert.notEqual(missingCriterionRun.result.status, 0);
+  assert.equal(missingCriterionRun.output.error.code, "evaluator_result_invalid");
+
+  await writeJson(evaluatorResultPath, { ...validResult, quality_baseline_fingerprint: "0".repeat(64) });
+  const baselineMismatchRun = runEvaluatorCli([
+    "--mode", "evaluator", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/evaluator-result.json", "--expected-candidate-fingerprint", candidate,
+  ], root);
+  assert.notEqual(baselineMismatchRun.result.status, 0);
+  assert.equal(baselineMismatchRun.output.error.code, "evaluator_quality_baseline_mismatch");
+
+  await writeJson(evaluatorResultPath, { ...validResult, candidate_fingerprint: "d".repeat(64) });
+  const candidateMismatchRun = runEvaluatorCli([
+    "--mode", "evaluator", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/evaluator-result.json", "--expected-candidate-fingerprint", candidate,
+  ], root);
+  assert.notEqual(candidateMismatchRun.result.status, 0);
+  assert.equal(candidateMismatchRun.output.error.code, "evaluator_candidate_fingerprint_mismatch");
+
+  await writeJson(evaluatorResultPath, validResult);
+  await writeFile(valid.qualityBarPath, "# drift immediately before Evaluator\n", "utf8");
+  const evaluatorDriftRun = runEvaluatorCli([
+    "--mode", "evaluator", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/evaluator-result.json", "--expected-candidate-fingerprint", candidate,
+  ], root);
+  assert.notEqual(evaluatorDriftRun.result.status, 0);
+  assert.equal(evaluatorDriftRun.output.error.code, "quality_baseline_drift");
+  await writeFile(valid.qualityBarPath, "# Quality target\n", "utf8");
+
+  const deliveryResultPath = path.join(root, "artifacts", "delivery-closure.json");
+  await writeJson(deliveryResultPath, deliveryResults);
+  const validDeliveryRun = runEvaluatorCli([
+    "--mode", "delivery", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/delivery-closure.json",
+  ], root);
+  assert.equal(validDeliveryRun.result.status, 0, JSON.stringify(validDeliveryRun.output));
+  assert.equal(validDeliveryRun.output.can_deliver, true);
+
+  await writeFile(valid.qualityBarPath, "# drift immediately before delivery\n", "utf8");
+  const deliveryDriftRun = runEvaluatorCli([
+    "--mode", "delivery", "--project", root, "--baseline", "artifacts/quality-baseline.json",
+    "--result", "artifacts/delivery-closure.json",
+  ], root);
+  assert.notEqual(deliveryDriftRun.result.status, 0);
+  assert.equal(deliveryDriftRun.output.error.code, "quality_baseline_drift");
+  await writeFile(valid.qualityBarPath, "# Quality target\n", "utf8");
 
   console.log("Immutable Quality Contract tests passed: canonical baseline, drift fail-closed, legacy compatibility, evaluator criteria, aggregate verdict, and delivery closure.");
 } finally {
