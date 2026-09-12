@@ -12,3 +12,12 @@ attempt history unless the owner explicitly requires it. It reports `PASS`,
 
 An Evaluator+ `FAIL` does not reopen Triad, change the approved state, or start
 repair. An owner or a later Orchestrator may use it as input to a new run.
+
+When a project declares an immutable Quality Contract, the packet also carries
+the approved Quality Baseline fingerprint and exactly one result for each
+`product_quality` criterion. `delivery_closure` criteria are deliberately
+excluded and are evaluated by delivery closure. The control plane validates
+fingerprint, candidate binding, criterion coverage, and the deterministic
+aggregate (`FAIL` over `INDETERMINATE` over `PASS`) before recording the report.
+Formatting a manifest or changing a bound source invalidates the contract; it
+never starts a product retry.

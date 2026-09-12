@@ -36,3 +36,9 @@ result being assessed.
 Return `PASS`, `FAIL`, or `INDETERMINATE` with concise evidence. Do not edit
 source, make delivery decisions, commit, push, or change workflow state; do not
 request repair. A verdict never reopens Triad or starts repair.
+
+If the packet includes an immutable Quality Contract, use its fingerprint and
+evaluate exactly the supplied `product_quality` criteria once each. Never
+evaluate `delivery_closure` criteria; delivery closure records those separately.
+The control plane validates the deterministic aggregate, so do not invent a
+different overall verdict.

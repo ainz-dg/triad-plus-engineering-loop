@@ -12,6 +12,11 @@ project:
     snapshot: artifacts/prd.md
     sha256: null
     source_revision: null
+  quality_contract:
+    # Optional immutable target for v1.8 projects. Leave both values null for
+    # legacy PRD-only behavior; bootstrap fills them only from declared sources.
+    baseline: null # artifacts/quality-baseline.json
+    fingerprint: null
   loop: .loop
   control_plane:
     verification: optional

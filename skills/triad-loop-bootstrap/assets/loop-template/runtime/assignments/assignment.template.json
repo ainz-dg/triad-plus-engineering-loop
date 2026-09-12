@@ -16,6 +16,8 @@
   "expected_prd_sha256": "REPLACE_ME_SHA256",
   "expected_card_sha256": "REPLACE_ME_SHA256",
   "expected_gates_sha256": "REPLACE_ME_SHA256",
+  "quality_baseline_path": null,
+  "expected_quality_baseline_fingerprint": null,
   "required_gate_ids": [],
   "scope_contract": null,
   "required_repository_skills": [

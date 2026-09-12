@@ -22,3 +22,10 @@ runtime-specific branches to Core installer or verification logic.
 
 Evaluator+ is outside the Core: it runs after a Reviewer-approved result, receives
 a deliberately limited fresh packet, and cannot reopen the completed run.
+
+An optional immutable Quality Contract extends this existing control-plane
+baseline without creating a second control plane. Its JSON manifest binds
+approved intent sources and phase-scoped criteria to one canonical fingerprint.
+`product_quality` criteria travel in the fresh Evaluator+ packet;
+`delivery_closure` criteria are checked only during delivery closure. Projects
+without the contract keep the legacy PRD baseline behavior.

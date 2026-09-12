@@ -20,6 +20,14 @@ conditions, runnable quality gates, practical-test need, and integration need.
    snapshot, revision when available, and SHA-256.
 4. Copy `assets/loop-template/` to `.loop/`, then create bounded feature cards
    under `features/` and a complete `feature-plan.md`.
+   When an owner-approved Quality Bar or additional intent/architecture source
+   exists, copy `assets/loop-template/quality-baseline.json`, fill only the
+   declared source hashes and criteria, compute its canonical fingerprint, and
+   bind `project.quality_contract.baseline` plus `fingerprint`. Use
+   `criteria: []` when no machine-readable Quality Bar was supplied; never
+   invent criteria. The manifest is immutable for the run and a requirement
+   change creates a new revision/rebaseline event rather than editing it in
+   place.
 5. Replace every gate placeholder. Gate executors in v1 are only
    `control-plane`; remove a non-applicable gate with a recorded reason instead
    of declaring manual or MCP execution.

@@ -52,6 +52,14 @@ presentation for this invocation, do not repeat it.
    that exact card baseline for every rework attempt: preserved candidate changes
    are normal during rework. Do not create the first scope-bound assignment from
    unattributable dirty product changes; record `invalid_context` instead.
+   If `project.quality_contract` is configured, load and validate its
+   project-relative JSON manifest before dispatch. Verify the canonical
+   fingerprint and every bound source SHA-256, then bind
+   `quality_baseline_path` and `expected_quality_baseline_fingerprint` on the
+   assignment. A `quality_baseline_invalid` or `quality_baseline_drift`
+   result is `invalid_context`: do not dispatch the Developer, run expensive
+   gates, or consume retry/remediation budget. Legacy projects without the
+   quality contract retain PRD-only behavior.
 2. Choose one dependency-approved `ready` card, mark it `in_progress`, append an
    attempt, and create an active assignment before delegating. Before each
    delegation, publish an owner-facing activation notice that attributes the
@@ -80,6 +88,9 @@ presentation for this invocation, do not repeat it.
    catalog and fails closed if a stale assignment names a missing or invalid
    gate. It records the selection mode, card IDs, effective IDs, and required
    IDs in the verification evidence.
+   When a Quality Contract is bound, `triad-verify` performs that baseline
+   preflight before the expensive gates and records its fingerprint in
+   `evidence.baseline.quality_baseline_fingerprint`.
 5. A passing verifier result is **environment-derived evidence**. Move only then
    to `in_review`. Missing, stale, failed, timed-out, invalid-context, or
    invalidated evidence never advances the card.
@@ -196,3 +207,13 @@ or change the already closed Triad run. A per-run `--evaluator` or
 `--no-evaluator` request may override the configuration when the host exposes it.
 Before dispatching it, publish the corresponding attributed Evaluator+
 activation notice.
+
+When `project.quality_contract` is configured, the approved packet additionally
+binds the immutable Quality Baseline fingerprint and includes only criteria whose
+scope is `product_quality`. Never send `delivery_closure` criteria, queue state,
+handoff state, or attempt history to Evaluator+. Validate the returned report
+with `runtime/triad-evaluator-validate.mjs`; the control-plane aggregate (FAIL
+over INDETERMINATE over PASS) is authoritative rather than an LLM-supplied
+summary. Evaluate `delivery_closure` criteria separately during delivery
+closure, record each criterion and its evidence reference in the run/handoff,
+and declare delivery only when every required delivery criterion is `PASS`.

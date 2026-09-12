@@ -23,3 +23,8 @@ Return `candidate_wins`, `bar_wins`, or `indeterminate`. A `bar_wins` result has
 exactly one evidence-based largest gap with one bounded repair scope. Do not edit
 product source, change state, commit, push, or approve delivery; do not request
 repair or reopen the Triad run.
+
+For an immutable Quality Contract, report the supplied baseline fingerprint and
+evaluate every supplied `product_quality` criterion once. `delivery_closure`
+criteria are not part of this packet and are checked by delivery closure. The
+control plane, not the model, determines the deterministic aggregate verdict.

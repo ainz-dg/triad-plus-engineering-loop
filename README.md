@@ -107,6 +107,15 @@ The Orchestrator first shows the feature cards, then delegates the bounded work.
 If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencode)
 and [troubleshooting](docs/troubleshooting.md).
 
+## Optional immutable quality target
+
+An initialized project may bind an immutable JSON Quality Baseline through
+`project.quality_contract`. Triad fingerprints the canonical manifest, verifies
+all declared sources before running costly gates, and fails closed on malformed
+contracts or source drift. `product_quality` criteria are evaluated one by one
+by a fresh Evaluator+; `delivery_closure` criteria remain in the delivery gate.
+Projects without this opt-in continue to use the legacy PRD baseline path.
+
 ## Optional BMAD Story import
 
 When BMAD planning has already produced a Story with `status: ready-for-dev`,

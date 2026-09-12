@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add an optional immutable Quality Contract with deterministic baseline
+  fingerprints, fail-closed source-drift detection, phase-scoped quality
+  criteria, and deterministic Evaluator+/delivery aggregation.
+
 ## 1.7.0 — 2026-09-10
 
 - Add an optional deterministic importer for one BMAD `ready-for-dev` Story at

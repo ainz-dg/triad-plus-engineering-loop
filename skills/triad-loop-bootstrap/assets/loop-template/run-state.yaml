@@ -7,8 +7,15 @@ delivery:
   handoff: null
   branches: []
   evaluator_report: null
+  quality_criteria: [] # delivery_closure results; product_quality stays in Evaluator+
   delivered_at: null
   owner_message: null
+
+quality_contract:
+  baseline: null
+  fingerprint: null
+  revision: null
+  rebaseline_events: []
 
 feature_plan:
   path: feature-plan.md

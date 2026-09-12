@@ -51,6 +51,16 @@ selezionati possono essere saltati. Lista assente o vuota mantiene il
 comportamento legacy. Triad collega e registra gli ID senza attribuire loro un
 significato visuale o di altro dominio.
 
+## Target di qualità immutabile
+
+Un progetto può optare per `project.quality_contract`, che collega al run un
+fingerprint canonico del Quality Baseline JSON e verifica le source hashate prima
+del dispatch e dei gate costosi. Drift o manifest invalido fermano il run come
+contesto invalido senza consumare il budget di retry del prodotto. I criteri
+`product_quality` vengono inviati al nuovo Evaluator+; quelli
+`delivery_closure` sono verificati separatamente prima di `delivered`. Senza
+questo opt-in i progetti legacy restano invariati.
+
 ## Retry e scope del candidato
 
 Gli attempt sono record storici di esecuzione. I nuovi workspace separano e

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "REPLACE_ME_QUALITY_BASELINE_ID",
+  "revision": 1,
+  "sources": [
+    {
+      "id": "prd",
+      "role": "intent",
+      "path": "artifacts/prd.md",
+      "sha256": "REPLACE_ME_SHA256"
+    }
+  ],
+  "criteria": [],
+  "fingerprint": "REPLACE_ME_SHA256"
+}

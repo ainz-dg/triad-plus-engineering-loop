@@ -51,6 +51,16 @@ become required for that card, and unselected optional gates may be skipped. An
 absent or empty list preserves the legacy behavior. Triad binds and records the
 IDs but does not attach visual or other domain-specific meaning to them.
 
+## Immutable quality target
+
+When a project opts in with `project.quality_contract`, the control plane binds a
+canonical JSON Quality Baseline fingerprint and verifies its hashed sources before
+dispatch or expensive gates. A source drift or invalid manifest stops the run as
+context invalid, without consuming product retry budget. Product-quality criteria
+are sent to the fresh Evaluator+ one at a time; delivery-closure criteria are
+checked separately before `delivered`. The contract is optional, and legacy
+projects without it are unchanged.
+
 ## Retry accounting and candidate scope
 
 Attempts are historical execution records. New workspaces separately bound

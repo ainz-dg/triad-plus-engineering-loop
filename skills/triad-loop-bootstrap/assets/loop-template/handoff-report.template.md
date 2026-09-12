@@ -22,6 +22,19 @@
 
 - Evidence/review chain: `<verification/review/evaluator references>`
 
+## Quality Contract closure
+
+- Quality Baseline: `<path, revision, fingerprint or legacy PRD-only mode>`
+- Product-quality Evaluator+ verdict: `<PASS|FAIL|INDETERMINATE|not configured>`
+
+| Criterion | Scope | Verdict | Evidence references |
+| --- | --- | --- | --- |
+| `<delivery criterion ID>` | `delivery_closure` | `<PASS|FAIL|INDETERMINATE>` | `<refs>` |
+
+Delivery is `delivered` only when every configured `delivery_closure` criterion
+is recorded as `PASS`. Product-quality criteria are evaluated by the fresh
+Evaluator+ packet and are never silently evaluated during delivery closure.
+
 ## Local-worktree integration
 
 | Card | Consumer worktree | Provider worktree | Branch/commit map | Setup command | Data/event/callback gate |

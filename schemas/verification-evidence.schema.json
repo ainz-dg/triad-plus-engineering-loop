@@ -12,7 +12,7 @@
     "assignment_id": { "type": ["string", "null"] },
     "assignment_sha256": { "type": ["string", "null"] },
     "trigger": { "type": "object", "required": ["event", "agent_id", "agent_type"], "properties": { "event": { "type": "string" }, "agent_id": { "type": ["string", "null"] }, "agent_type": { "type": ["string", "null"] } } },
-    "baseline": { "type": "object", "required": ["prd_sha256", "card_sha256", "git_head", "candidate_fingerprint"], "properties": { "prd_sha256": { "type": ["string", "null"] }, "card_sha256": { "type": ["string", "null"] }, "git_head": { "type": ["string", "null"] }, "candidate_fingerprint": { "type": ["string", "null"] }, "branch": { "type": ["string", "null"] } } },
+    "baseline": { "type": "object", "required": ["prd_sha256", "card_sha256", "git_head", "candidate_fingerprint"], "properties": { "prd_sha256": { "type": ["string", "null"] }, "card_sha256": { "type": ["string", "null"] }, "quality_baseline_fingerprint": { "type": ["string", "null"], "pattern": "^[a-fA-F0-9]{64}$" }, "git_head": { "type": ["string", "null"] }, "candidate_fingerprint": { "type": ["string", "null"] }, "branch": { "type": ["string", "null"] } } },
     "scope": {
       "type": "object",
       "properties": {

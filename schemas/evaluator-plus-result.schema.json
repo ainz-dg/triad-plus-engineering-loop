@@ -8,9 +8,25 @@
     "schema_version": { "const": 1 },
     "feature_id": { "type": "string", "minLength": 1 },
     "candidate_fingerprint": { "type": "string", "minLength": 1 },
+    "quality_baseline_fingerprint": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
     "verdict": { "enum": ["PASS", "FAIL", "INDETERMINATE"] },
     "summary": { "type": "string", "minLength": 1 },
     "evidence_refs": { "type": "array", "items": { "type": "string" } },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "scope", "verdict", "summary", "evidence_refs"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "scope": { "const": "product_quality" },
+          "verdict": { "enum": ["PASS", "FAIL", "INDETERMINATE"] },
+          "summary": { "type": "string", "minLength": 1 },
+          "evidence_refs": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    },
     "created_at": { "type": "string", "format": "date-time" }
   },
   "additionalProperties": false

@@ -51,3 +51,8 @@ post-run report at the absolute `<control-workspace>/artifacts/evaluator-plus/`
 path supplied by the Orchestrator; never infer it relative to a product worktree.
 `FAIL` or `INDETERMINATE` is information for a new
 owner-requested run, never an automatic repair and never reopens Triad.
+
+If an immutable Quality Contract is configured, pass only its fingerprint and
+`product_quality` criteria to the fresh Evaluator+. Exclude `delivery_closure`
+criteria, which are recorded by delivery closure. Return one result per product
+criterion; the shared control plane validates coverage and aggregate verdict.

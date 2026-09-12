@@ -24,3 +24,8 @@ out-of-packet control record to justify a verdict. Return `PASS`, `FAIL`, or
 Do not edit source, change Triad queue/state, assign work, commit, push, publish,
 or start repair. Your verdict is post-run information. It never reopens Triad,
 requests repair, or changes an already closed result.
+
+When an immutable Quality Contract is present, report its fingerprint and one
+result for every supplied `product_quality` criterion. Do not receive or judge
+`delivery_closure` criteria; the control plane validates the deterministic
+aggregate rather than trusting a model-selected overall verdict.

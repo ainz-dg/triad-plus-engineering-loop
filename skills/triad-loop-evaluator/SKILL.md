@@ -31,12 +31,22 @@ values in the evaluation report. A missing or mismatched binding makes the
 evaluation `INDETERMINATE`; it never starts repair or changes the closed Triad
 result.
 
-Return a report conforming to `schemas/evaluator-plus-result.schema.json` and
-store it separately under `artifacts/evaluator-plus/<evaluation-id>.json`:
+When the approved packet declares an immutable Quality Contract, receive its
+fingerprint and only the criteria whose scope is `product_quality`. Do not
+receive or evaluate `delivery_closure` criteria; those belong to the delivery
+gate. Return a report conforming to `schemas/evaluator-plus-result.schema.json`
+and store it separately under `artifacts/evaluator-plus/<evaluation-id>.json`:
 
 - `PASS`: the final artifact meets the supplied target;
 - `FAIL`: the target is not met, with direct evidence/references;
 - `INDETERMINATE`: the artifact or target cannot be observed reliably.
+
+For a Quality Contract result, include `quality_baseline_fingerprint` and one
+criterion result for every product-quality criterion, exactly once. Use only
+`PASS`, `FAIL`, or `INDETERMINATE` per criterion. The overall `verdict` is
+deterministically checked by `runtime/triad-evaluator-validate.mjs`: any FAIL
+wins, otherwise any INDETERMINATE wins, otherwise PASS. A mismatch or missing
+criterion is invalid evidence, not a product verdict.
 
 Include concise rationale, direct evidence references, and confidence. Do not
 edit source, change the Triad queue/state, commit, push, approve delivery, or

@@ -47,3 +47,22 @@ optional gate becomes required for that card, and an absent or empty list keeps
 the legacy gate behavior. Selected IDs are validated before Developer dispatch
 and are bound to the assignment; Triad does not attach visual or other
 domain-specific meaning to a gate ID.
+
+## Optional immutable Quality Contract
+
+New or upgraded control workspaces may set:
+
+```yaml
+project:
+  quality_contract:
+    baseline: artifacts/quality-baseline.json
+    fingerprint: <sha256 of the canonical manifest>
+```
+
+The JSON manifest must contain at least one hashed, project-relative source and
+may contain criteria scoped only to `product_quality` or `delivery_closure`.
+The fingerprint is deterministic and independent of JSON whitespace or object
+key order. A configured contract is validated before expensive verification
+gates; malformed manifests and source drift fail closed. Omitting the section
+preserves the 1.7 legacy PRD baseline behavior. A rebaseline is a new manifest
+revision and explicit owner event, never an in-place edit.

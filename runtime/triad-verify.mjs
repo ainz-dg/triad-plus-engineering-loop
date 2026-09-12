@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { writeAtomicJson } from "./lib/evidence.mjs";
 import { calculateCandidateFingerprint, collectCandidateChanges, worktreeBranch } from "./lib/fingerprint.mjs";
 import { executeGates, gateSelectionEvidence, loadTrustedGates, resolveGateSelection } from "./lib/gates.mjs";
+import { resolveQualityContract } from "./lib/quality-baseline.mjs";
 import { evaluateScopeContract, parseScopeContract } from "./lib/scope-contract.mjs";
 
 const argv = process.argv.slice(2);
@@ -22,6 +23,10 @@ async function readStdin() {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function evidenceFingerprint(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value) ? value : null;
 }
 
 async function sha256File(value) {
@@ -65,7 +70,7 @@ async function resolveAssignment(projectRoot, trigger, explicitAssignment) {
   return { assignmentPath, assignment: JSON.parse(source), assignmentHash: sha256(source) };
 }
 
-async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null }) {
+async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null, qualityBaselineFingerprint = null }) {
   const evidence = {
     schema_version: 1,
     run_id: runId,
@@ -77,6 +82,7 @@ async function buildInvalidEvidence({ runId, trigger, assignment, reason, output
     baseline: {
       prd_sha256: assignment?.expected_prd_sha256 ?? null,
       card_sha256: assignment?.expected_card_sha256 ?? null,
+      quality_baseline_fingerprint: evidenceFingerprint(qualityBaselineFingerprint ?? assignment?.expected_quality_baseline_fingerprint),
       git_head: null,
       candidate_fingerprint: null,
     },
@@ -147,6 +153,7 @@ async function main() {
   let assignmentPath;
   let outputPath;
   let gateSelection = null;
+  let qualityBaseline = null;
   try {
     let assignmentHash;
     ({ assignmentPath, assignment, assignmentHash } = await resolveAssignment(projectRoot, trigger, option("--assignment")));
@@ -166,6 +173,10 @@ async function main() {
     const cardPath = path.resolve(projectRoot, assignment.card_path);
     await access(prdPath);
     await access(cardPath);
+    // Resolve the optional immutable Quality Contract before any baseline or
+    // expensive-gate check so a bound source drift keeps its precise failure
+    // classification (including when the source is the PRD itself).
+    qualityBaseline = await resolveQualityContract(assignment, projectRoot);
     if ((await sha256File(prdPath)) !== assignment.expected_prd_sha256) throw new Error("PRD baseline hash mismatch");
     if ((await sha256File(cardPath)) !== assignment.expected_card_sha256) throw new Error("feature card hash mismatch");
     const repositorySkills = await validateRepositorySkills(assignment.required_repository_skills, worktree);
@@ -203,6 +214,7 @@ async function main() {
         baseline: {
           prd_sha256: assignment.expected_prd_sha256,
           card_sha256: assignment.expected_card_sha256,
+          quality_baseline_fingerprint: qualityBaseline?.fingerprint ?? null,
           gates_sha256: null,
           git_head: before.git_head,
           candidate_fingerprint: before.value,
@@ -237,9 +249,10 @@ async function main() {
       trigger,
       assignment_ref: path.relative(projectRoot, assignmentPath),
       baseline: {
-        prd_sha256: assignment.expected_prd_sha256,
-        card_sha256: assignment.expected_card_sha256,
-        gates_sha256: trusted.actualHash,
+          prd_sha256: assignment.expected_prd_sha256,
+          card_sha256: assignment.expected_card_sha256,
+          quality_baseline_fingerprint: qualityBaseline?.fingerprint ?? null,
+          gates_sha256: trusted.actualHash,
         git_head: before.git_head,
         candidate_fingerprint: before.value,
         branch,
@@ -269,7 +282,8 @@ async function main() {
       reason: error.message,
       outputPath,
       failureCode: error.code ?? "verification_context_invalid",
-      gateSelection
+      gateSelection,
+      qualityBaselineFingerprint: qualityBaseline?.fingerprint ?? null
     });
     process.stdout.write(`${JSON.stringify({ run_id: runId, status: evidence.status, evidence: outputPath ?? null })}\n`);
     process.exitCode = 3;

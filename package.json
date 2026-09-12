@@ -28,7 +28,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node tests/runtime-forward-test.mjs && node tests/retry-scope-contracts-test.mjs && node tests/cli-install-test.mjs && node tests/codex-liveness-test.mjs && node tests/bmad-story-importer-test.mjs",
+    "test": "node tests/runtime-forward-test.mjs && node tests/retry-scope-contracts-test.mjs && node tests/cli-install-test.mjs && node tests/codex-liveness-test.mjs && node tests/bmad-story-importer-test.mjs && node tests/immutable-quality-contract-test.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "repository": {

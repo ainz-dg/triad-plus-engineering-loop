@@ -17,6 +17,23 @@ An agent-reported claim is not the same as verification evidence. A Developer ca
 report the commands it ran; `triad-verify` independently observes declared
 required `control-plane` gates and writes atomic evidence.
 
+## Immutable Quality Contract
+
+Projects may opt into `project.quality_contract` with a project-relative JSON
+manifest and its expected SHA-256 fingerprint. The shared
+`runtime/lib/quality-baseline.mjs` loader canonicalizes the manifest (excluding
+its self-declared `fingerprint`), validates source paths, IDs, scopes, and hashes,
+then verifies every bound source before any expensive gate runs. A malformed,
+missing, or mismatched contract is `invalid_context`; a valid manifest whose
+bound source content has changed is `quality_baseline_drift`. Both fail closed:
+no Developer dispatch, gate execution, or retry budget consumption is allowed.
+
+The verifier records `baseline.quality_baseline_fingerprint` when configured and
+records `null` for legacy projects. The Quality Contract is distinct from the
+repository/card baseline and the candidate fingerprint: it says what the run is
+trying to satisfy, not which Git commit was checked out or what the candidate
+changed.
+
 Before gates run, the verifier validates the active assignment, PRD/card/gate
 hashes, worktree, expected branch, and candidate fingerprint. It records the
 assignment ID/hash and run ID, executes deterministic commands with a bounded
