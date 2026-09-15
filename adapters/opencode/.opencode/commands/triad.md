@@ -7,6 +7,11 @@ Operate a Triad+ Engineering Loop for the following owner request:
 
 $ARGUMENTS
 
+When the input is a native BMAD `epics.md` (or its `_bmad-output` directory),
+use the deterministic native intake from `triad-loop-orchestrator`. Do not ask
+the owner to create one Story file per BMAD Story or to run
+`import-bmad-story` repeatedly; keep `epics.md` read-only.
+
 If `.triad-plus/team.json` exists, load it before replying. Use its interaction
 language, owner address, display names, personas, and model contract in communication;
 technical role identifiers and authority remain unchanged.
@@ -43,3 +48,19 @@ When true, automatically dispatch `triad-evaluator` in a fresh context with only
 the approved evaluation packet. When false or omitted, finish without evaluation.
 An Evaluator+ verdict never reopens Triad, assigns Developer work, or starts
 repair; `--evaluator` and `--no-evaluator` are per-run overrides when supplied.
+
+Before delegating each card, create the immutable Assignment Packet with:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Dispatch the Developer with the returned `dispatch.cwd` as its OpenCode
+workdir, which MUST be the assigned product worktree. Pass the packet and card
+as the primary contract, followed by explicit control paths and mandatory skill
+paths. Dispatch the Reviewer with the same packet and candidate worktree when
+it needs direct inspection; do not reconstruct the full PRD/ADR by default.
+Use native read/grep/glob/list tools for simple reads and Bash only for
+build/test/git/script/system commands.

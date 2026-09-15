@@ -37,6 +37,24 @@ decision yourself from the card, worktree, and environment-derived verifier
 evidence. Use the model/provider selected in `team.json` only when it is
 available in Hermes; otherwise report the mismatch rather than substituting it.
 
+When the owner supplies native BMAD `epics.md` or its `_bmad-output` directory,
+use the deterministic native intake from `triad-loop-orchestrator`; do not ask
+for split Story files or repeated `import-bmad-story` calls.
+
+Before each delegation, create and bind the immutable Assignment Packet:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Use the returned `dispatch.cwd` as the `--in` worktree and explicit Hermes
+`workdir`. Give Developer and Reviewer the same packet plus card and mandatory
+skill paths; the packet is primary and full PRD/ADR reads are fallback-only.
+Prefer native read/grep/glob/list operations for simple discovery and keep
+shell for builds, tests, git, scripts, and system commands.
+
 After the Developer finishes, explicitly run
 `.triad-runtime/triad-verify.mjs` with the active assignment. Hermes has no
 Triad lifecycle hook in this adapter. A verifier pass is environment-derived

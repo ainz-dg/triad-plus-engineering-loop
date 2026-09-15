@@ -6,6 +6,12 @@ Operate a Triad+ Engineering Loop for this owner request:
 
 $ARGUMENTS
 
+If the input is an `epics.md` file or a directory containing
+`_bmad-output/planning-artifacts/epics.md`, use the native deterministic BMAD
+intake described by `triad-loop-orchestrator`. Do not ask the owner to split
+Stories or run `import-bmad-story` repeatedly; BMAD `epics.md` is the planning
+handoff and remains read-only.
+
 Act as the Triad Orchestrator. Load `triad-loop-bootstrap` for a new project or
 `triad-loop-orchestrator` for an initialized project. At bootstrap and resume,
 read `project.control_plane.dispatch_mode` (defaulting to `auto`) and pass it as
@@ -50,6 +56,28 @@ dependency-satisfied draft card to `ready`, select the next ready card, create
 its assignment, and delegate it. Do not ask the owner to continue or pause
 between cards while a dependency-satisfied card remains. Stop only for a
 declared escalation, a blocked card, or when every required card is terminal.
+
+Before each Developer assignment, create the immutable Assignment Packet and
+bind it to the active assignment by running the exact command below from the
+control workspace (replace only the declared paths):
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Use the returned JSON dispatch context when spawning the Developer: its
+`dispatch.cwd` MUST be the assigned product worktree. Pass the control
+workspace, repository, branch, card, packet, and mandatory skill paths
+explicitly. The packet plus card are the Developer's primary context; full PRD
+or ADR reads are fallback-only for a missing detail or contradiction. Dispatch
+the Reviewer with the same packet and candidate worktree cwd when it needs
+direct inspection, plus the candidate and verifier evidence. Do not use the
+packet to replace real mandatory-skill reads or verifier hash checks.
+
+For simple file discovery, prefer Codex native read/grep/glob/list operations;
+use shell commands for builds, tests, git, scripts, and system tasks.
 
 The ordinary chain is unattended: Developer completion → verifier → Reviewer →
 rework or approval → next card. A Developer report is never a reason to wait

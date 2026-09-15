@@ -1,12 +1,20 @@
-# BMAD Story importer
+# BMAD integration
 
-This optional integration converts one BMAD Markdown Story with
-`status: ready-for-dev` into a normal Triad feature Card. It is intentionally
-small and deterministic: the source is read-only, caller options are explicit,
-and BMAD workflows are never invoked.
+The primary BMAD handoff is the native planning artifact
+`_bmad-output/planning-artifacts/epics.md`. Use the deterministic parser in
+`epics-parser.mjs` to detect Epic/Story boundaries, ingest canonical Stories,
+resolve Triad execution readiness, and materialize normal Cards with strong
+source provenance.
 
-See [the public BMAD integration guide](../../docs/bmad-integration.md) for the
-mapping contract, CLI/API examples, provenance sidecar, and fail-closed rules.
+The parser is read-only and does not invoke BMAD workflows or mutate
+`epics.md`. It reuses the Card builder from `story-importer.mjs`; no
+intermediate BMAD Story files are required.
 
-The implementation is in `story-importer.mjs`. It does not add BMAD-specific
-branches to the Triad Core or infer gates/dependencies from planning order.
+`story-importer.mjs` remains the low-level compatibility API for a standalone
+Story that already has `status: ready-for-dev`. It is retained for debugging,
+tests, automation, and existing callers, but it is not the primary BMAD user
+workflow.
+
+See [the native BMAD integration guide](../../docs/bmad-integration.md) for the
+handoff contract, repository resolution, execution readiness, provenance, and
+fail-closed behavior.

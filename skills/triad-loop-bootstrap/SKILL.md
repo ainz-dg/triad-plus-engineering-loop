@@ -47,8 +47,21 @@ conditions, runnable quality gates, practical-test need, and integration need.
 The normal state route is `draft → ready → in_progress → verifying → in_review
 → approved|rework|blocked`. The Orchestrator owns those records. Before each
 Developer dispatch, write an active assignment with a unique assignment ID,
-feature, attempt, expected branch, worktree, PRD/card/gate hashes, and verifier
-run ID. The verifier produces environment-derived evidence; it never changes
+   feature, repository ID, attempt, expected branch, worktree, PRD/card/gate
+   hashes, and verifier run ID. Populate only the packet's bounded `context`
+   fields (relevant excerpts, acceptance, verification mapping, touch points,
+   constraints, risks, and prior evidence). Then create its immutable Assignment Packet and bind the returned path
+and SHA-256 in that assignment:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+The command returns JSON containing the packet path and the dispatch context;
+launch the delegated role with `dispatch.cwd` set to the declared product
+worktree. The verifier produces environment-derived evidence; it never changes
 card state.
 
 Use local worktrees for enabled multi-repository integration and declare a final

@@ -18,6 +18,14 @@ Prima del lavoro l’Orchestrator congela il PRD, dichiara card misurabili,
 repository/worktree/branch e quality gate deterministici. Mostra il piano al
 proprietario, poi delega normalmente sviluppo e review.
 
+Per ogni assignment attivo può creare un Assignment Packet immutabile. Il
+packet contiene il contesto delimitato della card e gli estratti pertinenti; il
+host avvia il Developer con `cwd`/`workdir` uguale al product worktree
+dichiarato, mantenendo espliciti i path del control workspace. Il Reviewer
+riceve lo stesso packet più candidato/evidence. La rilettura completa di
+PRD/ADR è solo fallback e le skill obbligatorie continuano a essere lette e
+verificate tramite i loro path reali.
+
 Dopo il completamento del Developer avviene la verifica: tramite hook validato
 quando disponibile, altrimenti con dispatch esplicito dell’Orchestrator. Il
 verifier esegue solo comandi `control-plane` dichiarati. L’evidence atomica lega

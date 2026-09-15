@@ -1,110 +1,206 @@
-# Optional BMAD Story integration
+# BMAD native intake
 
-Triad+ can consume one already-produced BMAD Story and turn it into a normal
-Triad feature Card. This is an integration boundary, not a BMAD execution
-adapter: BMAD remains the planning authority and Triad remains responsible for
-implementation, verification, review, and delivery.
+Triad+ treats BMAD as the planning authority and takes over at the natural
+planning handoff: the read-only `_bmad-output/planning-artifacts/epics.md`
+artifact.
 
-## Contract
+```text
+BMAD planning
+  -> epics.md
+  -> deterministic Triad intake
+  -> normal Cards
+  -> Developer -> verifier -> Reviewer -> delivery
+```
 
-The source is a read-only Markdown Story. It must contain:
+The owner does not need to split `epics.md` into Triad-shaped Story files or
+run one import command per Story. A normal host entry point such as
+`/triad /path/to/_bmad-output/planning-artifacts/epics.md` lets the Orchestrator
+detect the native artifact, ingest it, and continue with the initialized
+project-control workspace. Passing the BMAD output directory is also supported
+when it contains the conventional `planning-artifacts/epics.md` path.
 
-- a unique Story `id` and `title` (frontmatter, metadata labels, or a Story
-  heading);
-- `status: ready-for-dev` (frontmatter or a `Status` field);
-- a target repository (or an explicit `--target-repository` importer option);
-- an intent/outcome; and
-- acceptance criteria.
+## Responsibilities
 
-The importer also carries through the Story's `Tasks & Acceptance`, Code Map,
-Design Notes/constraints, verification expectations, and source references
-when they are present. It does not interpret prose with an LLM, re-decompose a
-Story, or invoke BMAD Build, Build Auto, or `bmad-loop`.
+BMAD owns planning:
 
-## CLI
+- Epic and Story boundaries;
+- intent and user outcome;
+- acceptance criteria;
+- planning context, constraints, and references.
+
+Triad owns execution:
+
+- project and repository resolution;
+- worktree and branch selection;
+- trusted quality gates and required-gate selection;
+- Card creation, assignment, Developer, verifier, Reviewer, retry, and delivery
+  semantics.
+
+Triad never invokes `bmad-loop`, Build, Build Auto, or another BMAD workflow.
+It does not modify `epics.md` or add execution metadata to the BMAD source.
+
+## Deterministic parser and API
+
+The integration is implemented in
+`integrations/bmad/epics-parser.mjs`. It recognizes native headings such as:
+
+```md
+### Epic 1: JsonForm integration
+
+### Story 1.1: Route the provider document
+
+**Intent / outcome:** ...
+
+**Acceptance Criteria:**
+**Given** ...
+**When** ...
+**Then** ...
+```
+
+Story detection, Epic association, ID/title extraction, acceptance extraction,
+splitting, and provenance are deterministic code. No LLM is used for intake.
+The source is read twice and must remain byte-stable during the operation.
+
+Read-only ingestion returns canonical Stories without assigning a repository:
+
+```js
+import { ingestBmadEpics } from 'triad-plus/integrations/bmad/epics-parser.mjs';
+
+const result = await ingestBmadEpics({
+  sourcePath: '/project/_bmad-output/planning-artifacts/epics.md'
+});
+
+// result.stories: canonical BMAD Stories
+// result.cards: [] — no execution assumptions were made
+```
+
+The integration-side runtime primitive can materialize normal Cards when an
+initialized Triad project context is supplied:
+
+```bash
+node .triad-runtime/triad-bmad-intake.mjs \
+  --source /project/_bmad-output/planning-artifacts/epics.md \
+  --project /project/triad-control \
+  --output /project/triad-control/features \
+  --repository webup \
+  --required-gate 1.4=cypress-jfr
+```
+
+`--source` may also be the BMAD output directory; the conventional
+`_bmad-output/planning-artifacts/epics.md` file is selected deterministically.
+
+This is an automation/API primitive for the Orchestrator, not the primary user
+workflow. The primary workflow remains the host's `/triad` entry point with the
+BMAD artifact path.
+
+## Ingestion readiness versus execution readiness
+
+An `epics.md` Story is ingestible when it has:
+
+- a unique Story ID;
+- a title;
+- an intent, outcome, or user story;
+- acceptance criteria;
+- an unambiguous Epic parent.
+
+`status: ready-for-dev` is not required for ingestion because native
+`epics.md` commonly does not contain that field. Ingestion does not dispatch a
+Developer and does not claim that a Card is executable.
+
+Before Card materialization, Triad resolves execution readiness:
+
+- project configuration is present;
+- the target repository is explicit, configured as the project default, or is
+  the only configured repository;
+- multiple repositories without a deterministic mapping fail closed;
+- the selected repository has a usable path/worktree;
+- the trusted gate catalog exists and contains no placeholders;
+- explicit per-Story required gates and dependencies validate as caller input.
+
+An explicit non-ready BMAD status such as `draft`, `in-progress`, `done`, or
+`blocked` remains ingestible but is rejected at execution readiness. Triad never
+silently promotes it to `ready-for-dev` in the source.
+
+## Repository and gate binding
+
+`target_repository` is optional in native BMAD. Resolution is deterministic:
+
+```text
+per-Story caller override / Story repository declaration
+  -> explicit caller default repository
+  -> project default repository
+  -> single configured repository
+  -> otherwise fail closed as ambiguous
+```
+
+Conflicting explicit mappings fail closed rather than being silently chosen;
+unknown repositories fail closed. Quality gates are not inferred from
+acceptance prose or Story ordering. If a caller selects an additional gate, it
+is supplied explicitly and uses the existing additive `required_gates`
+semantics. Dependencies are preserved only when explicitly supplied; position
+in `epics.md` never becomes `depends_on` automatically.
+
+## Card and provenance output
+
+The parser reuses the existing Card builder. It does not create intermediate
+BMAD Story files. When Cards are materialized, each normal Card is accompanied
+by an integration-side provenance record containing at least:
+
+```json
+{
+  "source_kind": "bmad-epics",
+  "source_path": "_bmad-output/planning-artifacts/epics.md",
+  "source_sha256": "...",
+  "epic_id": "1",
+  "story_id": "1.1",
+  "source_heading": "Story 1.1: ...",
+  "source_range": { "start_line": 10, "end_line": 38 },
+  "card_sha256": "..."
+}
+```
+
+The source SHA, Story identity, source heading/range, and generated Card SHA
+form the audit binding. Line ranges are supporting evidence, not the sole
+identity. The BMAD source remains read-only.
+
+## Fail-closed conditions
+
+The native intake rejects malformed or unsafe input rather than inventing a
+planning decision. Examples include:
+
+- missing or malformed Epic/Story headings;
+- duplicate Epic or Story IDs;
+- a Story outside an Epic;
+- missing title, intent/outcome, or acceptance criteria;
+- source mutation during the read;
+- ambiguous or unknown repository resolution;
+- missing project/worktree/gate readiness;
+- an explicit non-ready Story status at execution time.
+
+No partial Card set is written when parsing or execution readiness fails.
+
+## Low-level single-Story compatibility path
+
+`import-bmad-story` remains available as a low-level API, debugging tool, test
+utility, and compatibility path for a standalone Story that already carries
+`status: ready-for-dev` and a repository (or an explicit caller override):
 
 ```bash
 npx triad-plus import-bmad-story \
   --source /absolute/path/to/story.md \
-  --output /absolute/path/to/control/features/JFR-001.md \
-  --target-repository webup \
-  --required-gate cypress-jfr \
-  --depends-on JFR-000
+  --output /absolute/path/to/control/features/STORY-001.md
 ```
 
-`--required-gate` and `--depends-on` may be repeated. They are explicit caller
-options: gate IDs are additive to the repository's globally required gates,
-and dependencies are never inferred from `stories.yaml` order. Omit both when
-the Card should use the repository's normal/baseline behavior.
+It is no longer the primary BMAD workflow. It remains read-only and fail-closed,
+preserves explicit gates/dependencies, and uses the same Card contract.
 
-The command writes the Card and a sidecar provenance record (by default
-`<card>.bmad-provenance.json`). The provenance records `source_kind:
-bmad-story`, the resolved source path, source SHA-256, BMAD Story ID, target
-repository, Card SHA-256, and the explicit options used for the import.
+## Non-goals
 
-The same operation is available to Node consumers:
+This integration does not add:
 
-```js
-import { importBmadStory, writeImportedCard } from
-  'triad-plus/integrations/bmad/story-importer.mjs';
-
-const result = await importBmadStory({
-  sourcePath: '/absolute/path/to/story.md',
-  targetRepository: 'webup',
-  requiredGates: ['cypress-jfr']
-});
-
-await writeImportedCard({
-  sourcePath: '/absolute/path/to/story.md',
-  outputPath: '/absolute/path/to/control/features/JFR-001.md',
-  targetRepository: 'webup',
-  requiredGates: ['cypress-jfr']
-});
-```
-
-## Example mapping
-
-Input (abridged):
-
-```md
----
-id: JFR-001
-title: Route the provider document
-status: ready-for-dev
-target_repository: webup
----
-
-# Story JFR-001: Route the provider document
-
-## Intent
-
-Webup renders the provider-owned document at the existing boundary.
-
-## Acceptance Criteria
-
-- Given a valid document, when the route is requested, then it renders.
-
-## Code Map
-
-- `src/components/jfr/`
-```
-
-The generated Card keeps that intent, acceptance criterion, Code Map, and the
-target repository, then adds the normal Triad sections and the integration
-boundary note. The caller-supplied `cypress-jfr` (if any) is recorded as an
-additive required gate; it is not inferred from the word "render" or from a
-file extension.
-
-## Fail-closed behavior
-
-No executable Card is produced for a missing source, missing/non-`ready-for-dev`
-status, malformed or ambiguous ID/title, missing indispensable Card fields,
-conflicting target repository, invalid caller options, or a source that changes
-while it is being read. The API exposes integration-level error codes such as
-`bmad_story_not_ready`, `bmad_story_ambiguous`, `bmad_story_unmappable`, and
-`bmad_story_source_mutated` so a planning gap can return upstream rather than
-become a Developer decision.
-
-After import, the generated Card goes through the existing assignment and
-`triad-verify` path. No Core schema, lifecycle, Reviewer, retry, or gate
-execution semantics are changed by this integration.
+- BMAD execution, Build Auto, or `bmad-loop`;
+- an Epic scheduler or batch execution engine;
+- dependency inference from `stories.yaml` or document order;
+- an LLM Story interpreter;
+- NotebookLM, SMEUP-specific policy, or Quality Baseline Core changes;
+- parallel writers, worktree orchestration, or a new plugin framework.

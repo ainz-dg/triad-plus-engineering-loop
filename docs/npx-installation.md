@@ -58,3 +58,7 @@ PRD path. The Orchestrator presents feature cards before implementation, then
 delegates normal development and review. When `roles.evaluator.enabled` is true,
 the Orchestrator invokes Evaluator+ automatically after Triad is approved. Users never create
 evaluation packets, report paths, or evidence directories manually.
+
+During a run the Orchestrator creates any Assignment Packet internally and
+passes its explicit product-worktree dispatch context to the delegated roles;
+there is no user-facing packet path to configure.

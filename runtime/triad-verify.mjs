@@ -8,6 +8,7 @@ import { calculateCandidateFingerprint, collectCandidateChanges, worktreeBranch 
 import { executeGates, gateSelectionEvidence, loadTrustedGates, resolveGateSelection } from "./lib/gates.mjs";
 import { resolveQualityContract } from "./lib/quality-baseline.mjs";
 import { evaluateScopeContract, parseScopeContract } from "./lib/scope-contract.mjs";
+import { validateAssignmentPacket } from "./lib/assignment-packet.mjs";
 
 const argv = process.argv.slice(2);
 const option = (name) => {
@@ -70,7 +71,7 @@ async function resolveAssignment(projectRoot, trigger, explicitAssignment) {
   return { assignmentPath, assignment: JSON.parse(source), assignmentHash: sha256(source) };
 }
 
-async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null, qualityBaselineFingerprint = null }) {
+async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null, qualityBaselineFingerprint = null, assignmentPacket = null }) {
   const evidence = {
     schema_version: 1,
     run_id: runId,
@@ -86,6 +87,9 @@ async function buildInvalidEvidence({ runId, trigger, assignment, reason, output
       git_head: null,
       candidate_fingerprint: null,
     },
+    assignment_packet: assignmentPacket ?? (assignment?.assignment_packet_path || assignment?.assignment_packet_sha256
+      ? { path: assignment.assignment_packet_path ?? null, sha256: assignment.assignment_packet_sha256 ?? null }
+      : null),
     gates: [],
     required_gates_passed: false,
     status: "invalid_context",
@@ -154,6 +158,7 @@ async function main() {
   let outputPath;
   let gateSelection = null;
   let qualityBaseline = null;
+  let assignmentPacket = null;
   try {
     let assignmentHash;
     ({ assignmentPath, assignment, assignmentHash } = await resolveAssignment(projectRoot, trigger, option("--assignment")));
@@ -173,6 +178,10 @@ async function main() {
     const cardPath = path.resolve(projectRoot, assignment.card_path);
     await access(prdPath);
     await access(cardPath);
+    // The packet is an immutable, shared assignment contract. Validate its
+    // binding before skills, scope, or expensive gates so a stale packet is
+    // reported as invalid context and consumes no retry budget.
+    assignmentPacket = await validateAssignmentPacket(assignment, projectRoot);
     // Resolve the optional immutable Quality Contract before any baseline or
     // expensive-gate check so a bound source drift keeps its precise failure
     // classification (including when the source is the PRD itself).
@@ -220,6 +229,7 @@ async function main() {
           candidate_fingerprint: before.value,
           branch,
         },
+        assignment_packet: assignmentPacket,
         repository_skills: repositorySkills,
         scope,
         gates: [],
@@ -257,6 +267,7 @@ async function main() {
         candidate_fingerprint: before.value,
         branch,
       },
+      assignment_packet: assignmentPacket,
       repository_skills: repositorySkills,
       scope,
       gate_selection: gateSelectionEvidence(gateSelection),
@@ -283,7 +294,8 @@ async function main() {
       outputPath,
       failureCode: error.code ?? "verification_context_invalid",
       gateSelection,
-      qualityBaselineFingerprint: qualityBaseline?.fingerprint ?? null
+      qualityBaselineFingerprint: qualityBaseline?.fingerprint ?? null,
+      assignmentPacket,
     });
     process.stdout.write(`${JSON.stringify({ run_id: runId, status: evidence.status, evidence: outputPath ?? null })}\n`);
     process.exitCode = 3;

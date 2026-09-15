@@ -115,10 +115,18 @@ function parseLabelBlocks(body) {
     if (content) blocks.push({ heading: current.heading, content });
   };
   for (const line of body.split(/\r?\n/)) {
-    const label = line.match(/^\s*(?:[-*]\s*)?\*\*([^*]+)\*\*\s*:?\s*$/);
+    // Native BMAD epics.md commonly puts the label and its first paragraph on
+    // one line (`**Intent / outcome:** ...`), while standalone Stories often
+    // put the label on its own line.  Only treat a colon inside the bold label
+    // as an inline section marker so Given/When/Then lines remain content of
+    // the Acceptance Criteria block.
+    const inlineCandidate = line.match(/^\s*(?:[-*]\s*)?\*\*([^*]+:)\*\*\s*(.*)$/);
+    const criterionStep = inlineCandidate && /^(?:Given|When|Then|And|But)\s*:$/i.test(inlineCandidate[1].trim());
+    const inlineLabel = inlineCandidate && !criterionStep ? inlineCandidate : null;
+    const label = inlineLabel || line.match(/^\s*(?:[-*]\s*)?\*\*([^*]+)\*\*\s*:?\s*$/);
     if (label) {
       flush();
-      current = { heading: label[1], lines: [] };
+      current = { heading: label[1], lines: inlineLabel && label[2].trim() ? [label[2].trim()] : [] };
     } else if (/^#{1,6}\s+/.test(line)) {
       flush();
       current = null;
@@ -141,7 +149,12 @@ function metadataLines(body, names) {
   const values = [];
   for (const line of body.split(/\r?\n/)) {
     const match = line.match(/^\s*(?:[-*]\s*)?(?:\*\*)?([^:*]+?)(?:\*\*)?\s*:\s*(.+?)\s*$/);
-    if (match && wanted.has(normalizeHeading(match[1]))) values.push(unquote(match[2]));
+    if (match && wanted.has(normalizeHeading(match[1]))) {
+      // Support BMAD's inline bold labels (`**Status:** ready-for-dev`),
+      // whose closing emphasis appears before the colon and is otherwise
+      // captured as a leading `**` in the value.
+      values.push(unquote(match[2].replace(/^\*\*\s*/, '').replace(/\s*\*\*$/, '')));
+    }
   }
   return values;
 }
@@ -163,6 +176,105 @@ function firstContent(sections, labelBlocks, labels) {
 function firstLabelOrSectionContent(sections, labelBlocks, labels) {
   const labeled = contentsFor([], labels, labelBlocks);
   return labeled[0] ?? firstContent(sections, labelBlocks, labels);
+}
+
+function singleLabelOrSectionContent(sections, labelBlocks, labels, field) {
+  const values = contentsFor(sections, labels, labelBlocks);
+  if (values.length > 1) {
+    throw new BmadStoryImportError('bmad_story_ambiguous', `BMAD Story has conflicting ${field} values.`, {
+      field,
+      values
+    });
+  }
+  return values[0] ?? '';
+}
+
+/**
+ * Parse the body contract shared by a standalone BMAD Story and a Story
+ * section inside epics.md.  Unlike parseBmadStory(), this helper deliberately
+ * does not require status or a target repository: epics.md is a planning
+ * artifact and those execution fields may be absent there.
+ */
+export function parseBmadStoryContent(body, {
+  sourcePath = null,
+  id = '',
+  title = '',
+  status = null,
+  targetRepository = null,
+  epicId = null,
+  epicTitle = null,
+  sourceHeading = null,
+  sourceHeadingMarkdown = null,
+  sourceRange = null
+} = {}) {
+  const sections = parseSections(body);
+  const labelBlocks = parseLabelBlocks(body);
+  const bodyId = distinctStrings(metadataLines(body, ['Story ID', 'ID']), 'story id');
+  if (bodyId && id && bodyId !== id) {
+    throw new BmadStoryImportError('bmad_story_ambiguous', `BMAD Story id conflicts with its heading: ${id} vs ${bodyId}.`, { id, bodyId });
+  }
+  const resolvedId = id || bodyId;
+  if (!resolvedId) throw new BmadStoryImportError('bmad_story_not_found', `No BMAD Story id found in ${sourcePathLabel(sourcePath)}.`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resolvedId)) {
+    throw new BmadStoryImportError('bmad_story_invalid', `BMAD Story id is not filename-safe: ${resolvedId}`);
+  }
+
+  const bodyTitle = distinctStrings(metadataLines(body, ['Title']), 'title');
+  if (bodyTitle && title && bodyTitle !== title) {
+    throw new BmadStoryImportError('bmad_story_ambiguous', `BMAD Story title conflicts with its heading: ${title} vs ${bodyTitle}.`, { title, bodyTitle });
+  }
+  const resolvedTitle = title || bodyTitle;
+  if (!resolvedTitle) throw new BmadStoryImportError('bmad_story_unmappable', 'BMAD Story title is required.');
+
+  const bodyStatus = distinctStrings([
+    ...contentsFor(sections, ['Status'], labelBlocks),
+    ...metadataLines(body, ['Status'])
+  ], 'status');
+  const resolvedStatus = clean(status || bodyStatus).toLowerCase() || null;
+  const bodyRepository = distinctStrings([
+    ...contentsFor(sections, ['Target repository', 'Target repo', 'Repository'], labelBlocks),
+    ...metadataLines(body, ['Target repository', 'Target repo', 'Repository'])
+  ], 'target repository');
+  if (bodyRepository && targetRepository && bodyRepository !== targetRepository) {
+    throw new BmadStoryImportError('bmad_story_ambiguous', 'BMAD Story target repository conflicts with its execution mapping.', {
+      declared: bodyRepository,
+      resolved: targetRepository
+    });
+  }
+  const resolvedTargetRepository = clean(targetRepository || bodyRepository) || null;
+  const outcome = distinctStrings([
+    ...contentsFor(sections, ['Intent', 'Intent / outcome', 'Outcome', 'User outcome', 'Objective', 'Story', 'Description'], labelBlocks),
+    ...metadataLines(body, ['Intent', 'Outcome', 'Objective', 'Description'])
+  ], 'intent/outcome');
+  if (!outcome) throw new BmadStoryImportError('bmad_story_unmappable', `BMAD Story ${resolvedId} intent/outcome is required.`);
+
+  const acceptanceCriteria = singleLabelOrSectionContent(sections, labelBlocks, ['Acceptance Criteria', 'Acceptance'], 'acceptance criteria') || '';
+  if (!acceptanceCriteria) throw new BmadStoryImportError('bmad_story_unmappable', `BMAD Story ${resolvedId} acceptance criteria are required.`);
+
+  return {
+    id: resolvedId,
+    title: resolvedTitle,
+    status: resolvedStatus,
+    targetRepository: resolvedTargetRepository,
+    epicId: epicId ? clean(epicId) : null,
+    epicTitle: epicTitle ? clean(epicTitle) : null,
+    sourceHeading: sourceHeading ? clean(sourceHeading) : null,
+    sourceHeadingMarkdown: sourceHeadingMarkdown ? clean(sourceHeadingMarkdown) : null,
+    sourceRange: sourceRange ?? null,
+    branchWorktree: distinctStrings([
+      ...metadataLines(body, ['Branch', 'Worktree', 'Branch/worktree'])
+    ], 'branch/worktree'),
+    outcome,
+    acceptanceCriteria,
+    tasksAcceptance: firstLabelOrSectionContent(sections, labelBlocks, ['Execution', 'Tasks / Subtasks', 'Tasks', 'Tasks & Acceptance', 'Implementation Tasks']),
+    codeMap: firstContent(sections, labelBlocks, ['Code Map', 'Technical Context', 'Technical context / code map', 'Implementation Context']),
+    designNotes: firstContent(sections, labelBlocks, ['Design Notes', 'Boundaries & Constraints', 'Constraints', 'Technical Constraints']),
+    verification: firstContent(sections, labelBlocks, ['Verification', 'Verification Expectations', 'Metrics and Gates', 'Verification expectations']),
+    references: firstContent(sections, labelBlocks, ['Source References', 'References', 'References / Provenance']),
+    inScope: firstContent(sections, labelBlocks, ['In Scope', 'Scope']),
+    outOfScope: firstContent(sections, labelBlocks, ['Out of Scope', 'Non-goals', 'Non Goals']),
+    sourcePath: sourcePath ? resolve(sourcePath) : null
+  };
 }
 
 function distinctStrings(values, field) {
@@ -299,7 +411,7 @@ function sectionOrFallback(value, fallback) {
   return value?.trim() || fallback;
 }
 
-export function buildTriadCard(story, { requiredGates = [], dependsOn = [] } = {}) {
+export function buildTriadCard(story, { requiredGates = [], dependsOn = [], sourceKind = SOURCE_KIND } = {}) {
   if (!story || typeof story !== 'object') {
     throw new BmadStoryImportError('bmad_story_unmappable', 'A parsed BMAD Story object is required.');
   }
@@ -321,6 +433,12 @@ export function buildTriadCard(story, { requiredGates = [], dependsOn = [] } = {
   const designNotes = sectionOrFallback(story.designNotes, 'No Design Notes or additional constraints were supplied by the BMAD Story.');
   const verification = sectionOrFallback(story.verification, 'Use the repository-owned deterministic gates declared by the caller and the normal Triad verifier.');
   const references = sectionOrFallback(story.references, 'No source references were declared by the BMAD Story.');
+  const epicContext = sourceKind === 'bmad-epics' && story.epicId
+    ? [
+      `- BMAD Epic: \`${story.epicId}${story.epicTitle ? ` — ${story.epicTitle}` : ''}\``,
+      story.sourceHeading ? `- BMAD source heading: \`${story.sourceHeading}\`` : null
+    ].filter(Boolean)
+    : [];
 
   return [
     `# ${story.id} — ${story.title}`,
@@ -368,10 +486,30 @@ export function buildTriadCard(story, { requiredGates = [], dependsOn = [] } = {
     '',
     '## Integration boundary',
     '',
-    '- This card was generated from one BMAD Story; BMAD remains planning authority and Triad remains execution authority.',
+    ...epicContext,
+    `- This card was generated from one ${sourceKind === 'bmad-epics' ? 'BMAD epics.md Story' : 'BMAD Story'}; BMAD remains planning authority and Triad remains execution authority.`,
     '- The BMAD source is read-only. Provenance is recorded in the integration-side companion record.',
     ''
   ].join('\n');
+}
+
+/**
+ * Build the existing Card contract after a canonical epics.md Story has passed
+ * Triad execution-readiness checks.  The source may omit BMAD's optional
+ * ready-for-dev field; execution readiness is supplied by the downstream
+ * project/repository resolver rather than written back into BMAD.
+ */
+export function buildTriadCardFromCanonicalStory(story, {
+  requiredGates = [],
+  dependsOn = [],
+  executionReady = false,
+  sourceKind = 'bmad-epics'
+} = {}) {
+  if (!executionReady) {
+    throw new BmadStoryImportError('bmad_story_not_ready', `BMAD Story ${story?.id ?? '<unknown>'} is ingestible but not execution-ready.`);
+  }
+  const normalized = { ...story, status: READY_STATUS };
+  return buildTriadCard(normalized, { requiredGates, dependsOn, sourceKind });
 }
 
 export function validateTriadCard(card) {

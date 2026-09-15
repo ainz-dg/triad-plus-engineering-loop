@@ -37,6 +37,7 @@ function projectRuntimeAssets(id) {
   return [
     { source: 'runtime', destination: '.triad-runtime' },
     { source: 'schemas', destination: '.triad-runtime/schemas' },
+    { source: 'integrations/bmad', destination: '.triad-runtime/integrations/bmad' },
     { source: `adapters/${id}/runtime.json`, destination: '.triad-runtime/adapter.json', file: true }
   ];
 }

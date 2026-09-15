@@ -6,6 +6,11 @@ Operate a Triad+ Engineering Loop for this owner request:
 
 $ARGUMENTS
 
+When the input is native BMAD `epics.md` (or its `_bmad-output` directory),
+use the deterministic intake from `triad-loop-orchestrator` and keep the BMAD
+source read-only. Do not ask the owner to split Stories or run
+`import-bmad-story` once per Story.
+
 Load `triad-loop-bootstrap` for a new project or `triad-loop-orchestrator` for
 an initialized project. At bootstrap and resume, run
 `.triad-runtime/triad-runtime-capabilities.mjs --adapter .triad-runtime/adapter.json` and record
@@ -41,3 +46,20 @@ and `--no-evaluator` are per-run overrides when supplied. Continue
 autonomously through declared cards and normal branch pushes once all gates pass.
 Escalate only the decision types defined by the Triad skills. Do not start or
 stop a demo without an owner instruction.
+
+Before each delegation, create and bind the immutable Assignment Packet with:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Launch `triad-developer` with its cwd/workdir equal to the returned assigned
+product worktree, not the control workspace. Pass explicit control, repository,
+branch, card, packet, and mandatory-skill paths. The packet and card are the
+primary contract; full PRD/ADR reads are fallback-only for missing or
+contradictory details. Launch `triad-reviewer` from the candidate worktree when
+it needs direct inspection and give it the same packet plus evidence. Prefer
+Claude native Read/Grep/Glob tools for simple discovery; use Bash for builds,
+tests, git, scripts, and system commands.

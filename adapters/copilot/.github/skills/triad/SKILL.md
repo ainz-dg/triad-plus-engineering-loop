@@ -26,6 +26,11 @@ an initialized control workspace. Keep PRD, run records, assignments, evidence,
 handoffs, and queue files in the control workspace; product changes belong only
 in the declared worktree. Show the full card/dependency plan before dispatch.
 
+If the owner input is native BMAD `epics.md` (or its `_bmad-output` directory),
+use the deterministic intake from `triad-loop-orchestrator` directly. Do not
+request split Story files or repeated `import-bmad-story` commands; the BMAD
+source remains read-only.
+
 Use the custom agents by their stable IDs and keep their contexts distinct:
 
 1. `triad-developer` implements one bounded ready/rework card.
@@ -50,3 +55,21 @@ Use one Copilot host adapter for the control workspace, explicit verification,
 and the models/personas/options declared in `team.json` where Copilot supports
 them. Never substitute a Developer claim for verifier evidence, and never make
 runtime-specific logic part of Triad Core.
+
+Before each Developer assignment, create the immutable Assignment Packet and
+bind it to the active assignment with:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Use the returned `dispatch.cwd` as the Copilot custom-agent working directory;
+it MUST be the assigned product worktree. Pass control workspace, repository,
+branch, card, packet, and mandatory-skill paths explicitly. Developer and
+Reviewer share the packet; the Reviewer additionally receives candidate and
+verifier evidence. Full PRD/ADR reads are fallback-only for missing or
+contradictory details. Prefer Copilot's native read/search/list operations for
+simple discovery and use execute/Bash for tests, builds, git, scripts, and
+system commands.
