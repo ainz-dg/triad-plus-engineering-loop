@@ -19,6 +19,13 @@ Before work, the Orchestrator snapshots the PRD, declares measurable feature
 cards, target repositories/worktrees/branches, and deterministic quality gates.
 It shows the plan to the owner, then delegates ordinary development and review.
 
+For each active assignment it may create an immutable Assignment Packet. The
+packet carries the bounded card context and relevant excerpts; the host launches
+the Developer with `cwd`/`workdir` equal to the declared product worktree, while
+control-workspace paths remain explicit. The Reviewer receives the same packet
+plus candidate/evidence. Full PRD/ADR reads are fallback-only, and mandatory
+repository skills are still read and hash-verified from their real paths.
+
 After Developer completion, verification happens through a validated host hook
 when available, or explicit Orchestrator dispatch. The verifier executes only
 declared `control-plane` commands. Atomic evidence binds assignment ID/hash, run,

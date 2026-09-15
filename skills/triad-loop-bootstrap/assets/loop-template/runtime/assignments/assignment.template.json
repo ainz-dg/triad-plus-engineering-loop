@@ -7,6 +7,7 @@
   "feature_id": "REPLACE_ME_FEATURE_ID",
   "attempt": 1,
   "project_root": "REPLACE_ME_ABSOLUTE_CONTROL_WORKSPACE",
+  "repository_id": "REPLACE_ME_REPOSITORY_ID",
   "worktree": "REPLACE_ME_DECLARED_WORKTREE_OR_ABSOLUTE_PATH",
   "expected_branch": "REPLACE_ME_PROJECT_BRANCH",
   "allow_external_worktree": false,
@@ -31,5 +32,17 @@
     }
   ],
   "verification_run_id": "REPLACE_ME_UUID",
-  "evidence_directory": ".loop/evidence/REPLACE_ME_FEATURE_ID/attempt-001"
+  "evidence_directory": ".loop/evidence/REPLACE_ME_FEATURE_ID/attempt-001",
+  "assignment_packet_path": null,
+  "assignment_packet_sha256": null,
+  "context": {
+    "relevant_prd_excerpts": [],
+    "relevant_adr_excerpts": [],
+    "acceptance_criteria": [],
+    "verification_mapping": [],
+    "expected_paths": [],
+    "constraints": [],
+    "risks": [],
+    "previous_evidence": []
+  }
 }

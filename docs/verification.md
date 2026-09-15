@@ -46,6 +46,26 @@ it does not itself approve, rework, or transition a run.
 Evidence files and logs are diagnostics. Users normally need only the
 Orchestrator's summary and the Reviewer verdict.
 
+## Assignment packets and dispatch context
+
+The Orchestrator can create one immutable packet per active assignment with:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+The command binds a packet path and SHA-256 to the assignment and returns the
+explicit product-worktree `dispatch.cwd`. The packet contains the bounded card
+contract, relevant excerpts, verification mapping, expected paths, risks,
+constraints, mandatory skill references, and prior evidence references. It is
+the primary Developer/Reviewer context; full PRD/ADR reads are fallback-only.
+It never replaces real skill reads or verifier hash checks. A bound packet is
+validated before `triad-verify` executes scope or gates, and a changed or
+missing packet fails closed as `assignment_packet_invalid`. Assignments without
+packet fields retain legacy behavior.
+
 ## Card-declared required gates
 
 The work queue may carry a machine-readable `required_gates` list for an

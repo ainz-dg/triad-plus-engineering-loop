@@ -169,7 +169,7 @@ try {
   assert.equal(verifierEvidence.status, 'pass');
   assert.deepEqual(verifierEvidence.gate_selection.card_required_gate_ids, ['imported-card-gate']);
 
-  const standardBmadTemplate = `---
+const standardBmadTemplate = `---
 id: JFR-BMAD-002
 title: Add a bounded JsonForm route
 type: feature
@@ -205,6 +205,21 @@ Run the repository route gate.
   assert.equal(standard.story.targetRepository, 'webup');
   assert.match(standard.card, /Add the route/);
   assert.match(standard.card, /Given a valid document/);
+
+  const colonStepsPath = join(temporaryRoot, 'colon-steps-story.md');
+  await writeFile(colonStepsPath, sourceText.replace(
+    '**Given** a valid provider document',
+    '**Given:** a valid provider document'
+  ).replace(
+    '**When** the JFR route is requested',
+    '**When:** the JFR route is requested'
+  ).replace(
+    '**Then** Webup resolves the normal component and preserves the document.',
+    '**Then:** Webup resolves the normal component and preserves the document.'
+  ), 'utf8');
+  const colonSteps = await importBmadStory({ sourcePath: colonStepsPath });
+  assert.match(colonSteps.story.acceptanceCriteria, /Given/);
+  assert.match(colonSteps.story.acceptanceCriteria, /Then:/);
 
   const outputPath = join(temporaryRoot, 'features', 'JFR-BMAD-001.md');
   const written = await writeImportedCard({

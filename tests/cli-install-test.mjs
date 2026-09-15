@@ -251,6 +251,19 @@ try {
   ], { cwd: repositoryRoot, env: { ...process.env, HERMES_HOME: join(fixtureRoot, 'hermes-home') }, encoding: 'utf8' });
   assert.equal(hermes.status, 0, hermes.stderr);
   await readFile(join(hermesControl, '.triad-runtime', 'adapter.json'), 'utf8');
+  // Native BMAD intake is shipped as an integration runtime asset, not only
+  // as a source-tree module.  Verify an installed control workspace can load
+  // the parser through the same path used by the runtime CLI.
+  await readFile(join(hermesControl, '.triad-runtime', 'integrations', 'bmad', 'epics-parser.mjs'), 'utf8');
+  await readFile(join(hermesControl, '.triad-runtime', 'integrations', 'bmad', 'story-importer.mjs'), 'utf8');
+  await readFile(join(hermesControl, '.triad-runtime', 'triad-bmad-intake.mjs'), 'utf8');
+  const installedEpics = join(fixtureRoot, 'installed-epics.md');
+  await writeFile(installedEpics, '# Epic Breakdown\n\n### Epic E1: Installed intake\n\n### Story S1: Parse installed artifact\n\n**Intent / outcome:** The installed runtime parses native BMAD planning.\n\n**Acceptance Criteria:**\n**Given** a native epics.md file\n**When** the installed intake runs\n**Then** it returns a canonical Story.\n');
+  const installedIntake = spawnSync(process.execPath, [
+    join(hermesControl, '.triad-runtime', 'triad-bmad-intake.mjs'), '--source', installedEpics
+  ], { cwd: hermesControl, encoding: 'utf8' });
+  assert.equal(installedIntake.status, 0, installedIntake.stderr);
+  assert.match(installedIntake.stdout, /"story_id":"S1"/);
   assert.ok((await readFile(join(fixtureRoot, 'hermes-home', 'skills', 'triad', 'SKILL.md'), 'utf8')).includes(userFacingIdentityInvariant));
   const copilotControl = join(fixtureRoot, 'copilot-configured-control');
   const copilot = spawnSync(process.execPath, [

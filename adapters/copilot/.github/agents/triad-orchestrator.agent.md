@@ -50,3 +50,15 @@ Use one selected Copilot host for this control workspace. Role display names,
 personas, models, and supported options come from `team.json`; they never alter
 technical role authority. Use explicit verification dispatch. Do not publish,
 create releases, force-push, or make unrequested product changes.
+
+Before each delegation, run the packet generator from the control workspace:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Launch each custom agent with the returned `dispatch.cwd` equal to the declared
+product worktree. The packet is the primary Developer/Reviewer contract and
+real mandatory skills still must be read and hash-checked.

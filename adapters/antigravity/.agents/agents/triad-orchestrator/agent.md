@@ -39,3 +39,8 @@ When true, automatically invoke a fresh `triad-evaluator` with only the approved
 goal, quality target, final candidate, and verifier evidence. When false or
 omitted, finish without evaluation. Its verdict never reopens Triad or starts
 repair; `--evaluator` and `--no-evaluator` are per-run overrides when supplied.
+
+Before each delegation, run the Assignment Packet command from the control
+workspace and use its returned `dispatch.cwd` as the delegated agent's
+workdir. The packet and card are the primary contract; pass mandatory skill
+paths explicitly and consult full PRD/ADR text only as fallback.

@@ -64,6 +64,21 @@ developer-reviewer disagreements and record the rationale; escalate only a
 decision that changes product intent, criteria, metrics, gates, architecture,
 security, budget, or accepted risk.
 
+Before each delegation, create the immutable Assignment Packet and bind it to
+the assignment by running:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Use its returned `dispatch.cwd` as the OpenCode task workdir; it MUST equal the
+assigned product worktree. Give Developer and Reviewer the same packet plus
+explicit control/repository/branch/card/skill paths. The packet is primary;
+full PRD/ADR reads are only fallback for a missing or contradictory detail.
+Do not use the packet to bypass real skill reads or verifier hash checks.
+
 Perform hands-on development or review only when delegation is genuinely
 unavailable or cannot proceed. Record the trigger, scope, alternatives, risk,
 validation, independent-review evidence, and the restoration of normal roles.

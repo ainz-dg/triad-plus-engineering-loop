@@ -116,22 +116,24 @@ contracts or source drift. `product_quality` criteria are evaluated one by one
 by a fresh Evaluator+; `delivery_closure` criteria remain in the delivery gate.
 Projects without this opt-in continue to use the legacy PRD baseline path.
 
-## Optional BMAD Story import
+## Native BMAD handoff
 
-When BMAD planning has already produced a Story with `status: ready-for-dev`,
-you can convert one Story at a time into the normal Triad Card contract:
+BMAD planning hands `epics.md` to Triad+ directly. Start the normal host entry
+point with the planning artifact (or its `_bmad-output` directory):
 
-```bash
-npx triad-plus import-bmad-story \
-  --source /absolute/path/to/story.md \
-  --output /absolute/path/to/control/features/STORY-001.md
+```text
+/triad /absolute/path/to/_bmad-output/planning-artifacts/epics.md
 ```
 
-The importer is read-only and fail-closed. It preserves the Story's executable
-intent, acceptance criteria, technical context, and references, while any
-required gates or dependencies remain explicit caller options. It does not run
-BMAD workflows or add BMAD semantics to the Core. See the [BMAD integration
-guide](docs/bmad-integration.md).
+Triad deterministically detects Epic and Story sections, ingests multiple
+Stories without creating intermediate Story files, resolves repository and
+quality-gate readiness from the project-control workspace, and materializes
+normal Cards with source SHA/provenance. `epics.md` remains read-only. BMAD owns
+planning; Triad owns execution, verification, review, and delivery.
+
+`import-bmad-story` remains a low-level compatibility/API path for standalone
+ready-for-dev Stories, debugging, and automation. It is no longer the primary
+BMAD workflow. See the [BMAD integration guide](docs/bmad-integration.md).
 
 ## Quick start for every runtime
 

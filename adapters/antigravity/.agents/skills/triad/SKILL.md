@@ -37,6 +37,11 @@ load `triad-loop-orchestrator`. At bootstrap and resume, run
 its selected verification route. Use explicit verifier dispatch unless a future
 Antigravity lifecycle adapter is actually detected and validated.
 
+When the input is native BMAD `epics.md` or its `_bmad-output` directory, use
+the deterministic intake defined by `triad-loop-orchestrator`. Keep the BMAD
+source read-only and do not ask the owner to split Stories or repeat
+`import-bmad-story`.
+
 Delegate normal implementation to `triad-developer` and independent review to
 `triad-reviewer`. After Triad approval, automatically invoke fresh
 `triad-evaluator` when `roles.evaluator.enabled` is true in `team.json`; false or
@@ -45,3 +50,20 @@ repair; `--evaluator` and `--no-evaluator` are per-run overrides when supplied. 
 through declared cards and normal pushes after all gates pass. Escalate only the
 decision types defined by the Triad+ skills. Do not start or stop a demo without
 an owner instruction.
+
+Before each delegation, create the immutable Assignment Packet and bind it to
+the active assignment with:
+
+```bash
+node .triad-runtime/triad-assignment-packet.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment .loop/runtime/assignments/<assignment-file>.json
+```
+
+Launch Developer and Reviewer with `cwd`/`workdir` equal to the declared
+product worktree (Reviewer when direct candidate inspection is needed). Pass
+the packet, card, control/repository/branch paths, and mandatory skills
+explicitly. The packet is primary; full PRD/ADR reads are fallback-only for
+missing or contradictory details. Prefer native read/grep/glob/list primitives
+for simple discovery and shell only for builds, tests, git, scripts, and system
+commands.

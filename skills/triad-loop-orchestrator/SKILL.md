@@ -8,6 +8,10 @@ description: Coordinate a Triad engineering run from declared feature cards thro
 Maintain the goal and operational context. Decide the next step; do not perform
 ordinary implementation or review. Read `project.yaml`, the frozen PRD, queue,
 decision policy, current records, and `.triad-plus/team.json` when present.
+The control workspace is the policy/state/evidence source; a delegated
+Developer or Reviewer operates from the assigned product worktree. Prepare one
+immutable Assignment Packet per assignment so role contexts do not reconstruct
+the entire PRD/ADR from scratch.
 
 Before the first owner-facing reply, read `.triad-plus/team.json` when it exists.
 User-facing identity is permanent: adopt its non-empty
@@ -25,6 +29,50 @@ first-person sentence that includes `<displayName>` and "Triad+ Orchestrator",
 localized to the configured interaction language; then state whether the run is
 new or resumed and what input was received. If the entry point already made that
 presentation for this invocation, do not repeat it.
+
+## Native BMAD intake
+
+When the owner input is an `epics.md` file, or a directory that deterministically
+contains `_bmad-output/planning-artifacts/epics.md`, use the native BMAD intake
+before selecting a card. Do not ask the owner to split the file into Story
+files or to run `import-bmad-story` once per Story. The BMAD source is read-only
+and planning-owned.
+
+For native BMAD input, the canonical Stories from `epics.md` are the sole
+planning boundaries and the source of Triad Cards: one canonical Story maps to
+one normal Triad Card. Do not run the generic PRD bootstrap decomposition a
+second time, create parallel Cards, or use an LLM to reinterpret the Epic/Story
+boundaries. BMAD decides what the executable Story is; Triad decides how it is
+implemented, verified, and reviewed.
+
+First ingest the source without execution assumptions so the Orchestrator can
+inspect the canonical Epic/Story set:
+
+```bash
+node .triad-runtime/triad-bmad-intake.mjs \
+  --source /absolute/path/to/_bmad-output/planning-artifacts/epics.md
+```
+
+After the control workspace is initialized and its project/repository/gate
+readiness is valid, materialize normal Cards with the same deterministic
+primitive and an explicit output directory:
+
+```bash
+node .triad-runtime/triad-bmad-intake.mjs \
+  --source /absolute/path/to/_bmad-output/planning-artifacts/epics.md \
+  --project /absolute/path/to/control-workspace \
+  --output /absolute/path/to/control-workspace/features
+```
+
+Supply `--repository` only when the Story or project configuration does not
+resolve one deterministically. Supply per-Story `--required-gate STORY-ID=ID`
+and `--depends-on STORY-ID=CARD-ID` only from explicit planning/owner input;
+never infer them from prose or document order. Ingestion readiness (ID, title,
+intent, acceptance criteria, Epic parent) is distinct from execution readiness
+(repository, worktree, trusted gates, and Card contract). A native Story may be
+ingested without `status: ready-for-dev`, but an explicit non-ready status stays
+blocked from execution. Ambiguous or unavailable execution context is a
+fail-closed escalation; do not dispatch a Developer or consume retry budget.
 
 ## Run one card
 
@@ -61,15 +109,35 @@ presentation for this invocation, do not repeat it.
    gates, or consume retry/remediation budget. Legacy projects without the
    quality contract retain PRD-only behavior.
 2. Choose one dependency-approved `ready` card, mark it `in_progress`, append an
-   attempt, and create an active assignment before delegating. Before each
-   delegation, publish an owner-facing activation notice that attributes the
-   configured display name, technical role, and card/attempt to that role.
-3. Give the Developer the card, relevant PRD excerpt, allowed surface, the
-   effective gate IDs (all trusted `required: true` gates plus the card's
-   selected IDs), risks, and prior findings. Globally required gates are never
-   suppressed. In selected mode, a selected optional gate is required for that card and unselected optional gates may be
-   skipped; dedupe the effective set. Treat its command results and report as
-   **agent-reported claims**, never as control-plane gate truth.
+   attempt, and create an active assignment before delegating. Bind the selected
+   repository ID as well as its declared branch/worktree. Populate the optional
+   `context` object with only bounded, assignment-relevant fields such as
+   `relevant_prd_excerpts`, `relevant_adr_excerpts`, `acceptance_criteria`,
+   `verification_mapping`, `expected_paths`, `constraints`, `risks`, and
+   `previous_evidence` (short text or references, never whole source files).
+   Before each delegation, publish an owner-facing
+   activation notice that attributes the configured display name, technical role,
+   and card/attempt to that role. Then run the exact packet command:
+
+   ```bash
+   node .triad-runtime/triad-assignment-packet.mjs \
+     --project /absolute/path/to/control-workspace \
+     --assignment .loop/runtime/assignments/<assignment-file>.json
+   ```
+
+   It atomically creates (or verifies) the immutable packet, binds its path and
+   SHA-256 to the assignment, and returns explicit `dispatch.cwd`, control
+   workspace, repository, branch, card, packet, and mandatory-skill paths.
+3. Dispatch the Developer with `cwd`/`workdir` exactly equal to the returned
+   assigned product worktree. Pass the card and Assignment Packet as the
+   primary contract, followed by the mandatory skill paths and any prior
+   evidence. Include the effective gate IDs (all trusted `required: true` gates
+   plus the card's selected IDs), risks, and findings. Globally required gates
+   are never suppressed. In selected mode, a selected optional gate is required
+   for that card and unselected optional gates may be skipped; dedupe the
+   effective set. Treat command results and role reports as **agent-reported
+   claims**, never as control-plane gate truth. The full PRD/ADR is a fallback
+   for a missing detail or contradiction, not systematic startup context.
 4. After completion, move to `verifying`. Follow the recorded dispatch route:
    wait for a valid hook-produced file when one is configured, otherwise invoke
    the verifier explicitly. Accept only current evidence whose assignment ID,
@@ -94,8 +162,12 @@ presentation for this invocation, do not repeat it.
 5. A passing verifier result is **environment-derived evidence**. Move only then
    to `in_review`. Missing, stale, failed, timed-out, invalid-context, or
    invalidated evidence never advances the card.
-6. Give the Reviewer the card, diff, developer report, verifier evidence, prior
-   attempts, and risks. Record its recommendation:
+6. Dispatch the Reviewer with the same immutable Assignment Packet and
+   `cwd`/`workdir` equal to the candidate worktree when the review needs direct
+   candidate inspection. Add the diff, Developer report, verifier evidence,
+   prior attempts, and risks. The Reviewer may consult only a necessary PRD/ADR
+   section when the packet is insufficient; it must not reconstruct the whole
+   requirement by default. Record its recommendation:
    - `approved`: verify scope/evidence, commit the card locally, promote every
      dependency-satisfied draft card to `ready`, then immediately select and
      assign the next ready card;
