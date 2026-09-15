@@ -85,26 +85,120 @@ function declaredPath(root, value) {
   return path.isAbsolute(value) ? value : path.resolve(root, value);
 }
 
-async function readProjectRepositoryId(root, assignment, worktree) {
+function assignmentRepositoryId(assignment) {
   const explicit = firstDefined(assignment.repository_id, assignment.repository, assignment.target_repository, assignment.assigned_repository);
-  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
-  const manifestPath = path.join(root, "project.yaml");
+  return typeof explicit === "string" && explicit.trim() ? explicit.trim() : null;
+}
+
+function scalarValue(value) {
+  return String(value ?? "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+function normalizeRepositoryMappings(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => objectLike(entry))
+    .map((entry) => ({
+      id: scalarValue(entry.id),
+      path: typeof entry.path === "string" ? scalarValue(entry.path) : null,
+      worktree: typeof entry.worktree === "string" ? scalarValue(entry.worktree) : null,
+    }))
+    .filter((entry) => entry.id && (entry.path || entry.worktree));
+}
+
+/**
+ * Read only the repository mapping subset needed to authorize a declared
+ * external worktree. This accepts project.yaml's stable JSON/YAML shapes and
+ * is deliberately not a second general-purpose project parser.
+ */
+function parseRepositoryMappings(source) {
   try {
-    const source = await readFile(manifestPath, "utf8");
-    let currentId = null;
-    for (const line of source.split("\n")) {
-      const idMatch = line.match(/^\s*-\s+id:\s*([^#]+?)\s*$/);
-      if (idMatch) {
-        currentId = idMatch[1].trim();
-        continue;
-      }
-      const worktreeMatch = line.match(/^\s+worktree:\s*([^#]+?)\s*$/);
-      if (!worktreeMatch || !currentId) continue;
-      const declared = worktreeMatch[1].trim().replace(/^['"]|['"]$/g, "");
-      if (declaredPath(root, declared) === worktree) return currentId;
-    }
+    const parsed = JSON.parse(source);
+    const root = objectLike(parsed) ? parsed : {};
+    const project = objectLike(root.project) ? root.project : {};
+    const repositories = Array.isArray(root.repositories)
+      ? root.repositories
+      : Array.isArray(project.repositories) ? project.repositories : [];
+    return normalizeRepositoryMappings(repositories);
   } catch {}
-  return "declared-worktree";
+
+  const repositories = [];
+  let inRepositories = false;
+  let repositoryIndent = null;
+  let current = null;
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+#.*$/, "");
+    const indentation = line.search(/\S/);
+    const trimmed = line.trim();
+    if (!trimmed || indentation < 0) continue;
+    const repositoriesMatch = line.match(/^(\s*)repositories:\s*$/i);
+    if (repositoriesMatch) {
+      if (current) repositories.push(current);
+      current = null;
+      inRepositories = true;
+      repositoryIndent = repositoriesMatch[1].length;
+      continue;
+    }
+    if (!inRepositories) continue;
+    if (indentation <= repositoryIndent && !trimmed.startsWith("- ")) {
+      if (current) repositories.push(current);
+      current = null;
+      inRepositories = false;
+      continue;
+    }
+    const itemMatch = line.match(/^(\s*)-\s+id:\s*(.*?)\s*$/i);
+    if (itemMatch && itemMatch[1].length > repositoryIndent) {
+      if (current) repositories.push(current);
+      current = { id: scalarValue(itemMatch[2]) };
+      continue;
+    }
+    if (!current) continue;
+    const propertyMatch = line.match(/^(\s+)([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/);
+    if (propertyMatch && propertyMatch[1].length > repositoryIndent) {
+      current[propertyMatch[2]] = scalarValue(propertyMatch[3]);
+    }
+  }
+  if (current) repositories.push(current);
+  return normalizeRepositoryMappings(repositories);
+}
+
+async function projectRepositoryMappings(root) {
+  try {
+    return parseRepositoryMappings(await readFile(path.join(root, "project.yaml"), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+async function matchingRepositoryMappings(root, worktree) {
+  const mappings = await projectRepositoryMappings(root);
+  const matches = [];
+  for (const mapping of mappings) {
+    const declared = mapping.worktree || mapping.path;
+    if (!declared) continue;
+    const candidate = await realpath(declaredPath(root, declared)).catch(() => null);
+    if (candidate === worktree) matches.push(mapping);
+  }
+  return matches;
+}
+
+async function resolveProjectRepository(root, assignment, worktree, external) {
+  const explicit = assignmentRepositoryId(assignment);
+  const matches = await matchingRepositoryMappings(root, worktree);
+  if (external) {
+    if (matches.length === 0) {
+      throw packetError("assignment_packet_invalid", "assigned external worktree is not declared by a project.yaml repository mapping");
+    }
+    if (matches.length > 1) {
+      throw packetError("assignment_packet_invalid", "assigned external worktree matches multiple project.yaml repository mappings");
+    }
+    if (explicit && explicit !== matches[0].id) {
+      throw packetError("assignment_packet_invalid", "assigned repository does not match the project.yaml worktree mapping: " + explicit);
+    }
+    return matches[0].id;
+  }
+  if (explicit) return explicit;
+  return matches.length === 1 ? matches[0].id : "declared-worktree";
 }
 
 function section(source, names) {
@@ -190,19 +284,18 @@ export async function resolveAssignmentContext(assignment, { projectRoot = proce
   let worktree;
   try { worktree = await realpath(declaredWorktree); }
   catch { throw packetError("assignment_packet_invalid", `assigned worktree is missing: ${assignment.worktree}`); }
-  if (!worktree.startsWith(`${root}${path.sep}`) && !assignment.allow_external_worktree) {
-    throw packetError("assignment_packet_invalid", "assigned worktree is external but allow_external_worktree is false");
-  }
+  const external = !worktree.startsWith(`${root}${path.sep}`);
   const branch = await worktreeBranch(worktree);
   if (assignment.expected_branch && assignment.expected_branch !== branch) {
     throw packetError("assignment_packet_invalid", `worktree branch does not match assignment: ${branch}`);
   }
-  const repository = await readProjectRepositoryId(root, assignment, worktree);
+  const repository = await resolveProjectRepository(root, assignment, worktree, external);
   return {
     projectRoot: root,
     controlWorkspace: root,
     worktree,
     cwd: worktree,
+    external,
     branch,
     repository,
     declaredWorktree: assignment.worktree,

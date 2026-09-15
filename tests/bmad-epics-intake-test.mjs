@@ -315,6 +315,19 @@ try {
   assert.equal(cliExecution.card_count ?? cliExecution.cards.length, 3);
   assert.equal(cliExecution.source_sha256, sourceSha);
 
+  const bootstrapSkill = await readFile(join(repositoryRoot, 'skills', 'triad-loop-bootstrap', 'SKILL.md'), 'utf8');
+  assert.match(bootstrapSkill, /Native BMAD planning boundary/);
+  assert.match(bootstrapSkill, /BMAD is the\s+planning authority for Epic\/Story boundaries and acceptance criteria/);
+  assert.match(bootstrapSkill, /must not independently\s+re-decompose the PRD/i);
+  assert.match(bootstrapSkill, /one canonical Story.*one normal Triad Card/i);
+  const orchestratorSkill = await readFile(join(repositoryRoot, 'skills', 'triad-loop-orchestrator', 'SKILL.md'), 'utf8');
+  assert.match(orchestratorSkill, /canonical Stories from\s+`epics\.md` are the sole\s+planning boundaries/i);
+  assert.match(orchestratorSkill, /source of Triad Cards/i);
+  const bmadDocs = await readFile(join(repositoryRoot, 'docs', 'bmad-integration.md'), 'utf8');
+  assert.match(bmadDocs, /Bootstrap boundary/);
+  assert.match(bmadDocs, /second semantic (?:decomposition|plan)/i);
+  assert.match(bmadDocs, /LLM.*Story boundaries/i);
+
   console.log('BMAD native epics intake tests passed: deterministic parsing, readiness split, repository resolution, provenance, CLI, and fail-closed validation.');
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });

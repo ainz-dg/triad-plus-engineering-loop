@@ -39,6 +39,15 @@ Triad owns execution:
 Triad never invokes `bmad-loop`, Build, Build Auto, or another BMAD workflow.
 It does not modify `epics.md` or add execution metadata to the BMAD source.
 
+## Bootstrap boundary
+
+When native BMAD planning has produced `epics.md`, that artifact is the sole
+authority for Epic/Story boundaries and acceptance criteria. Bootstrap consumes
+the canonical Stories and materializes one normal Triad Card per Story; it does
+not independently re-decompose the PRD, create a second semantic plan, or use
+an LLM to decide Story boundaries. This prevents parallel Cards A/B and keeps
+the handoff deterministic: BMAD plans, Triad executes.
+
 ## Deterministic parser and API
 
 The integration is implemented in

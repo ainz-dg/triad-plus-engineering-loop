@@ -8,7 +8,7 @@ import { calculateCandidateFingerprint, collectCandidateChanges, worktreeBranch 
 import { executeGates, gateSelectionEvidence, loadTrustedGates, resolveGateSelection } from "./lib/gates.mjs";
 import { resolveQualityContract } from "./lib/quality-baseline.mjs";
 import { evaluateScopeContract, parseScopeContract } from "./lib/scope-contract.mjs";
-import { validateAssignmentPacket } from "./lib/assignment-packet.mjs";
+import { resolveAssignmentContext, validateAssignmentPacket } from "./lib/assignment-packet.mjs";
 
 const argv = process.argv.slice(2);
 const option = (name) => {
@@ -172,8 +172,8 @@ async function main() {
     if (!assignment.assignment_id) throw new Error("assignment ID is required");
     if (assignment.agent_id !== trigger.agent_id || assignment.agent_type !== "triad_developer") throw new Error("developer assignment does not match trigger");
     if ((await realpath(path.resolve(assignment.project_root ?? projectRoot))) !== projectRoot) throw new Error("assignment project root mismatch");
-    const worktree = await realpath(path.resolve(projectRoot, assignment.worktree));
-    if (!worktree.startsWith(`${projectRoot}${path.sep}`) && !assignment.allow_external_worktree) throw new Error("undeclared external worktree");
+    const assignmentContext = await resolveAssignmentContext(assignment, { projectRoot });
+    const worktree = assignmentContext.worktree;
     const prdPath = path.resolve(projectRoot, assignment.prd_path ?? "artifacts/prd.md");
     const cardPath = path.resolve(projectRoot, assignment.card_path);
     await access(prdPath);

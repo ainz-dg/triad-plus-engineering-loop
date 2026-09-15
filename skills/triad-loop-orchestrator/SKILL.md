@@ -38,6 +38,13 @@ before selecting a card. Do not ask the owner to split the file into Story
 files or to run `import-bmad-story` once per Story. The BMAD source is read-only
 and planning-owned.
 
+For native BMAD input, the canonical Stories from `epics.md` are the sole
+planning boundaries and the source of Triad Cards: one canonical Story maps to
+one normal Triad Card. Do not run the generic PRD bootstrap decomposition a
+second time, create parallel Cards, or use an LLM to reinterpret the Epic/Story
+boundaries. BMAD decides what the executable Story is; Triad decides how it is
+implemented, verified, and reviewed.
+
 First ingest the source without execution assumptions so the Orchestrator can
 inspect the canonical Epic/Story set:
 

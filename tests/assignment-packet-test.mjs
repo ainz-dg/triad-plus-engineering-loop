@@ -97,7 +97,9 @@ async function prepareFixture(root) {
     project_root: controlRoot,
     worktree: productRoot,
     expected_branch: branch,
-    allow_external_worktree: true,
+    // The project.yaml mapping, not an assignment escape hatch, authorizes
+    // this product worktree which intentionally lives outside control/.
+    allow_external_worktree: false,
     prd_path: "artifacts/prd.md",
     card_path: "features/PACKET-001.md",
     gates_path: ".loop/quality-gates.yaml",
@@ -181,6 +183,28 @@ try {
   assert.equal(context.cwd, fixture.product);
   assert.equal(context.controlWorkspace, fixture.control);
   assert.equal(context.repository, "product");
+  assert.equal(context.external, true);
+
+  const unrelated = path.join(temporaryRoot, "unrelated-product");
+  await mkdir(unrelated, { recursive: true });
+  await writeFile(path.join(unrelated, "candidate.txt"), "unrelated\n");
+  command("git", ["init", "-q"], unrelated);
+  command("git", ["config", "user.email", "triad-test@example.invalid"], unrelated);
+  command("git", ["config", "user.name", "Triad Test"], unrelated);
+  command("git", ["add", "."], unrelated);
+  command("git", ["commit", "-qm", "baseline"], unrelated);
+  const unrelatedBranch = command("git", ["branch", "--show-current"], unrelated);
+  const undeclared = {
+    ...bound,
+    worktree: unrelated,
+    expected_branch: unrelatedBranch,
+    repository_id: "unrelated",
+    allow_external_worktree: false
+  };
+  await assert.rejects(
+    () => resolveAssignmentContext(undeclared, { projectRoot: fixture.control }),
+    (error) => error?.code === "assignment_packet_invalid" && /not declared by a project\.yaml repository mapping/.test(error.message)
+  );
 
   const verified = runVerifier(fixture);
   assert.equal(verified.result.status, 0, JSON.stringify(verified.evidence));
@@ -228,7 +252,7 @@ try {
   }
   const packetBytes = Buffer.byteLength(packet);
   assert.ok(packetBytes < fixture.prdBytes + fixture.adrBytes, "packet benchmark fixture should be smaller than a full PRD/ADR reread");
-  console.log(`Assignment packet tests passed: cwd=${fixture.product}, packet=${packetBytes} bytes, full PRD/ADR source=${fixture.prdBytes + fixture.adrBytes} bytes.`);
+  console.log(`Assignment packet tests passed: cwd=${fixture.product}, external mapping=PASS, undeclared external mapping=FAIL-CLOSED, packet=${packetBytes} bytes, full PRD/ADR source=${fixture.prdBytes + fixture.adrBytes} bytes.`);
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });
 }

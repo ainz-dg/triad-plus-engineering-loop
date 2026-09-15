@@ -13,13 +13,28 @@ Collect only missing essentials: project ID/title, readable PRD source, target
 repositories with base/project branches and worktrees, measurable success
 conditions, runnable quality gates, practical-test need, and integration need.
 
+## Native BMAD planning boundary
+
+When the owner input is a native BMAD `epics.md` artifact, BMAD is the
+planning authority for Epic/Story boundaries and acceptance criteria. The
+canonical Stories in that read-only artifact are the sole planning boundaries:
+one canonical Story maps to one normal Triad Card. Bootstrap must not independently
+re-decompose the PRD into another feature-card plan, create a second Story set,
+or invoke an LLM to decide native Story boundaries. The native flow is
+BMAD `epics.md` → canonical Stories → Triad Cards; the generic PRD-only
+feature-plan step below does not apply to that input. Triad remains execution
+authority after the planning handoff.
+
 1. Create `<control-repository>/projects/<project-id>/`.
 2. Copy `assets/project.yaml` to `project.yaml`; register only declared product
    repositories, branches, and worktrees.
 3. Copy the approved PRD to `artifacts/prd.md`; record source, collection time,
    snapshot, revision when available, and SHA-256.
-4. Copy `assets/loop-template/` to `.loop/`, then create bounded feature cards
-   under `features/` and a complete `feature-plan.md`.
+4. Copy `assets/loop-template/` to `.loop/`. For ordinary PRD-only input,
+   create bounded feature cards under `features/` and a complete
+   `feature-plan.md`. For native BMAD input, ingest the canonical Stories and
+   materialize one normal Card per Story instead; do not perform a second
+   semantic decomposition.
    When an owner-approved Quality Bar or additional intent/architecture source
    exists, copy `assets/loop-template/quality-baseline.json`, fill only the
    declared source hashes and criteria, compute its canonical fingerprint, and
@@ -63,6 +78,13 @@ The command returns JSON containing the packet path and the dispatch context;
 launch the delegated role with `dispatch.cwd` set to the declared product
 worktree. The verifier produces environment-derived evidence; it never changes
 card state.
+
+The control workspace and product worktree may be separate directories. An
+external worktree is authorized by an exact repository mapping in
+`project.yaml` (`repositories[].worktree`, falling back to `path`), not by an
+assignment escape hatch. A mapped external worktree is valid even when the
+legacy `allow_external_worktree` field is absent or false; an unmapped external
+path fails closed before dispatch or gate execution.
 
 Use local worktrees for enabled multi-repository integration and declare a final
 integration card. Do not publish packages, alter registry versions, or create a
