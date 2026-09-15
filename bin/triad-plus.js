@@ -214,7 +214,8 @@ async function applyMarkdownModel(target, configuration, fields = ['model']) {
     .filter(({ value }) => value !== null && value !== undefined && value !== '');
   if (values.length === 0) return;
   const additions = values.map(({ field, value }) => `${field}: ${JSON.stringify(value)}`).join('\n');
-  await writeFile(target, `---\n${frontmatter}${additions}\n${source.slice(closing)}`, 'utf8');
+  const normalizedFrontmatter = frontmatter.replace(/\s*$/, '');
+  await writeFile(target, `---\n${normalizedFrontmatter}\n${additions}${source.slice(closing)}`, 'utf8');
 }
 
 async function writeRoleProfiles(paths, team) {
@@ -394,12 +395,17 @@ async function upgrade(options) {
   const backupRoot = join(controlRoot, '.triad-plus', 'backups', stamp);
   process.stdout.write(`Triad+ upgrade ${options.apply ? 'applying' : 'plan'} for ${adapter.label}\n`);
   await refreshAssets(adapter.projectAssets, controlRoot, installContext, join(backupRoot, 'project'), options.apply);
+  if (team && options.apply && adapter.modelBinding === 'project-frontmatter') {
+    await applyTeamBinding(adapter, controlRoot, team, installContext);
+  }
   await upgradeRunStateDelivery(controlRoot, backupRoot, options.apply);
   if (team) await applyOverlay(controlRoot, options.apply, team);
   else process.stdout.write('  Instructions skipped: .triad-plus/team.json is not configured\n');
   if (options.global) {
     await refreshAssets(adapter.globalAssets, controlRoot, installContext, join(backupRoot, 'global'), options.apply);
-    if (team) await applyTeamBinding(adapter, controlRoot, team, installContext);
+    if (team && options.apply && adapter.modelBinding === 'global-profiles') {
+      await applyTeamBinding(adapter, controlRoot, team, installContext);
+    }
   }
   if (!options.apply) process.stdout.write('Dry run only. Re-run with --apply to update managed assets.\n');
 }

@@ -9,6 +9,47 @@ const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const fixtureRoot = await mkdtemp(join(tmpdir(), 'triad-plus-cli-'));
 const codexHome = join(fixtureRoot, 'codex-home');
 const userFacingIdentityInvariant = "Before the first owner-facing reply, read `.triad-plus/team.json` when it exists.\nUser-facing identity is permanent: adopt its non-empty\n`roles.orchestrator.displayName` as the sole user-facing identity for every\nowner-facing reply, including the first. If the file is absent or has no\nnon-empty display name, use `Triad Orchestrator`; never present a hidden\nintermediary or another Triad role to the owner. You may report delegated roles'\noutputs, but never claim their identity.";
+const configuredRoleBindings = {
+  orchestrator: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+  developer: { model: 'gpt-5.6-luna', reasoning_effort: 'max' },
+  reviewer: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+  evaluator: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' }
+};
+
+async function assertOpenCodeBindings(controlRoot, expectedBindings) {
+  for (const [role, expected] of Object.entries(expectedBindings)) {
+    const source = await readFile(join(controlRoot, '.opencode', 'agents', `triad-${role}.md`), 'utf8');
+    const modelLines = source.split('\n').filter((line) => line.startsWith('model:'));
+    const reasoningLines = source.split('\n').filter((line) => line.startsWith('reasoningEffort:'));
+    assert.deepEqual(modelLines, expected.model ? [`model: ${JSON.stringify(expected.model)}`] : []);
+    assert.deepEqual(reasoningLines, expected.reasoning_effort
+      ? [`reasoningEffort: ${JSON.stringify(expected.reasoning_effort)}`]
+      : []);
+  }
+}
+
+async function assertClaudeBindings(controlRoot, expectedBindings) {
+  for (const role of ['developer', 'reviewer', 'evaluator']) {
+    const source = await readFile(join(controlRoot, '.claude', 'agents', `triad-${role}.md`), 'utf8');
+    const modelLines = source.split('\n').filter((line) => line.startsWith('model:'));
+    assert.deepEqual(modelLines, expectedBindings[role].model
+      ? [`model: ${JSON.stringify(expectedBindings[role].model)}`]
+      : []);
+    assert.equal(source.split('\n').filter((line) => line.startsWith('reasoningEffort:')).length, 0);
+  }
+}
+
+async function assertCopilotBindings(controlRoot, expectedBindings) {
+  for (const [role, expected] of Object.entries(expectedBindings)) {
+    const source = await readFile(join(controlRoot, '.github', 'agents', `triad-${role}.agent.md`), 'utf8');
+    const modelLines = source.split('\n').filter((line) => line.startsWith('model:'));
+    const reasoningLines = source.split('\n').filter((line) => line.startsWith('reasoningEffort:'));
+    assert.deepEqual(modelLines, expected.model ? [`model: ${JSON.stringify(expected.model)}`] : []);
+    assert.deepEqual(reasoningLines, expected.reasoning_effort
+      ? [`reasoningEffort: ${JSON.stringify(expected.reasoning_effort)}`]
+      : []);
+  }
+}
 
 try {
   for (const host of ['codex', 'opencode', 'claude-code', 'antigravity', 'hermes', 'copilot']) {
@@ -121,8 +162,62 @@ try {
       await readFile(join(control, hostDirectory, 'agents', 'triad-developer.md'), 'utf8'),
       /model: "gpt-5\.6-luna"/
     );
+    if (host === 'opencode') await assertOpenCodeBindings(control, configuredRoleBindings);
     assert.ok((await readFile(join(control, hostDirectory, 'commands', 'triad.md'), 'utf8')).includes(userFacingIdentityInvariant));
   }
+
+  const opencodeConfiguredControl = join(fixtureRoot, 'opencode-configured-control');
+  const opencodeTeamPath = join(opencodeConfiguredControl, '.triad-plus', 'team.json');
+  const teamBeforeOpenCodeUpgrade = await readFile(opencodeTeamPath, 'utf8');
+  for (const role of Object.keys(configuredRoleBindings)) {
+    const agentPath = join(opencodeConfiguredControl, '.opencode', 'agents', `triad-${role}.md`);
+    const staleAgent = (await readFile(agentPath, 'utf8'))
+      .replace(/^model:.*$/m, 'model: "stale/provider-model"')
+      .replace(/^reasoningEffort:.*$/m, 'reasoningEffort: "low"');
+    await writeFile(agentPath, staleAgent, 'utf8');
+  }
+  const opencodeUpgrade = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'upgrade', '--host', 'opencode', '--control', opencodeConfiguredControl, '--apply'
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(opencodeUpgrade.status, 0, opencodeUpgrade.stderr);
+  assert.equal(await readFile(opencodeTeamPath, 'utf8'), teamBeforeOpenCodeUpgrade);
+  await assertOpenCodeBindings(opencodeConfiguredControl, configuredRoleBindings);
+
+  const claudeConfiguredControl = join(fixtureRoot, 'claude-code-configured-control');
+  const claudeTeamPath = join(claudeConfiguredControl, '.triad-plus', 'team.json');
+  const teamBeforeClaudeUpgrade = await readFile(claudeTeamPath, 'utf8');
+  for (const role of ['developer', 'reviewer', 'evaluator']) {
+    const agentPath = join(claudeConfiguredControl, '.claude', 'agents', `triad-${role}.md`);
+    const staleAgent = (await readFile(agentPath, 'utf8'))
+      .replace(/^model:.*$/m, 'model: "stale/provider-model"');
+    await writeFile(agentPath, staleAgent, 'utf8');
+  }
+  const claudeUpgrade = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'upgrade', '--host', 'claude-code', '--control', claudeConfiguredControl, '--apply'
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(claudeUpgrade.status, 0, claudeUpgrade.stderr);
+  assert.equal(await readFile(claudeTeamPath, 'utf8'), teamBeforeClaudeUpgrade);
+  await assertClaudeBindings(claudeConfiguredControl, configuredRoleBindings);
+
+  const nullTeamConfigSource = join(fixtureRoot, 'opencode-null-team.json');
+  const nullTeam = JSON.parse(await readFile(teamConfigSource, 'utf8'));
+  for (const role of Object.keys(nullTeam.roles)) {
+    nullTeam.roles[role].model = null;
+    nullTeam.roles[role].reasoning_effort = null;
+  }
+  await writeFile(nullTeamConfigSource, `${JSON.stringify(nullTeam, null, 2)}\n`);
+  const nullOpenCodeControl = join(fixtureRoot, 'opencode-null-control');
+  const nullOpenCode = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'init', '--host', 'opencode', '--control', nullOpenCodeControl,
+    '--team-config', nullTeamConfigSource
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(nullOpenCode.status, 0, nullOpenCode.stderr);
+  await assertOpenCodeBindings(nullOpenCodeControl, {
+    orchestrator: { model: null, reasoning_effort: null },
+    developer: { model: null, reasoning_effort: null },
+    reviewer: { model: null, reasoning_effort: null },
+    evaluator: { model: null, reasoning_effort: null }
+  });
   const antigravityControl = join(fixtureRoot, 'antigravity-configured-control');
   const antigravity = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'init', '--host', 'antigravity', '--control', antigravityControl,
@@ -171,6 +266,21 @@ try {
   ], { cwd: repositoryRoot, encoding: 'utf8' });
   assert.equal(copilotDoctor.status, 0, copilotDoctor.stderr);
   assert.match(copilotDoctor.stdout, /GitHub Copilot\s+OK/);
+  const copilotTeamPath = join(copilotControl, '.triad-plus', 'team.json');
+  const teamBeforeCopilotUpgrade = await readFile(copilotTeamPath, 'utf8');
+  for (const role of Object.keys(configuredRoleBindings)) {
+    const agentPath = join(copilotControl, '.github', 'agents', `triad-${role}.agent.md`);
+    const staleAgent = (await readFile(agentPath, 'utf8'))
+      .replace(/^model:.*$/m, 'model: "stale/provider-model"')
+      .replace(/^reasoningEffort:.*$/m, 'reasoningEffort: "low"');
+    await writeFile(agentPath, staleAgent, 'utf8');
+  }
+  const copilotUpgrade = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'upgrade', '--host', 'copilot', '--control', copilotControl, '--apply'
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(copilotUpgrade.status, 0, copilotUpgrade.stderr);
+  assert.equal(await readFile(copilotTeamPath, 'utf8'), teamBeforeCopilotUpgrade);
+  await assertCopilotBindings(copilotControl, configuredRoleBindings);
   const copilotHome = join(fixtureRoot, 'copilot-home');
   const copilotGlobalControl = join(fixtureRoot, 'copilot-global-control');
   const globalCopilot = spawnSync(process.execPath, [

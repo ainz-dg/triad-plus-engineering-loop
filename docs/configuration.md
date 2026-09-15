@@ -31,6 +31,15 @@ adapter writes those into host-native profiles only where the selected host
 supports that facility. A blank model means the host default. Never put tokens,
 API keys, or private deployment data in this file.
 
+For project-frontmatter adapters, `.triad-plus/team.json` remains the canonical
+source of truth. Managed installation and `upgrade --apply` re-materialize each
+configured role's supported fields after refreshing agent assets. OpenCode and
+Copilot map `model` and `reasoning_effort` to the host-native `model` and
+`reasoningEffort` fields; Claude Code currently maps `model` only. Null or blank
+values are omitted so the host uses its session default. Other adapters may
+expose different controls; Triad+ only materializes fields supported by the
+selected host.
+
 ## Retry and scope policy
 
 New control workspaces use separate finite budgets for environment recovery and

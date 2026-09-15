@@ -86,6 +86,7 @@ const definitions = [
     entry: '/triad',
     lifecycle: null,
     modelBinding: 'project-frontmatter',
+    modelFields: ['model', 'reasoningEffort'],
     modelRoles: roleDefinitions.map((role) => role.id),
     projectAssets: [
       { source: 'adapters/opencode/.opencode/agents', destination: '.opencode/agents' },

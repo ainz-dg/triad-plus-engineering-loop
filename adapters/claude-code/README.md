@@ -44,9 +44,17 @@ after developer completion.
 
 ## Model choices
 
-The adapter leaves model selection to the local Claude Code configuration. Set a
-supported `model` field in the installed subagent frontmatter when needed. Keep
-the developer on the strongest available implementation profile and keep
+`.triad-plus/team.json` is the source of truth for project role model
+configuration. When a team file supplies a model, Triad+ materializes the
+Claude Code-native `model` frontmatter field in the Developer, Reviewer, and
+Evaluator agent definitions during `init` and `upgrade --apply`. A null or
+blank value leaves the field absent so Claude Code uses its host/session
+default. Generated `.claude/agents/*.md` files are managed outputs; do not use
+them as a separate configuration source.
+
+Claude Code does not expose a Triad-managed `reasoningEffort` frontmatter field
+in this adapter, so `team.json.reasoning_effort` remains host/session-managed.
+Keep the Developer on the strongest available implementation profile and keep
 Evaluator and Reviewer independently configured when separate judgement is
 important.
 

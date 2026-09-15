@@ -53,10 +53,25 @@ remain in a declared project workspace.
 
 ## Configure models deliberately
 
-The adapter intentionally does not set `model` in its agent files. OpenCode
-therefore uses the currently selected primary model and, by default, passes it
-to subagents. Set a `model: provider/model-id` field in each installed agent
-file when role-specific routing is wanted:
+`.triad-plus/team.json` is the source of truth for role-level model
+configuration. When a team file supplies values, Triad+ materializes the
+OpenCode-native `model` and `reasoningEffort` frontmatter fields in each
+project agent definition during `init` and `upgrade --apply`:
+
+```text
+team.json model             → OpenCode model
+team.json reasoning_effort → OpenCode reasoningEffort
+```
+
+Do not treat generated `.opencode/agents/*.md` files as an independent
+configuration source; a later managed upgrade regenerates them from
+`.triad-plus/team.json`. A `null` or blank value leaves the corresponding field
+absent so OpenCode uses its host/session default.
+
+The adapter only writes fields supported by this OpenCode materialization. Host
+and provider capabilities may still limit which model or reasoning levels are
+available. Inspect identifiers with `opencode models` and keep role-specific
+routing explicit in the team file:
 
 | Agent | Recommended profile |
 | --- | --- |
