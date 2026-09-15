@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.1 — 2026-09-15
+
+- Preserve supported role model bindings from `.triad-plus/team.json` when
+  project-frontmatter adapters refresh managed agents during `upgrade --apply`.
+- Materialize OpenCode `reasoning_effort` as `reasoningEffort` and keep null or
+  blank values on the host default; Claude Code continues to manage reasoning
+  through its host configuration.
+
 ## 1.8.0 — 2026-09-12
 
 - Add an optional Immutable Quality Contract with a deterministic Quality
