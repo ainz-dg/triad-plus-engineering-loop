@@ -206,6 +206,31 @@ try {
     (error) => error?.code === "assignment_packet_invalid" && /not declared by a project\.yaml repository mapping/.test(error.message)
   );
 
+  const projectYamlPath = path.join(fixture.control, "project.yaml");
+  const originalProjectYaml = await readFile(projectYamlPath, "utf8");
+  await writeFile(projectYamlPath, [
+    "repositories:",
+    "  - id: product",
+    "    metadata:",
+    `      worktree: ${fixture.product}`,
+    ""
+  ].join("\n"));
+  await assert.rejects(
+    () => resolveAssignmentContext(bound, { projectRoot: fixture.control }),
+    (error) => error?.code === "assignment_packet_invalid" && /not declared by a project\.yaml repository mapping/.test(error.message),
+    "nested metadata.worktree must not authorize an external worktree"
+  );
+
+  await writeFile(projectYamlPath, [
+    "repositories:",
+    `  - worktree: ${fixture.product}`,
+    "    id: product",
+    ""
+  ].join("\n"));
+  const reorderedMapping = await resolveAssignmentContext(bound, { projectRoot: fixture.control });
+  assert.equal(reorderedMapping.repository, "product", "repository id need not be the first YAML property");
+  await writeFile(projectYamlPath, originalProjectYaml);
+
   const verified = runVerifier(fixture);
   assert.equal(verified.result.status, 0, JSON.stringify(verified.evidence));
   assert.equal(verified.evidence.status, "pass");

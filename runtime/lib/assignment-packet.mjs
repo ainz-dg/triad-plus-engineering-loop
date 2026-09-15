@@ -126,6 +126,8 @@ function parseRepositoryMappings(source) {
   let inRepositories = false;
   let repositoryIndent = null;
   let current = null;
+  let repositoryEntryIndent = null;
+  let repositoryPropertyIndent = null;
   for (const rawLine of source.split(/\r?\n/)) {
     const line = rawLine.replace(/\s+#.*$/, "");
     const indentation = line.search(/\S/);
@@ -137,24 +139,36 @@ function parseRepositoryMappings(source) {
       current = null;
       inRepositories = true;
       repositoryIndent = repositoriesMatch[1].length;
+      repositoryEntryIndent = null;
+      repositoryPropertyIndent = null;
       continue;
     }
     if (!inRepositories) continue;
+    const itemMatch = line.match(/^(\s*)-\s*(?:(\w[\w-]*):\s*(.*?)\s*)?$/);
+    if (itemMatch && itemMatch[1].length > repositoryIndent) {
+      const itemIndent = itemMatch[1].length;
+      if (repositoryEntryIndent !== null && itemIndent !== repositoryEntryIndent) continue;
+      if (current) repositories.push(current);
+      current = {};
+      repositoryEntryIndent = itemIndent;
+      repositoryPropertyIndent = itemMatch[2] ? itemIndent + 2 : null;
+      if (itemMatch[2]) current[itemMatch[2]] = scalarValue(itemMatch[3]);
+      continue;
+    }
     if (indentation <= repositoryIndent && !trimmed.startsWith("- ")) {
       if (current) repositories.push(current);
       current = null;
       inRepositories = false;
-      continue;
-    }
-    const itemMatch = line.match(/^(\s*)-\s+id:\s*(.*?)\s*$/i);
-    if (itemMatch && itemMatch[1].length > repositoryIndent) {
-      if (current) repositories.push(current);
-      current = { id: scalarValue(itemMatch[2]) };
+      repositoryEntryIndent = null;
+      repositoryPropertyIndent = null;
       continue;
     }
     if (!current) continue;
     const propertyMatch = line.match(/^(\s+)([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/);
-    if (propertyMatch && propertyMatch[1].length > repositoryIndent) {
+    if (!propertyMatch || repositoryEntryIndent === null) continue;
+    const propertyIndent = propertyMatch[1].length;
+    if (repositoryPropertyIndent === null) repositoryPropertyIndent = propertyIndent;
+    if (propertyIndent === repositoryPropertyIndent) {
       current[propertyMatch[2]] = scalarValue(propertyMatch[3]);
     }
   }
