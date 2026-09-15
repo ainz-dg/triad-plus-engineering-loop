@@ -128,24 +128,46 @@ function parseRepositoryMappings(source) {
   let current = null;
   let repositoryEntryIndent = null;
   let repositoryPropertyIndent = null;
+  const mappingStack = [];
+  const finishRepositories = () => {
+    if (current) repositories.push(current);
+    current = null;
+    inRepositories = false;
+    repositoryIndent = null;
+    repositoryEntryIndent = null;
+    repositoryPropertyIndent = null;
+  };
+  const updateMappingStack = (key, indentation) => {
+    while (mappingStack.length && mappingStack[mappingStack.length - 1].indent >= indentation) mappingStack.pop();
+    mappingStack.push({ key: key.toLowerCase(), indent: indentation });
+  };
   for (const rawLine of source.split(/\r?\n/)) {
     const line = rawLine.replace(/\s+#.*$/, "");
     const indentation = line.search(/\S/);
     const trimmed = line.trim();
     if (!trimmed || indentation < 0) continue;
-    const repositoriesMatch = line.match(/^(\s*)repositories:\s*$/i);
-    if (repositoriesMatch) {
-      if (current) repositories.push(current);
-      current = null;
-      inRepositories = true;
-      repositoryIndent = repositoriesMatch[1].length;
-      repositoryEntryIndent = null;
-      repositoryPropertyIndent = null;
+    const itemMatch = line.match(/^(\s*)-\s*(?:(\w[\w-]*):\s*(.*?)\s*)?$/);
+    if (inRepositories && !(itemMatch && itemMatch[1].length > repositoryIndent) && indentation <= repositoryIndent) {
+      finishRepositories();
+    }
+    const propertyMatch = line.match(/^(\s*)([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/);
+    if (propertyMatch && propertyMatch[2].toLowerCase() === "repositories" && !propertyMatch[3]) {
+      while (mappingStack.length && mappingStack[mappingStack.length - 1].indent >= indentation) mappingStack.pop();
+      const parent = mappingStack[mappingStack.length - 1] ?? null;
+      const repositoriesIndent = propertyMatch[1].length;
+      const rootRepositories = repositoriesIndent === 0;
+      const projectRepositories = parent?.key === "project" && parent.indent === 0;
+      updateMappingStack(propertyMatch[2], repositoriesIndent);
+      if (rootRepositories || projectRepositories) {
+        if (inRepositories) finishRepositories();
+        inRepositories = true;
+        repositoryIndent = repositoriesIndent;
+        repositoryEntryIndent = null;
+        repositoryPropertyIndent = null;
+      }
       continue;
     }
-    if (!inRepositories) continue;
-    const itemMatch = line.match(/^(\s*)-\s*(?:(\w[\w-]*):\s*(.*?)\s*)?$/);
-    if (itemMatch && itemMatch[1].length > repositoryIndent) {
+    if (itemMatch && inRepositories && itemMatch[1].length > repositoryIndent) {
       const itemIndent = itemMatch[1].length;
       if (repositoryEntryIndent !== null && itemIndent !== repositoryEntryIndent) continue;
       if (current) repositories.push(current);
@@ -155,24 +177,14 @@ function parseRepositoryMappings(source) {
       if (itemMatch[2]) current[itemMatch[2]] = scalarValue(itemMatch[3]);
       continue;
     }
-    if (indentation <= repositoryIndent && !trimmed.startsWith("- ")) {
-      if (current) repositories.push(current);
-      current = null;
-      inRepositories = false;
-      repositoryEntryIndent = null;
-      repositoryPropertyIndent = null;
-      continue;
+    if (inRepositories && current && propertyMatch && repositoryEntryIndent !== null) {
+      const propertyIndent = propertyMatch[1].length;
+      if (repositoryPropertyIndent === null) repositoryPropertyIndent = propertyIndent;
+      if (propertyIndent === repositoryPropertyIndent) current[propertyMatch[2]] = scalarValue(propertyMatch[3]);
     }
-    if (!current) continue;
-    const propertyMatch = line.match(/^(\s+)([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/);
-    if (!propertyMatch || repositoryEntryIndent === null) continue;
-    const propertyIndent = propertyMatch[1].length;
-    if (repositoryPropertyIndent === null) repositoryPropertyIndent = propertyIndent;
-    if (propertyIndent === repositoryPropertyIndent) {
-      current[propertyMatch[2]] = scalarValue(propertyMatch[3]);
-    }
+    if (propertyMatch) updateMappingStack(propertyMatch[2], propertyMatch[1].length);
   }
-  if (current) repositories.push(current);
+  if (inRepositories) finishRepositories();
   return normalizeRepositoryMappings(repositories);
 }
 

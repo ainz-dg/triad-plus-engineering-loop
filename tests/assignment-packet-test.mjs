@@ -229,6 +229,32 @@ try {
   ].join("\n"));
   const reorderedMapping = await resolveAssignmentContext(bound, { projectRoot: fixture.control });
   assert.equal(reorderedMapping.repository, "product", "repository id need not be the first YAML property");
+
+  await writeFile(projectYamlPath, [
+    "project:",
+    "  repositories:",
+    "    - id: product",
+    `      worktree: ${fixture.product}`,
+    ""
+  ].join("\n"));
+  const projectChildMapping = await resolveAssignmentContext(bound, { projectRoot: fixture.control });
+  assert.equal(projectChildMapping.repository, "product", "project.repositories is a supported direct section");
+
+  await writeFile(projectYamlPath, [
+    "repositories:",
+    "  - id: product",
+    "    metadata:",
+    "      repositories:",
+    "        - id: evil",
+    `          worktree: ${fixture.product}`,
+    ""
+  ].join("\n"));
+  await assert.rejects(
+    () => resolveAssignmentContext(bound, { projectRoot: fixture.control }),
+    (error) => error?.code === "assignment_packet_invalid" && /not declared by a project\.yaml repository mapping/.test(error.message),
+    "nested metadata.repositories must not replace the root repository mapping"
+  );
+
   await writeFile(projectYamlPath, originalProjectYaml);
 
   const verified = runVerifier(fixture);
