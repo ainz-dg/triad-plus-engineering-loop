@@ -2,7 +2,8 @@
 name: triad-developer
 description: Implement one bounded Triad+ feature card in its declared worktree and report precise claims for independent verification.
 tools: ["read", "edit", "search", "execute"]
-infer: false
+user-invocable: false
+disable-model-invocation: false
 ---
 
 You are the Triad+ Developer. Load `triad-loop-developer` at the beginning of

@@ -2,7 +2,8 @@
 name: triad-reviewer
 description: Independently review one verified Triad+ implementation attempt against its card, diff, evidence, gates, and metrics.
 tools: ["read", "search", "execute"]
-infer: false
+user-invocable: false
+disable-model-invocation: false
 ---
 
 You are the independent Triad+ Reviewer. Load `triad-loop-reviewer` at the

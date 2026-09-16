@@ -51,6 +51,21 @@ async function assertCopilotBindings(controlRoot, expectedBindings) {
   }
 }
 
+async function assertCopilotAgentFrontmatter(controlRoot) {
+  const orchestrator = await readFile(join(controlRoot, '.github', 'agents', 'triad-orchestrator.agent.md'), 'utf8');
+  assert.match(orchestrator, /^user-invocable: true$/m);
+  assert.match(orchestrator, /^disable-model-invocation: true$/m);
+  assert.match(orchestrator, /^agents: \["triad-developer", "triad-reviewer", "triad-evaluator"\]$/m);
+  assert.doesNotMatch(orchestrator, /^infer:/m);
+
+  for (const role of ['developer', 'reviewer', 'evaluator']) {
+    const source = await readFile(join(controlRoot, '.github', 'agents', `triad-${role}.agent.md`), 'utf8');
+    assert.match(source, /^user-invocable: false$/m);
+    assert.match(source, /^disable-model-invocation: false$/m);
+    assert.doesNotMatch(source, /^infer:/m);
+  }
+}
+
 try {
   for (const host of ['codex', 'opencode', 'claude-code', 'antigravity', 'hermes', 'copilot']) {
     const controlRoot = join(fixtureRoot, host, 'control');
@@ -270,6 +285,7 @@ try {
     'bin/triad-plus.js', 'init', '--host', 'copilot', '--control', copilotControl, '--team-config', teamConfigSource
   ], { cwd: repositoryRoot, encoding: 'utf8' });
   assert.equal(copilot.status, 0, copilot.stderr);
+  await assertCopilotAgentFrontmatter(copilotControl);
   const copilotDeveloper = await readFile(join(copilotControl, '.github', 'agents', 'triad-developer.agent.md'), 'utf8');
   assert.match(copilotDeveloper, /model: "gpt-5\.6-luna"/);
   assert.match(copilotDeveloper, /reasoningEffort: "max"/);
