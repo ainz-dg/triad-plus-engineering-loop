@@ -37,6 +37,20 @@ SHA-256 values in the report as a **repository-skill attestation**. If a bound
 skill is missing or its hash differs, stop and report the mismatch; do not
 replace it with external context or a similarly named skill.
 
+Before editing, prove the runtime context from the actual activation cwd with
+the installed control-plane diagnostic:
+
+```bash
+node /absolute/path/to/control-workspace/.triad-runtime/triad-runtime-context.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment /absolute/path/to/control-workspace/.loop/runtime/assignments/<assignment-file>.json
+```
+
+Record its `process_cwd`, `shell_pwd`, `git_top_level`, assigned worktree, and
+resolved repository-skill paths/hashes. A non-zero result, a cwd/root mismatch,
+or a missing/mutated skill is an invalid runtime context; stop before editing
+and do not substitute a same-named control-workspace or global skill.
+
 Implement the smallest complete change and focused tests. Run useful local
 checks and measure declared criteria. Report changed files, tests, exact command
 results, metrics, worktree/branch, risks, and blockers to the Orchestrator.

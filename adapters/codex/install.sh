@@ -8,10 +8,10 @@ Usage:
   ./adapters/codex/install.sh --global
 
 Install the Triad Codex adapter without overwriting existing skills, prompt, or
-project runtime. --project installs the five skills under
+project runtime. --project installs the six skills under
 <control-repository-path>/.agents/skills and installs .triad-runtime. It does
 not install the user-level Codex prompt. --global installs the /prompts:triad
-entry point and the five skills under $CODEX_HOME (default: $HOME/.codex).
+entry point and the six skills under $CODEX_HOME (default: $HOME/.codex).
 
 For normal use run both commands once: --project for each control repository,
 then --global for the Codex entry point. Existing paths are never overwritten.
@@ -19,7 +19,7 @@ EOF
 }
 
 codex_home="${CODEX_HOME:-$HOME/.codex}"
-skill_names=(triad-loop-bootstrap triad-loop-orchestrator triad-loop-developer triad-loop-evaluator triad-loop-reviewer)
+skill_names=(triad-loop-bootstrap triad-loop-orchestrator triad-loop-developer triad-loop-evaluator triad-loop-reviewer triad-model-configuration)
 
 if [[ $# -eq 2 && "$1" == "--project" ]]; then
   project_root="$2"

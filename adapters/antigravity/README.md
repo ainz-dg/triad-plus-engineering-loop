@@ -1,7 +1,7 @@
 # Triad+ for Antigravity
 
 The Antigravity adapter uses native workspace paths: `.agents/skills/` for the
-five shared Triad+ skills and `/triad` workflow, plus `.agents/agents/` for the
+six shared Triad+ skills and `/triad` workflow, plus `.agents/agents/` for the
 four technical agents. Start Antigravity from the project-control workspace and
 invoke:
 

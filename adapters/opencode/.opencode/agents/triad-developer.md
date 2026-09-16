@@ -28,6 +28,20 @@ At activation, read `.triad-plus/team.json`. Your first report to the
 Orchestrator identifies the configured `roles.developer.displayName` as the
 Triad+ Developer and names the assigned card.
 
+Before editing, run the exact runtime-context proof from this activation's
+actual cwd:
+
+```bash
+node /absolute/path/to/control-workspace/.triad-runtime/triad-runtime-context.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment /absolute/path/to/control-workspace/.loop/runtime/assignments/<assignment-file>.json
+```
+
+Record packet cwd, process cwd, shell `pwd`, Git top-level, and every resolved
+repository-skill path/hash. A non-zero result or any mismatch is invalid
+runtime context: stop and report it, and never substitute a control-workspace
+or global skill copy.
+
 Verify the worktree and branch. Do not expand scope, silently change project
 policy, add dependencies without authorization, or make delivery decisions. Run
 the required gates, measure the declared metrics, and report exact commands and

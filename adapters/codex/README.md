@@ -18,7 +18,7 @@ Then install the global entry point and the skills once for the Codex user:
 ```
 
 The installer refuses any overwrite. It installs the project runtime under
-`.triad-runtime` and the five shared skills under `.agents/skills`; the global
+`.triad-runtime` and the six shared skills under `.agents/skills`; the global
 installation also makes the skills available to Codex and writes
 `$CODEX_HOME/prompts/triad.md` (`$HOME/.codex` by default).
 

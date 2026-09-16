@@ -9,6 +9,17 @@ import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { getAdapter, listAdapters, roleDefinitions, sharedSkillNames } from '../adapters/registry.mjs';
 import { writeImportedCard } from '../integrations/bmad/story-importer.mjs';
+import {
+  hostModelField,
+  materializedHostRoleConfiguration,
+  supportsNativeReasoning,
+  validateTeamConfiguration
+} from '../runtime/lib/model-config.mjs';
+import {
+  formatDoctorLine,
+  formatDoctorSection,
+  formatSetupSummary
+} from '../runtime/lib/terminal.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -19,7 +30,7 @@ function usage(exitCode = 0) {
 Usage:
   npx triad-plus
   npx triad-plus init --host <adapter-id> --control <path> [--global] [--team-config <path>] [--allow-product-repo]
-  npx triad-plus doctor --host <adapter-id> --control <path> [--hook-config <path>]
+  npx triad-plus doctor --host <adapter-id> --control <path> [--global] [--hook-config <path>]
   npx triad-plus upgrade --host <adapter-id> --control <path> [--global] [--apply]
   npx triad-plus import-bmad-story --source <story.md> --output <card.md> [--target-repository <id>] [--provenance <record.json>] [--required-gate <id>] [--depends-on <card-id>]
 
@@ -180,19 +191,13 @@ async function applyOverlay(controlRoot, apply, team) {
 }
 
 async function loadTeamConfig(options) {
-  if (options.team) return options.team;
+  if (options.team) return validateTeamConfiguration(options.team);
   if (!options.teamConfig) return null;
   let team;
   try { team = JSON.parse(await readFile(resolve(options.teamConfig), 'utf8')); }
   catch (error) { throw new Error(`Cannot read --team-config: ${error.message}`); }
-  if (team?.schema_version !== 1 || !team.interaction || !team.roles) throw new Error('--team-config must contain schema_version 1, interaction, and roles.');
-  for (const role of roleDefinitions) {
-    const value = team.roles[role.id];
-    if (!value || typeof value.displayName !== 'string' || ![null, undefined].includes(value.model) && typeof value.model !== 'string') {
-      throw new Error(`--team-config has an invalid ${role.id} role definition.`);
-    }
-  }
-  return team;
+  try { return validateTeamConfiguration(team); }
+  catch (error) { throw new Error(`--team-config is invalid: ${error.message}`); }
 }
 
 async function writeTeamConfig(controlRoot, team) {
@@ -201,21 +206,22 @@ async function writeTeamConfig(controlRoot, team) {
   await writeFile(target, `${JSON.stringify(team, null, 2)}\n`, 'utf8');
 }
 
-async function applyMarkdownModel(target, configuration, fields = ['model']) {
-  if (!fields.some((field) => configuration?.[field === 'reasoningEffort' ? 'reasoning_effort' : field])) return;
+async function applyMarkdownModel(target, configuration, fields = ['model'], cleanupFields = []) {
+  const managedFields = [...new Set([...fields, ...cleanupFields])];
+  if (managedFields.length === 0) return;
   const source = await readFile(target, 'utf8');
   if (!source.startsWith('---\n')) throw new Error(`Agent definition has no YAML frontmatter: ${target}`);
   const closing = source.indexOf('\n---\n', 4);
   if (closing === -1) throw new Error(`Agent definition has invalid YAML frontmatter: ${target}`);
   let frontmatter = source.slice(4, closing);
-  for (const field of fields) frontmatter = frontmatter.replace(new RegExp(`^${field}:\\s*.*\\n?`, 'm'), '');
+  for (const field of managedFields) frontmatter = frontmatter.replace(new RegExp(`^${field}:\\s*.*\\n?`, 'm'), '');
   const values = fields
-    .map((field) => ({ field, value: field === 'reasoningEffort' ? configuration.reasoning_effort : configuration[field] }))
+    .map((field) => ({ field, value: configuration?.[field] }))
     .filter(({ value }) => value !== null && value !== undefined && value !== '');
-  if (values.length === 0) return;
   const additions = values.map(({ field, value }) => `${field}: ${JSON.stringify(value)}`).join('\n');
   const normalizedFrontmatter = frontmatter.replace(/\s*$/, '');
-  await writeFile(target, `---\n${normalizedFrontmatter}\n${additions}${source.slice(closing)}`, 'utf8');
+  const next = `---\n${normalizedFrontmatter}${additions ? `\n${additions}` : ''}${source.slice(closing)}`;
+  if (next !== source) await writeFile(target, next, 'utf8');
 }
 
 async function writeRoleProfiles(paths, team) {
@@ -241,18 +247,29 @@ async function writeRoleProfiles(paths, team) {
   }
 }
 
-async function applyTeamBinding(adapter, controlRoot, team, installContext) {
+async function applyTeamBinding(adapter, controlRoot, team, installContext, scope = 'project') {
   if (!team || adapter.modelBinding === 'team-record') return;
   if (adapter.modelBinding === 'project-frontmatter') {
-    const paths = adapter.roleModelPaths(controlRoot, installContext);
+    const pathFactory = scope === 'global' ? adapter.globalRoleModelPaths : adapter.roleModelPaths;
+    if (typeof pathFactory !== 'function') return;
+    const paths = scope === 'global'
+      ? pathFactory(installContext)
+      : pathFactory(controlRoot, installContext);
     const roles = (adapter.modelRoles ?? roleDefinitions.map((role) => role.id))
       .map((roleId) => roleDefinitions.find((role) => role.id === roleId));
     for (const [index, role] of roles.entries()) {
-      await applyMarkdownModel(paths[index], team.roles[role.id], adapter.modelFields ?? ['model']);
+      const fields = adapter.modelFields ?? ['model'];
+      await applyMarkdownModel(
+        paths[index],
+        materializedHostRoleConfiguration(adapter, role.id, team.roles[role.id]),
+        fields,
+        adapter.modelCleanupFields ?? []
+      );
     }
     return;
   }
   if (adapter.modelBinding === 'global-profiles') {
+    if (scope !== 'global') return;
     await writeRoleProfiles(adapter.roleModelPaths(installContext), team);
     return;
   }
@@ -275,6 +292,100 @@ async function collisions(paths) {
 async function allExist(paths) {
   for (const target of paths) if (!(await exists(target))) return false;
   return true;
+}
+
+function sharedSkillRoots(adapter, root, installContext, scope) {
+  const assets = scope === 'global' ? adapter.globalAssets : adapter.projectAssets;
+  return assets
+    .filter((asset) => asset.source === 'shared-skills')
+    .map((asset) => resolveDestination(asset.destination, root, installContext));
+}
+
+async function anyExist(paths) {
+  for (const target of paths) if (await exists(target)) return true;
+  return false;
+}
+
+/** Return one status per shared skill so a partial install cannot look healthy. */
+async function sharedSkillStatuses(adapter, root, installContext, scope) {
+  const roots = sharedSkillRoots(adapter, root, installContext, scope);
+  if (roots.length === 0) return [];
+  const configuredRoots = [];
+  for (const skillRoot of roots) if (await exists(skillRoot)) configuredRoots.push(skillRoot);
+  const statuses = [];
+  for (const name of sharedSkillNames) {
+    const paths = roots.map((skillRoot) => join(skillRoot, name));
+    if (configuredRoots.length === 0) {
+      statuses.push({ name, status: 'not configured', paths });
+      continue;
+    }
+    let present = 0;
+    for (const target of paths) if (await exists(target)) present += 1;
+    statuses.push({ name, status: present === paths.length ? 'OK' : 'MISSING', paths });
+  }
+  return statuses;
+}
+
+function roleModelEntries(adapter, controlRoot, installContext, scope) {
+  let paths;
+  if (scope === 'global') {
+    if (adapter.modelBinding === 'global-profiles') paths = adapter.roleModelPaths?.(installContext) ?? [];
+    else paths = adapter.globalRoleModelPaths?.(installContext) ?? [];
+  } else {
+    if (adapter.modelBinding !== 'project-frontmatter') return [];
+    paths = adapter.roleModelPaths?.(controlRoot, installContext) ?? [];
+  }
+  const roleIds = adapter.modelRoles ?? roleDefinitions.map((role) => role.id);
+  return roleIds.map((roleId, index) => ({
+    role: roleDefinitions.find((definition) => definition.id === roleId),
+    path: paths[index]
+  })).filter((entry) => entry.role && entry.path);
+}
+
+function parseFrontmatterFields(source, fields) {
+  const result = {};
+  if (!source.startsWith('---\n')) return result;
+  const closing = source.indexOf('\n---\n', 4);
+  if (closing < 0) return result;
+  const frontmatter = source.slice(4, closing);
+  for (const field of fields) {
+    const match = frontmatter.match(new RegExp(`^${field}:\\s*(.*?)\\s*$`, 'm'));
+    if (!match) {
+      result[field] = null;
+      continue;
+    }
+    try { result[field] = JSON.parse(match[1]); }
+    catch { result[field] = match[1].replace(/^['"]|['"]$/g, ''); }
+  }
+  return result;
+}
+
+async function modelBindingEvidence(adapter, controlRoot, installContext, team, scope) {
+  const entries = roleModelEntries(adapter, controlRoot, installContext, scope);
+  if (!entries.length) return [];
+  const evidence = [];
+  for (const { role, path: target } of entries) {
+    const configuration = team?.roles?.[role.id];
+    if (!configuration) {
+      evidence.push({ role, status: 'not configured', target });
+      continue;
+    }
+    const expected = materializedHostRoleConfiguration(adapter, role.id, configuration);
+    const fields = [...new Set([...(adapter.modelFields ?? Object.keys(expected)), ...(adapter.modelCleanupFields ?? [])])];
+    if (Object.keys(expected).length === 0) {
+      evidence.push({ role, status: 'UNSUPPORTED', target, expected, observed: null });
+      continue;
+    }
+    if (!(await exists(target))) {
+      evidence.push({ role, status: 'UNKNOWN / NOT OBSERVABLE', target, expected, observed: null });
+      continue;
+    }
+    const observed = parseFrontmatterFields(await readFile(target, 'utf8'), fields);
+    const matches = fields.every((field) => (expected[field] ?? null) === (observed[field] ?? null));
+    const allDefault = Object.values(expected).every((value) => value === null || value === undefined || value === '');
+    evidence.push({ role, status: matches && allDefault ? 'HOST DEFAULT' : matches ? 'VERIFIED' : 'MATERIALIZED MISMATCH', target, expected, observed });
+  }
+  return evidence;
 }
 
 function commandVersion(binary) {
@@ -308,8 +419,9 @@ async function collectTeamConfiguration(prompt, adapter) {
     const displayName = (await prompt.question(`${role.label} display name [${role.label}]: `)).trim() || role.label;
     const persona = (await prompt.question(`${role.label} persona [professional and role-focused]: `)).trim() || 'professional and role-focused';
     const model = (await prompt.question(`${role.label} model ID [host default]: `)).trim();
-    const reasoningEffort = model && adapter.modelBinding === 'global-profiles'
-      ? (await prompt.question(`${role.label} reasoning effort [${role.defaultEffort}]: `)).trim() || role.defaultEffort
+    const reasoningEffort = supportsNativeReasoning(adapter, role.id)
+      ? (await prompt.question(`${role.label} reasoning effort [${adapter.modelBinding === 'global-profiles' && model ? role.defaultEffort : 'host default'}]: `)).trim()
+        || (adapter.modelBinding === 'global-profiles' && model ? role.defaultEffort : null)
       : null;
     roles[role.id] = { displayName, persona, model: model || null, reasoning_effort: reasoningEffort, enabled };
   }
@@ -331,15 +443,19 @@ async function init(options) {
     ...adapter.projectPaths(controlRoot, installContext),
     ...(team ? [teamConfigPath(controlRoot)] : []),
     ...(options.global ? adapter.globalPaths(installContext) : []),
-    ...(team && options.global && adapter.modelBinding === 'global-profiles' ? adapter.roleModelPaths(installContext) : [])
+    ...(team && options.global && adapter.modelBinding === 'global-profiles' ? adapter.roleModelPaths(installContext) : []),
+    ...(team && options.global && adapter.modelBinding === 'project-frontmatter' && adapter.globalRoleModelPaths
+      ? adapter.globalRoleModelPaths(installContext)
+      : [])
   ];
   const existing = await collisions(planned);
   if (existing.length > 0) throw new Error(`Installation aborted; existing paths would be overwritten:\n${existing.map((target) => `  ${target}`).join('\n')}`);
   await installAssets(adapter.projectAssets, controlRoot, installContext);
   if (team) await writeTeamConfig(controlRoot, team);
   if (team) await applyOverlay(controlRoot, true, team);
-  if (team) await applyTeamBinding(adapter, controlRoot, team, installContext);
   if (options.global) await installAssets(adapter.globalAssets, controlRoot, installContext);
+  if (team) await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
+  if (team && options.global) await applyTeamBinding(adapter, controlRoot, team, installContext, 'global');
   process.stdout.write(`Triad+ installed for ${adapter.label} in ${controlRoot}\n`);
   if (adapter.globalEntry) {
     process.stdout.write(`Install user-level assets with --global to expose ${adapter.entry}.\n`);
@@ -350,7 +466,7 @@ async function init(options) {
 async function currentTeam(controlRoot) {
   const target = teamConfigPath(controlRoot);
   if (!(await exists(target))) return null;
-  try { return JSON.parse(await readFile(target, 'utf8')); }
+  try { return validateTeamConfiguration(JSON.parse(await readFile(target, 'utf8'))); }
   catch { throw new Error(`Cannot safely upgrade an invalid team config: ${target}`); }
 }
 
@@ -396,16 +512,14 @@ async function upgrade(options) {
   process.stdout.write(`Triad+ upgrade ${options.apply ? 'applying' : 'plan'} for ${adapter.label}\n`);
   await refreshAssets(adapter.projectAssets, controlRoot, installContext, join(backupRoot, 'project'), options.apply);
   if (team && options.apply && adapter.modelBinding === 'project-frontmatter') {
-    await applyTeamBinding(adapter, controlRoot, team, installContext);
+    await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
   }
   await upgradeRunStateDelivery(controlRoot, backupRoot, options.apply);
   if (team) await applyOverlay(controlRoot, options.apply, team);
   else process.stdout.write('  Instructions skipped: .triad-plus/team.json is not configured\n');
   if (options.global) {
     await refreshAssets(adapter.globalAssets, controlRoot, installContext, join(backupRoot, 'global'), options.apply);
-    if (team && options.apply && adapter.modelBinding === 'global-profiles') {
-      await applyTeamBinding(adapter, controlRoot, team, installContext);
-    }
+    if (team && options.apply) await applyTeamBinding(adapter, controlRoot, team, installContext, 'global');
   }
   if (!options.apply) process.stdout.write('Dry run only. Re-run with --apply to update managed assets.\n');
 }
@@ -432,13 +546,18 @@ async function doctor(options) {
   if (requested.some((adapter) => !adapter)) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
   let team = null;
   if (await exists(teamConfigPath(controlRoot))) {
-    try { team = JSON.parse(await readFile(teamConfigPath(controlRoot), 'utf8')); }
+    try { team = validateTeamConfiguration(JSON.parse(await readFile(teamConfigPath(controlRoot), 'utf8'))); }
     catch { team = 'invalid'; }
   }
   for (const adapter of requested) {
     const installContext = context(controlRoot);
     const absent = [];
     for (const target of adapter.projectPaths(controlRoot, installContext)) if (!(await exists(target))) absent.push(target);
+    const globalDetected = adapter.globalPaths ? await anyExist(adapter.globalPaths(installContext)) : false;
+    const inspectGlobal = Boolean(options.global || globalDetected);
+    const globalTargets = inspectGlobal && adapter.globalPaths ? adapter.globalPaths(installContext) : [];
+    const globalAbsent = [];
+    for (const target of globalTargets) if (!(await exists(target))) globalAbsent.push(target);
     const binary = commandVersion(adapter.binaryCandidates ?? adapter.binary);
     const node = commandVersion('node');
     const manifestPath = join(controlRoot, '.triad-runtime', 'adapter.json');
@@ -448,25 +567,71 @@ async function doctor(options) {
     const roleTargets = targets.filter((target) => /[/\\]agents[/\\]triad-/.test(target));
     const triadSkillTargets = targets.filter((target) => /[/\\]skills[/\\]triad$/.test(target));
     const capability = manifest ? capabilitySnapshot(controlRoot, manifestPath) : null;
-    process.stdout.write(`${adapter.label.padEnd(14)} ${absent.length ? 'not installed' : 'OK'}\n`);
-    process.stdout.write(`  Host runtime ${binary ? `OK (${binary})` : 'not installed or version unavailable'}\n`);
-    process.stdout.write(`  Verifier     ${node && await exists(join(controlRoot, '.triad-runtime', 'triad-verify.mjs')) ? 'OK' : 'incomplete'}\n`);
-    process.stdout.write(`  Adapter      ${manifest ? 'OK' : 'missing or different adapter'}\n`);
-    if (roleTargets.length) process.stdout.write(`  Role agents  ${await allExist(roleTargets) ? 'OK' : 'missing'}\n`);
-    if (triadSkillTargets.length) process.stdout.write(`  Triad skill  ${await allExist(triadSkillTargets) ? 'OK' : 'missing'}\n`);
-    process.stdout.write(`  Verification ${capability?.verification?.selected_mode ?? 'unavailable'}${capability?.verification?.reason ? ` (${capability.verification.reason})` : ''}\n`);
-    process.stdout.write(`  Team config  ${team === 'invalid' ? 'invalid' : team ? 'OK' : 'not configured'}\n`);
-    process.stdout.write(`  Evaluator+   ${team?.roles?.evaluator?.enabled === true ? 'configured' : 'not configured'}\n`);
+    process.stdout.write(`\n${formatDoctorSection(`Triad+ doctor — ${adapter.label}`)}\n`);
+    process.stdout.write(`${formatDoctorLine(adapter.label, absent.length || globalAbsent.length ? 'incomplete' : 'OK')}\n`);
+    process.stdout.write(`${formatDoctorSection('Runtime and installation')}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Host runtime', binary ? `OK (${binary})` : 'not installed or version unavailable')}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Verifier', node && await exists(join(controlRoot, '.triad-runtime', 'triad-verify.mjs')) ? 'OK' : 'incomplete')}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Adapter', manifest ? 'OK' : 'missing or different adapter')}\n`);
+    if (roleTargets.length) process.stdout.write(`  ${formatDoctorLine('Role agents', await allExist(roleTargets) ? 'OK' : 'missing')}\n`);
+    if (triadSkillTargets.length) process.stdout.write(`  ${formatDoctorLine('Triad skill', await allExist(triadSkillTargets) ? 'OK' : 'missing')}\n`);
+    const projectSharedSkills = await sharedSkillStatuses(adapter, controlRoot, installContext, 'project');
+    if (projectSharedSkills.length) {
+      process.stdout.write(`${formatDoctorSection('Shared skills')}\n`);
+      for (const skill of projectSharedSkills) process.stdout.write(`  ${formatDoctorLine(skill.name, skill.status)}\n`);
+    }
+    if (inspectGlobal) {
+      const globalSharedSkills = await sharedSkillStatuses(adapter, controlRoot, installContext, 'global');
+      if (globalSharedSkills.length) {
+        process.stdout.write(`${formatDoctorSection('Global shared skills')}\n`);
+        for (const skill of globalSharedSkills) process.stdout.write(`  ${formatDoctorLine(skill.name, skill.status)}\n`);
+      }
+    }
+    process.stdout.write(`${formatDoctorSection('Verification and capabilities')}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Verification', capability?.verification?.selected_mode ?? 'unavailable')}${capability?.verification?.reason ? ` (${capability.verification.reason})` : ''}\n`);
+    process.stdout.write(`${formatDoctorSection('Configuration')}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Team config', team === 'invalid' ? 'invalid' : team ? 'OK' : 'not configured')}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Evaluator+', team?.roles?.evaluator?.enabled === true ? 'configured' : 'not configured')}\n`);
+    const modelFields = adapter.modelBinding === 'global-profiles'
+      ? 'model, reasoning_effort'
+      : Array.isArray(adapter.modelFields) && adapter.modelFields.length ? adapter.modelFields.join(', ') : 'team.json record / host-managed';
+    process.stdout.write(`  ${formatDoctorLine('Model binding', `${adapter.modelBinding ?? 'unavailable'} (${modelFields})`)}\n`);
+    const modelScopes = [];
+    const validTeam = team !== 'invalid' ? team : null;
+    if (adapter.modelBinding === 'project-frontmatter') {
+      modelScopes.push(['project', await modelBindingEvidence(adapter, controlRoot, installContext, validTeam, 'project')]);
+    }
+    if (inspectGlobal && (adapter.modelBinding === 'project-frontmatter' || adapter.modelBinding === 'global-profiles')) {
+      modelScopes.push(['global', await modelBindingEvidence(adapter, controlRoot, installContext, validTeam, 'global')]);
+    }
+    if (modelScopes.some(([, entries]) => entries.length)) {
+      process.stdout.write(`${formatDoctorSection('Model configuration evidence')}\n`);
+      for (const [scope, entries] of modelScopes) {
+        for (const entry of entries) {
+          const field = hostModelField(adapter, entry.role.id, 'reasoning_effort');
+          const desired = validTeam?.roles?.[entry.role.id];
+          const desiredText = desired
+            ? `desired model=${desired.model || 'host default'}${field ? ` ${field}=${desired.reasoning_effort || 'host default'}` : ''}`
+            : 'desired unavailable';
+          const observedText = entry.observed ? ` — materialized ${JSON.stringify(entry.observed)}` : '';
+          process.stdout.write(`  ${formatDoctorLine(`${scope} ${entry.role.label}`, entry.status)} ${desiredText}${observedText}\n`);
+        }
+      }
+      if (adapter.modelBinding === 'project-frontmatter') {
+        process.stdout.write(`  ${formatDoctorLine('Host default', 'UNKNOWN / NOT OBSERVABLE')}\n`);
+        process.stdout.write(`  ${formatDoctorLine('Current session', 'UNKNOWN / NOT OBSERVABLE')}\n`);
+      }
+    }
     const overlay = await overlayPlan(controlRoot, team).catch(() => null);
-    process.stdout.write(`  Instructions ${overlay ? overlay.action === 'update' ? 'managed' : `needs ${overlay.action}` : 'invalid managed block'}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Instructions', overlay ? overlay.action === 'update' ? 'managed' : `needs ${overlay.action}` : 'invalid managed block')}\n`);
     const globalAgents = join(codexHome(), 'AGENTS.md');
     if (await exists(globalAgents)) {
       const globalText = await readFile(globalAgents, 'utf8');
       const fixedIdentity = /(?:identity|name)[\s\S]{0,100}(?:always|only|must)/i.test(globalText);
-      process.stdout.write(`  Identity policy ${fixedIdentity ? 'host rule detected; review for Triad role conflicts' : 'no fixed host rule detected'}\n`);
+      process.stdout.write(`  ${formatDoctorLine('Identity policy', fixedIdentity ? 'host rule detected; review for Triad role conflicts' : 'no fixed host rule detected')}\n`);
     }
     if (options.hookConfig && adapter.lifecycle) {
-      process.stdout.write(`  Hook config  declared; run runtime capability detection for detailed status\n`);
+      process.stdout.write(`  ${formatDoctorLine('Hook config', 'declared; run runtime capability detection for detailed status')}\n`);
     }
   }
 }
@@ -486,6 +651,7 @@ async function interactiveInit() {
     const control = (await prompt.question(`Project-control workspace [${join(process.cwd(), 'triad-control')}]: `)).trim() || join(process.cwd(), 'triad-control');
     const global = ['y', 'yes'].includes((await prompt.question(`Also install user-level ${adapter.entry} assets? [y/N]: `)).trim().toLowerCase());
     const team = await collectTeamConfiguration(prompt, adapter);
+    process.stdout.write(`\n${formatSetupSummary({ adapter, control, global, team })}`);
     const confirm = (await prompt.question('Type install to continue: ')).trim().toLowerCase();
     if (confirm !== 'install') return process.stdout.write('Cancelled. No files were changed.\n');
     await init({ host: adapter.id, control, global, team });

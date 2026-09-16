@@ -31,14 +31,34 @@ adapter writes those into host-native profiles only where the selected host
 supports that facility. A blank model means the host default. Never put tokens,
 API keys, or private deployment data in this file.
 
+## Configure models through the agent
+
+The installed `triad-model-configuration` skill lets an owner ask the selected
+agent to show or change role models without editing host-specific files. The
+agent reads `.triad-runtime/adapter.json`, validates `.triad-plus/team.json`,
+changes only the explicitly requested `model` or `reasoning_effort` fields, and
+uses the existing managed binding path to materialize supported values. It
+reports whether each request was applied host-natively, recorded only in the
+team file, left at the host default, or unsupported. It never invents model IDs
+and never puts credentials in the configuration.
+
+The skill follows the adapter metadata: `global-profiles` writes native
+user-level profiles, `project-frontmatter` writes only the declared native
+fields (OpenCode supports model plus its native `variant`, Copilot supports
+model plus `reasoningEffort`, and Claude Code currently supports model only),
+and `team-record` records intent without fabricating a host binding. A null or
+blank value deliberately means host default. Reasoning levels are host-specific
+and are never translated between providers.
+
 For project-frontmatter adapters, `.triad-plus/team.json` remains the canonical
 source of truth. Managed installation and `upgrade --apply` re-materialize each
-configured role's supported fields after refreshing agent assets. OpenCode and
-Copilot map `model` and `reasoning_effort` to the host-native `model` and
-`reasoningEffort` fields; Claude Code currently maps `model` only. Null or blank
-values are omitted so the host uses its session default. Other adapters may
-expose different controls; Triad+ only materializes fields supported by the
-selected host.
+configured role's supported fields after refreshing agent assets. OpenCode maps
+`model` to `model` and `reasoning_effort` to its native `variant` field; Copilot
+maps the same canonical fields to `model` and `reasoningEffort`; Claude Code
+currently maps `model` only. Null or blank values are omitted so the host uses
+its session default. Other adapters may expose different controls; Triad+ only
+materializes fields supported by the selected host. A host/session default is
+distinct from a role-agent binding.
 
 ## Retry and scope policy
 

@@ -184,6 +184,13 @@ workspace with that adapter. Triad+ does not dispatch different roles across
 different hosts in one run. Read [configuration](docs/configuration.md) and
 [runtime details](docs/runtimes.md).
 
+The installed `triad-model-configuration` Agent Skill lets the host agent
+inspect or change requested role models while preserving `team.json` as the
+source of truth and reporting host-specific binding limits.
+
+On OpenCode, `team.json`'s `reasoning_effort` is materialized as the native
+per-agent `variant`; the OpenCode session default is a separate host setting.
+
 `triad-verify` validates assignment/candidate binding, runs declared
 control-plane gates, detects mutation, and writes evidence. It supports the
 loop; it never replaces the Orchestrator. See [verification](docs/verification.md).

@@ -3,6 +3,7 @@ import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { writeAtomicJson } from "./evidence.mjs";
 import { worktreeBranch } from "./fingerprint.mjs";
+import { inspectRepositoryContext } from "./repository-context.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/i;
 const PACKET_START = "<!-- triad-plus-assignment-packet:start -->";
@@ -227,6 +228,19 @@ async function resolveProjectRepository(root, assignment, worktree, external) {
   return matches.length === 1 ? matches[0].id : "declared-worktree";
 }
 
+async function repositoryMappingDetails(root, repository) {
+  if (!repository) return null;
+  const mapping = (await projectRepositoryMappings(root)).find((entry) => entry.id === repository);
+  if (!mapping) return null;
+  const declared = mapping.worktree || mapping.path;
+  return {
+    id: mapping.id,
+    path: mapping.path,
+    worktree: mapping.worktree,
+    resolved_worktree: declared ? await realpath(declaredPath(root, declared)).catch(() => null) : null
+  };
+}
+
 function section(source, names) {
   const wanted = new Set(names.map((name) => name.toLowerCase()));
   const lines = source.split("\n");
@@ -316,6 +330,21 @@ export async function resolveAssignmentContext(assignment, { projectRoot = proce
     throw packetError("assignment_packet_invalid", `worktree branch does not match assignment: ${branch}`);
   }
   const repository = await resolveProjectRepository(root, assignment, worktree, external);
+  const repositoryMapping = await repositoryMappingDetails(root, repository);
+  const requiredSkills = Array.isArray(assignment.required_repository_skills) ? assignment.required_repository_skills : [];
+  let repositoryContext;
+  try {
+    repositoryContext = await inspectRepositoryContext({ worktree, requiredSkills });
+  } catch (error) {
+    error.repositoryContext = error.repositoryContext ?? null;
+    throw error;
+  }
+  if (repositoryContext.status !== "pass") {
+    const details = repositoryContext.issues.map((item) => item.message).join("; ");
+    const error = packetError("repository_context_invalid", details || "assigned repository context is invalid");
+    error.repositoryContext = repositoryContext;
+    throw error;
+  }
   return {
     projectRoot: root,
     controlWorkspace: root,
@@ -324,11 +353,13 @@ export async function resolveAssignmentContext(assignment, { projectRoot = proce
     external,
     branch,
     repository,
+    repositoryMapping,
+    repositoryContext,
     declaredWorktree: assignment.worktree,
     cardPath: assignment.card_path ? relativeProjectPath(root, assignment.card_path, "card path") : null,
     prdPath: assignment.prd_path ? relativeProjectPath(root, assignment.prd_path, "PRD path") : null,
     gatesPath: assignment.gates_path ? relativeProjectPath(root, assignment.gates_path, "gates path") : null,
-    requiredSkills: Array.isArray(assignment.required_repository_skills) ? assignment.required_repository_skills : [],
+    requiredSkills,
   };
 }
 
@@ -341,6 +372,7 @@ function packetMetadata(assignment, context, packetPath) {
     feature_id: assignment.feature_id,
     attempt: assignment.attempt,
     repository: context.repository,
+    repository_mapping: context.repositoryMapping,
     branch: context.branch,
     worktree: context.declaredWorktree,
     control_workspace: ".",
@@ -357,6 +389,11 @@ function packetMetadata(assignment, context, packetPath) {
     },
     required_gate_ids: Array.isArray(assignment.required_gate_ids) ? assignment.required_gate_ids : [],
     mandatory_skills: context.requiredSkills.map((skill) => ({ path: skill.path, sha256: skill.sha256 })),
+    repository_context: {
+      assigned_worktree: context.repositoryContext.assigned_worktree,
+      assigned_git_top_level: context.repositoryContext.assigned_git_top_level,
+      skills: context.repositoryContext.skills
+    },
   });
 }
 

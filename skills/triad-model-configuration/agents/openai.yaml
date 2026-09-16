@@ -1,0 +1,4 @@
+interface:
+  display_name: "Triad Model Configuration"
+  short_description: "Inspect and safely configure Triad role models"
+  default_prompt: "Use $triad-model-configuration to inspect or change the requested Triad+ role models in a control workspace."
