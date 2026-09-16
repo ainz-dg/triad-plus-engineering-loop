@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add an installation manifest that records Triad-owned assets, materialized
+  version, adapter scopes, hashes, and deterministic ownership fingerprint.
+- Add CLI/workspace version visibility, legacy manifest migration through
+  `upgrade --apply`, and conservative dry-run/apply uninstall for all adapters.
+- Preserve modified or unknown assets and all project-control state during
+  uninstall; report version skew and manifest integrity through `doctor`.
+
 ## 1.10.0 — 2026-09-16
 
 - Improve TUI and doctor output with terminal-native summaries, sober color

@@ -107,6 +107,31 @@ The Orchestrator first shows the feature cards, then delegates the bounded work.
 If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencode)
 and [troubleshooting](docs/troubleshooting.md).
 
+## Installation version and safe uninstall
+
+The CLI version and the version materialized in a control workspace are
+reported independently:
+
+```bash
+npx triad-plus --version
+npx triad-plus version --control /absolute/path/to/triad-control
+```
+
+Successful `init` and `upgrade --apply` operations record exact Triad-owned
+files in `.triad-plus/installation.json`. This manifest does not own
+`.triad-plus/team.json`, `.loop/`, product files, or evidence.
+
+Uninstall is conservative and dry-run by default:
+
+```bash
+npx triad-plus uninstall --host opencode --control /absolute/path/to/triad-control
+npx triad-plus uninstall --host opencode --control /absolute/path/to/triad-control --apply
+```
+
+Only unchanged files recorded by the manifest are removed. Modified or
+unknown files are preserved and reported; user state remains available for a
+future installation or review.
+
 ## Optional immutable quality target
 
 An initialized project may bind an immutable JSON Quality Baseline through

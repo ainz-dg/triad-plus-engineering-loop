@@ -22,6 +22,50 @@ npx triad-plus init --host codex --control /path/to/project-control --global
 npx triad-plus doctor --host codex --control /path/to/project-control
 ```
 
+## Version visibility
+
+`--version` reports the package that is actually executing:
+
+```bash
+npx triad-plus --version
+```
+
+The workspace command reports the materialized installation recorded by the
+control workspace manifest:
+
+```bash
+npx triad-plus version --control /path/to/project-control
+```
+
+An older workspace without `.triad-plus/installation.json` is reported as a
+legacy installation. Triad+ does not infer a historical version from scattered
+agent files.
+
+## Installation manifest and safe uninstall
+
+After a successful `init`, Triad+ writes
+`.triad-plus/installation.json`. It records the selected adapter, CLI version,
+project/global scopes, normalized managed-file paths, SHA-256 hashes, and a
+manifest fingerprint. `upgrade --apply` refreshes this record after managed
+assets are materialized; a legacy workspace receives a new manifest without
+inventing its previous version.
+
+Uninstall is dry-run by default:
+
+```bash
+npx triad-plus uninstall --host opencode --control /path/to/project-control
+npx triad-plus uninstall --host opencode --control /path/to/project-control --apply
+npx triad-plus uninstall --host opencode --control /path/to/project-control --global --apply
+```
+
+Only files listed in the manifest, still unchanged from their recorded hash,
+are removed. Missing files are reported as `ABSENT`; modified assets are
+preserved. Empty directories created by Triad may be pruned after their files
+are removed. The team configuration, `.loop/`, project manifest, feature
+cards, artifacts, evidence, and other user state are preserved. A manifest
+remains as an `uninstalled` or `partial` tombstone so a second uninstall is
+idempotent and the ownership history is auditable.
+
 ## Upgrade an existing control workspace
 
 `upgrade` refreshes only Triad-managed runtime, skill, adapter, and optional

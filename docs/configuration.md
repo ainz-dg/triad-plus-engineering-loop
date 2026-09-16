@@ -31,6 +31,31 @@ adapter writes those into host-native profiles only where the selected host
 supports that facility. A blank model means the host default. Never put tokens,
 API keys, or private deployment data in this file.
 
+## Installation ownership and version
+
+The package version and the installed workspace version are separate facts:
+
+```bash
+npx triad-plus --version
+npx triad-plus version --control /path/to/project-control
+```
+
+After successful materialization, `.triad-plus/installation.json` records the
+adapter, project/global scopes, exact managed files, SHA-256 hashes, timestamps,
+and a deterministic fingerprint. Project paths are control-workspace-relative;
+global paths identify the user-level managed asset. The manifest is generated
+from the same adapter registry and install plan used by `init` and `upgrade`.
+
+The manifest deliberately does not own `.triad-plus/team.json`, `.loop/`,
+`project.yaml`, feature cards, artifacts, evidence, or product source. A failed
+install never writes a success manifest. Legacy workspaces are migrated by
+`upgrade --apply` using the currently executing package version; the previous
+version is not guessed.
+
+`doctor` reports CLI version, installed version, manifest state, adapter, and
+project/global scope. It reports version skew explicitly and never queries npm
+for `latest`.
+
 ## Configure models through the agent
 
 The installed `triad-model-configuration` skill lets an owner ask the selected
