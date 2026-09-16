@@ -58,10 +58,12 @@ Read the adapter metadata rather than branching on a host name:
 - `global-profiles`: the adapter writes supported role values to its native
   user-level profiles (for example Codex). Verify the resulting profile files.
 - `project-frontmatter`: the adapter writes only the fields listed by its
-  metadata to managed project agent definitions. OpenCode and Copilot support
-  `model` and `reasoningEffort`; Claude Code currently materializes `model`
-  only for its supported roles. A field not listed by the adapter remains
-  host/session managed and must be reported as such.
+  metadata to managed project agent definitions. OpenCode supports `model` and
+  its native `variant` field (the canonical `team.json.reasoning_effort` value
+  is materialized as that variant); Copilot supports `model` and
+  `reasoningEffort`; Claude Code currently materializes `model` only for its
+  supported roles. A field not listed by the adapter remains host/session
+  managed and must be reported as such.
 - `team-record`: the adapter records the owner's intent in `team.json` but has
   no native model file to update. Report “recorded in team.json; host-native
   materialization unavailable” and do not fabricate an agent binding.
@@ -70,7 +72,15 @@ For every requested role/field, classify the result as **host-native applied**,
 **recorded only**, **host/session default**, or **unsupported**. Null or blank
 values mean host default and should not create artificial frontmatter/profile
 values. Reasoning levels are not portable across hosts; never translate a
-level or model ID from another provider.
+level or model ID from another provider. For OpenCode, inspect the host's
+available model variants (for example with `opencode models`) before requesting
+one; a role profile's `variant` is separate from the primary OpenCode session
+default.
+
+OpenCode's managed binding is the only writer for `.opencode/agents/*.md`.
+Never patch `reasoningEffort` into those profiles by analogy with Copilot. The
+same binding is reapplied after `upgrade --apply`, while null values remove
+stale managed fields and restore the host default.
 
 ## Safe completion report
 

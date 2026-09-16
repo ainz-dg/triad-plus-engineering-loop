@@ -20,11 +20,12 @@ async function assertOpenCodeBindings(controlRoot, expectedBindings) {
   for (const [role, expected] of Object.entries(expectedBindings)) {
     const source = await readFile(join(controlRoot, '.opencode', 'agents', `triad-${role}.md`), 'utf8');
     const modelLines = source.split('\n').filter((line) => line.startsWith('model:'));
-    const reasoningLines = source.split('\n').filter((line) => line.startsWith('reasoningEffort:'));
+    const variantLines = source.split('\n').filter((line) => line.startsWith('variant:'));
     assert.deepEqual(modelLines, expected.model ? [`model: ${JSON.stringify(expected.model)}`] : []);
-    assert.deepEqual(reasoningLines, expected.reasoning_effort
-      ? [`reasoningEffort: ${JSON.stringify(expected.reasoning_effort)}`]
+    assert.deepEqual(variantLines, expected.reasoning_effort
+      ? [`variant: ${JSON.stringify(expected.reasoning_effort)}`]
       : []);
+    assert.equal(source.split('\n').filter((line) => line.startsWith('reasoningEffort:')).length, 0);
   }
 }
 
@@ -197,6 +198,7 @@ try {
     const agentPath = join(opencodeConfiguredControl, '.opencode', 'agents', `triad-${role}.md`);
     const staleAgent = (await readFile(agentPath, 'utf8'))
       .replace(/^model:.*$/m, 'model: "stale/provider-model"')
+      .replace(/^variant:.*$/m, 'variant: "low"')
       .replace(/^reasoningEffort:.*$/m, 'reasoningEffort: "low"');
     await writeFile(agentPath, staleAgent, 'utf8');
   }
@@ -206,6 +208,68 @@ try {
   assert.equal(opencodeUpgrade.status, 0, opencodeUpgrade.stderr);
   assert.equal(await readFile(opencodeTeamPath, 'utf8'), teamBeforeOpenCodeUpgrade);
   await assertOpenCodeBindings(opencodeConfiguredControl, configuredRoleBindings);
+  const missingReviewerSkill = join(opencodeConfiguredControl, '.opencode', 'skills', 'triad-loop-reviewer');
+  await rm(missingReviewerSkill, { recursive: true, force: true });
+  const missingSkillDoctor = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'doctor', '--host', 'opencode', '--control', opencodeConfiguredControl
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(missingSkillDoctor.status, 0, missingSkillDoctor.stderr);
+  assert.match(missingSkillDoctor.stdout, /triad-loop-reviewer\s+MISSING/);
+  assert.match(missingSkillDoctor.stdout, /OpenCode\s+incomplete/);
+  const restoredSkillUpgrade = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'upgrade', '--host', 'opencode', '--control', opencodeConfiguredControl, '--apply'
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(restoredSkillUpgrade.status, 0, restoredSkillUpgrade.stderr);
+  const restoredSkillDoctor = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'doctor', '--host', 'opencode', '--control', opencodeConfiguredControl
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(restoredSkillDoctor.status, 0, restoredSkillDoctor.stderr);
+  assert.match(restoredSkillDoctor.stdout, /triad-loop-reviewer\s+OK/);
+
+  const opencodeNullControl = join(fixtureRoot, 'opencode-null-control');
+  const nullTeam = JSON.parse(await readFile(teamConfigSource, 'utf8'));
+  for (const role of Object.values(nullTeam.roles)) {
+    role.model = null;
+    role.reasoning_effort = null;
+  }
+  const nullTeamSource = join(fixtureRoot, 'opencode-null-team.json');
+  await writeFile(nullTeamSource, `${JSON.stringify(nullTeam, null, 2)}\n`);
+  const nullInstall = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'init', '--host', 'opencode', '--control', opencodeNullControl,
+    '--team-config', nullTeamSource
+  ], { cwd: repositoryRoot, encoding: 'utf8' });
+  assert.equal(nullInstall.status, 0, nullInstall.stderr);
+  await assertOpenCodeBindings(opencodeNullControl, {
+    orchestrator: { model: null, reasoning_effort: null },
+    developer: { model: null, reasoning_effort: null },
+    reviewer: { model: null, reasoning_effort: null },
+    evaluator: { model: null, reasoning_effort: null }
+  });
+
+  const globalOpenCodeHome = join(fixtureRoot, 'opencode-home');
+  const globalOpenCodeControl = join(fixtureRoot, 'opencode-global-control');
+  const globalOpenCode = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'init', '--host', 'opencode', '--control', globalOpenCodeControl,
+    '--global', '--team-config', teamConfigSource
+  ], { cwd: repositoryRoot, env: { ...process.env, HOME: globalOpenCodeHome }, encoding: 'utf8' });
+  assert.equal(globalOpenCode.status, 0, globalOpenCode.stderr);
+  const globalOpenCodeAgents = join(globalOpenCodeHome, '.config', 'opencode', 'agents');
+  for (const [role, expected] of Object.entries(configuredRoleBindings)) {
+    const source = await readFile(join(globalOpenCodeAgents, `triad-${role}.md`), 'utf8');
+    assert.match(source, new RegExp(`^model: ${JSON.stringify(expected.model).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}$`, 'm'));
+    assert.match(source, new RegExp(`^variant: ${JSON.stringify(expected.reasoning_effort).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}$`, 'm'));
+    assert.doesNotMatch(source, /^reasoningEffort:/m);
+  }
+  const globalOpenCodeTeamBefore = await readFile(join(globalOpenCodeControl, '.triad-plus', 'team.json'), 'utf8');
+  await writeFile(join(globalOpenCodeAgents, 'triad-reviewer.md'), `${await readFile(join(globalOpenCodeAgents, 'triad-reviewer.md'), 'utf8')}`.replace(/^variant:.*$/m, 'variant: "low"'));
+  const globalOpenCodeUpgrade = spawnSync(process.execPath, [
+    'bin/triad-plus.js', 'upgrade', '--host', 'opencode', '--control', globalOpenCodeControl,
+    '--global', '--apply'
+  ], { cwd: repositoryRoot, env: { ...process.env, HOME: globalOpenCodeHome }, encoding: 'utf8' });
+  assert.equal(globalOpenCodeUpgrade.status, 0, globalOpenCodeUpgrade.stderr);
+  assert.equal(await readFile(join(globalOpenCodeControl, '.triad-plus', 'team.json'), 'utf8'), globalOpenCodeTeamBefore);
+  const reboundGlobalReviewer = await readFile(join(globalOpenCodeAgents, 'triad-reviewer.md'), 'utf8');
+  assert.match(reboundGlobalReviewer, /^variant: "medium"$/m);
 
   const claudeConfiguredControl = join(fixtureRoot, 'claude-code-configured-control');
   const claudeTeamPath = join(claudeConfiguredControl, '.triad-plus', 'team.json');
@@ -223,25 +287,6 @@ try {
   assert.equal(await readFile(claudeTeamPath, 'utf8'), teamBeforeClaudeUpgrade);
   await assertClaudeBindings(claudeConfiguredControl, configuredRoleBindings);
 
-  const nullTeamConfigSource = join(fixtureRoot, 'opencode-null-team.json');
-  const nullTeam = JSON.parse(await readFile(teamConfigSource, 'utf8'));
-  for (const role of Object.keys(nullTeam.roles)) {
-    nullTeam.roles[role].model = null;
-    nullTeam.roles[role].reasoning_effort = null;
-  }
-  await writeFile(nullTeamConfigSource, `${JSON.stringify(nullTeam, null, 2)}\n`);
-  const nullOpenCodeControl = join(fixtureRoot, 'opencode-null-control');
-  const nullOpenCode = spawnSync(process.execPath, [
-    'bin/triad-plus.js', 'init', '--host', 'opencode', '--control', nullOpenCodeControl,
-    '--team-config', nullTeamConfigSource
-  ], { cwd: repositoryRoot, encoding: 'utf8' });
-  assert.equal(nullOpenCode.status, 0, nullOpenCode.stderr);
-  await assertOpenCodeBindings(nullOpenCodeControl, {
-    orchestrator: { model: null, reasoning_effort: null },
-    developer: { model: null, reasoning_effort: null },
-    reviewer: { model: null, reasoning_effort: null },
-    evaluator: { model: null, reasoning_effort: null }
-  });
   const antigravityControl = join(fixtureRoot, 'antigravity-configured-control');
   const antigravity = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'init', '--host', 'antigravity', '--control', antigravityControl,

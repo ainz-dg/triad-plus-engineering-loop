@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { getAdapter } from '../adapters/registry.mjs';
 import {
   materializedRoleConfiguration,
+  materializedHostRoleConfiguration,
+  modelFieldMappings,
+  hostModelField,
   mergeTeamModelConfiguration,
   modelBindingSummary,
   supportsNativeModel,
@@ -66,24 +69,39 @@ try {
     'Evaluator+: enabled'
   ]) assert.match(summary, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(summary, /Orchestrator\s+Solution — model: host default/);
-  assert.match(summary, /Developer\s+Builder — model: provider\/dev — reasoning: high/);
-  assert.match(summary, /Reviewer\s+Yuri — model: provider\/review — reasoning: low/);
-  assert.match(summary, /Evaluator\+\s+Gauntlet — model: provider\/eval — reasoning: medium/);
+  assert.match(summary, /Developer\s+Builder — model: provider\/dev — variant: high/);
+  assert.match(summary, /Reviewer\s+Yuri — model: provider\/review — variant: low/);
+  assert.match(summary, /Evaluator\+\s+Gauntlet — model: provider\/eval — variant: medium/);
   assert.match(formatDoctorLine('GitHub Copilot', 'OK', { stream: nonTty }), /^GitHub Copilot\s+OK$/);
 
   assert.equal(supportsNativeModel(opencode, 'developer'), true);
   assert.equal(supportsNativeReasoning(opencode, 'developer'), true);
+  assert.deepEqual(modelFieldMappings(opencode, 'developer'), [
+    { field: 'model', source: 'model' },
+    { field: 'variant', source: 'reasoning_effort' }
+  ]);
+  assert.equal(hostModelField(opencode, 'developer', 'reasoning_effort'), 'variant');
   assert.equal(supportsNativeModel(claude, 'orchestrator'), false);
   assert.equal(supportsNativeModel(claude, 'developer'), true);
   assert.equal(supportsNativeReasoning(claude, 'developer'), false);
   assert.equal(supportsNativeModel(codex, 'reviewer'), true);
   assert.equal(supportsNativeReasoning(codex, 'reviewer'), true);
+  assert.match(modelBindingSummary(codex, 'reviewer'), /host-native model \+ reasoning$/);
   assert.equal(supportsNativeModel(antigravity, 'developer'), false);
   assert.match(modelBindingSummary(antigravity, 'developer'), /recorded in team\.json/);
 
   assert.deepEqual(materializedRoleConfiguration(opencode, 'developer', team.roles.developer), {
     model: 'provider/dev', reasoning_effort: 'high'
   });
+  assert.deepEqual(materializedHostRoleConfiguration(opencode, 'developer', team.roles.developer), {
+    model: 'provider/dev', variant: 'high'
+  });
+  assert.deepEqual(materializedHostRoleConfiguration(opencode, 'orchestrator', team.roles.orchestrator), {
+    model: null, variant: null
+  });
+  assert.deepEqual(materializedHostRoleConfiguration(opencode, 'developer', {
+    model: 'provider/dev', reasoning_effort: '   '
+  }), { model: 'provider/dev', variant: null });
   assert.deepEqual(materializedRoleConfiguration(claude, 'developer', team.roles.developer), {
     model: 'provider/dev'
   });

@@ -1,5 +1,5 @@
 import { roleDefinitions } from '../../adapters/registry.mjs';
-import { modelBindingSummary, supportsNativeReasoning } from './model-config.mjs';
+import { hostModelField, modelBindingSummary, supportsNativeReasoning } from './model-config.mjs';
 
 const ANSI = {
   reset: '\u001b[0m',
@@ -48,7 +48,8 @@ function roleModelLine(adapter, role, configuration, stream) {
   const model = display(configuration?.model);
   const parts = [`${role.label.padEnd(14)} ${display(configuration?.displayName, role.label)} — model: ${model}`];
   if (supportsNativeReasoning(adapter, role.id)) {
-    parts.push(`reasoning: ${display(configuration?.reasoning_effort)}`);
+    const field = hostModelField(adapter, role.id, 'reasoning_effort');
+    parts.push(`${field === 'variant' ? 'variant' : 'reasoning'}: ${display(configuration?.reasoning_effort)}`);
   }
   parts.push(`binding: ${modelBindingSummary(adapter, role.id)}`);
   return `  ${parts.join(' — ')}`;

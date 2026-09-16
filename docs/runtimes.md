@@ -49,6 +49,6 @@ validated independently as well.
 ## OpenCode
 
 Use the interactive OpenCode TUI for complete multi-step Triad runs. OpenCode
-1.18.0 validated the full Orchestrator → Developer → verifier → Reviewer →
+1.18.x validated the full Orchestrator → Developer → verifier → Reviewer →
 configured Evaluator+ lifecycle in the TUI. `opencode run` is useful for
 one-shot work but does not retain that multi-step parent/subagent lifecycle.

@@ -128,6 +128,19 @@ fail-closed escalation; do not dispatch a Developer or consume retry budget.
    It atomically creates (or verifies) the immutable packet, binds its path and
    SHA-256 to the assignment, and returns explicit `dispatch.cwd`, control
    workspace, repository, branch, card, packet, and mandatory-skill paths.
+   Require each delegated Developer and Reviewer to run the installed runtime
+   context diagnostic from its actual activation cwd before reading repository
+   skills:
+
+   ```bash
+   node /absolute/path/to/control-workspace/.triad-runtime/triad-runtime-context.mjs \
+     --project /absolute/path/to/control-workspace \
+     --assignment /absolute/path/to/control-workspace/.loop/runtime/assignments/<assignment-file>.json
+   ```
+
+   Collect its process `cwd`, shell `pwd`, Git top-level, repository mapping,
+   and resolved skill paths/hashes. A mismatch or missing skill blocks that role;
+   do not substitute control-workspace/global copies or continue to review.
 3. Dispatch the Developer with `cwd`/`workdir` exactly equal to the returned
    assigned product worktree. Pass the card and Assignment Packet as the
    primary contract, followed by the mandatory skill paths and any prior

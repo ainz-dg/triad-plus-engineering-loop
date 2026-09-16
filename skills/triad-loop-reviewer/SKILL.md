@@ -30,6 +30,22 @@ mismatched, or unreported required repository skill is a `blocked` result until
 the Orchestrator creates a valid assignment; external context never substitutes
 for the repository skill policy.
 
+Before inspecting the candidate, prove the actual Reviewer runtime context by
+running this command from the activation cwd:
+
+```bash
+node /absolute/path/to/control-workspace/.triad-runtime/triad-runtime-context.mjs \
+  --project /absolute/path/to/control-workspace \
+  --assignment /absolute/path/to/control-workspace/.loop/runtime/assignments/<assignment-file>.json
+```
+
+Record packet `cwd`, process `cwd`, `pwd`, `git rev-parse --show-toplevel`, and
+each repository-skill path, resolved path, and SHA-256. Compare the actual cwd
+and Git root with the assigned product worktree, and resolve every relative
+skill path under that worktree only. On `NotFound`, hash mismatch, mixed Git
+roots, or cwd inconsistency, return `blocked` / invalid runtime context; never
+fall back to a copy in the control workspace or a global skill.
+
 Use native `read`, `grep`, `glob`, and `list` primitives for simple reads when
 the host provides them. Use shell/Bash for builds, tests, git, scripts, and
 system commands, not as the default filesystem API.

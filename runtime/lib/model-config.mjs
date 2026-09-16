@@ -12,6 +12,14 @@ function adapterModelRoles(adapter) {
   return new Set(adapter?.modelRoles ?? roleDefinitions.map((role) => role.id));
 }
 
+function defaultSourceForHostField(field) {
+  return field === 'reasoningEffort' ? 'reasoning_effort' : field;
+}
+
+function hostValue(value) {
+  return typeof value === 'string' && !value.trim() ? null : value ?? null;
+}
+
 /**
  * Return whether the selected host can materialize a model for this role.
  * A team-record adapter still records the requested value in team.json, but
@@ -27,7 +35,24 @@ export function supportsNativeModel(adapter, roleId) {
 export function supportsNativeReasoning(adapter, roleId) {
   if (!supportsNativeModel(adapter, roleId)) return false;
   if (adapter?.modelBinding === 'global-profiles') return true;
-  return Array.isArray(adapter?.modelFields) && adapter.modelFields.includes('reasoningEffort');
+  return modelFieldMappings(adapter, roleId).some(({ source }) => source === 'reasoning_effort');
+}
+
+/**
+ * Describe the one-way mapping from canonical team.json fields to the
+ * host-native fields managed in a role asset. The adapter registry is the
+ * only place that chooses host names; callers never infer them by analogy.
+ */
+export function modelFieldMappings(adapter, roleId) {
+  if (!supportsNativeModel(adapter, roleId) || adapter?.modelBinding !== 'project-frontmatter') return [];
+  const fields = Array.isArray(adapter?.modelFields) && adapter.modelFields.length ? adapter.modelFields : ['model'];
+  const sources = adapter?.modelFieldSources ?? {};
+  return fields.map((field) => ({ field, source: sources[field] ?? defaultSourceForHostField(field) }));
+}
+
+/** Return the host field used for a canonical semantic field, if any. */
+export function hostModelField(adapter, roleId, source) {
+  return modelFieldMappings(adapter, roleId).find((mapping) => mapping.source === source)?.field ?? null;
 }
 
 /**
@@ -38,7 +63,11 @@ export function supportsNativeReasoning(adapter, roleId) {
 export function modelBindingSummary(adapter, roleId) {
   if (adapter?.modelBinding === 'team-record') return 'recorded in team.json (host-native binding unavailable)';
   if (!supportsNativeModel(adapter, roleId)) return 'recorded in team.json (role field unsupported by host)';
-  if (supportsNativeReasoning(adapter, roleId)) return 'host-native model + reasoning';
+  if (supportsNativeReasoning(adapter, roleId)) {
+    // Global profile adapters expose their native effort field through the
+    // profile writer rather than project frontmatter metadata.
+    return `host-native model + ${hostModelField(adapter, roleId, 'reasoning_effort') ?? 'reasoning'}`;
+  }
   return 'host-native model; reasoning is host-managed';
 }
 
@@ -116,7 +145,21 @@ export function mergeTeamModelConfiguration(team, roleId, patch) {
 /** Return only fields that the adapter can materialize in host-managed assets. */
 export function materializedRoleConfiguration(adapter, roleId, configuration = {}) {
   const result = {};
-  if (supportsNativeModel(adapter, roleId)) result.model = configuration.model ?? null;
-  if (supportsNativeReasoning(adapter, roleId)) result.reasoning_effort = configuration.reasoning_effort ?? null;
+  if (supportsNativeModel(adapter, roleId)) result.model = hostValue(configuration.model);
+  if (supportsNativeReasoning(adapter, roleId)) result.reasoning_effort = hostValue(configuration.reasoning_effort);
+  return result;
+}
+
+/**
+ * Translate canonical semantic values into the exact host fields declared by
+ * the adapter. Null values are retained so the managed writer can remove a
+ * stale host binding and restore the host default.
+ */
+export function materializedHostRoleConfiguration(adapter, roleId, configuration = {}) {
+  const semantic = materializedRoleConfiguration(adapter, roleId, configuration);
+  const result = {};
+  for (const { field, source } of modelFieldMappings(adapter, roleId)) {
+    result[field] = semantic[source] ?? null;
+  }
   return result;
 }

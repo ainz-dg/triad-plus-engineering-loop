@@ -56,12 +56,12 @@ remain in a declared project workspace.
 
 `.triad-plus/team.json` is the source of truth for role-level model
 configuration. When a team file supplies values, Triad+ materializes the
-OpenCode-native `model` and `reasoningEffort` frontmatter fields in each
-project agent definition during `init` and `upgrade --apply`:
+OpenCode-native `model` and `variant` frontmatter fields in each project agent
+definition during `init` and `upgrade --apply`:
 
 ```text
 team.json model             → OpenCode model
-team.json reasoning_effort → OpenCode reasoningEffort
+team.json reasoning_effort → OpenCode variant
 ```
 
 Do not treat generated `.opencode/agents/*.md` files as an independent
@@ -71,8 +71,9 @@ absent so OpenCode uses its host/session default.
 
 The adapter only writes fields supported by this OpenCode materialization. Host
 and provider capabilities may still limit which model or reasoning levels are
-available. Inspect identifiers with `opencode models` and keep role-specific
-routing explicit in the team file:
+available. Inspect identifiers and variants with `opencode models` and keep
+role-specific routing explicit in the team file. OpenCode's role `variant` is
+not the same thing as the default model/session selected by the TUI:
 
 | Agent | Recommended profile |
 | --- | --- |
@@ -84,6 +85,13 @@ routing explicit in the team file:
 Use `opencode models` to inspect the provider/model identifiers available in
 the local installation. Keep the developer, evaluator, and reviewer separately
 configured when independent model routing is required.
+
+The adapter targets the installed OpenCode agent contract: `variant` is the
+host-native per-agent option, while `team.json` remains the canonical desired
+configuration. A null or blank model/effort removes the managed field and lets
+OpenCode use its host or session default. `upgrade --apply` refreshes managed
+agents and then reapplies this same binding; it does not rewrite `team.json`.
+OpenCode 1.18.x exposes this contract through the `AgentConfig.variant` field.
 
 ## Start the loop
 

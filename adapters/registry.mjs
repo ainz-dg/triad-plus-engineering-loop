@@ -88,7 +88,13 @@ const definitions = [
     entry: '/triad',
     lifecycle: null,
     modelBinding: 'project-frontmatter',
-    modelFields: ['model', 'reasoningEffort'],
+    // OpenCode's agent frontmatter has a first-class `variant` field.  Keep
+    // Triad's canonical `reasoning_effort` name in team.json and map it to
+    // that host-native field rather than emitting provider options such as
+    // `reasoningEffort` into the agent profile.
+    modelFields: ['model', 'variant'],
+    modelFieldSources: { model: 'model', variant: 'reasoning_effort' },
+    modelCleanupFields: ['reasoningEffort'],
     modelRoles: roleDefinitions.map((role) => role.id),
     projectAssets: [
       { source: 'adapters/opencode/.opencode/agents', destination: '.opencode/agents' },
@@ -115,6 +121,10 @@ const definitions = [
     },
     roleModelPaths(controlRoot) {
       return roleDefinitions.map((role) => join(controlRoot, '.opencode', 'agents', `triad-${role.id}.md`));
+    },
+    globalRoleModelPaths() {
+      const root = hostHome('.config', 'opencode');
+      return rolePaths(root, roleDefinitions.map((role) => `triad-${role.id}`));
     }
   },
   {
@@ -158,6 +168,10 @@ const definitions = [
     },
     roleModelPaths(controlRoot) {
       return ['developer', 'reviewer', 'evaluator'].map((role) => join(controlRoot, '.claude', 'agents', `triad-${role}.md`));
+    },
+    globalRoleModelPaths() {
+      const root = hostHome('.claude');
+      return ['developer', 'reviewer', 'evaluator'].map((role) => join(root, 'agents', `triad-${role}.md`));
     }
   },
   {
@@ -223,6 +237,7 @@ const definitions = [
     lifecycle: null,
     modelBinding: 'project-frontmatter',
     modelFields: ['model', 'reasoningEffort'],
+    modelFieldSources: { model: 'model', reasoningEffort: 'reasoning_effort' },
     modelRoles: roleDefinitions.map((role) => role.id),
     projectAssets: [
       { source: 'adapters/copilot/.github/agents', destination: '.github/agents' },
@@ -254,6 +269,10 @@ const definitions = [
     },
     roleModelPaths(controlRoot) {
       return roleDefinitions.map((role) => join(controlRoot, '.github', 'agents', `triad-${role.id}.agent.md`));
+    },
+    globalRoleModelPaths() {
+      const root = hostHome('.copilot');
+      return roleDefinitions.map((role) => join(root, 'agents', `triad-${role.id}.agent.md`));
     }
   }
 ];

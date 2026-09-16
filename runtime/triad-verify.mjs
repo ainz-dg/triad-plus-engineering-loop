@@ -9,6 +9,7 @@ import { executeGates, gateSelectionEvidence, loadTrustedGates, resolveGateSelec
 import { resolveQualityContract } from "./lib/quality-baseline.mjs";
 import { evaluateScopeContract, parseScopeContract } from "./lib/scope-contract.mjs";
 import { resolveAssignmentContext, validateAssignmentPacket } from "./lib/assignment-packet.mjs";
+import { inspectRepositoryContext } from "./lib/repository-context.mjs";
 
 const argv = process.argv.slice(2);
 const option = (name) => {
@@ -35,23 +36,27 @@ async function sha256File(value) {
 }
 
 async function validateRepositorySkills(required, worktree) {
-  if (required === undefined) return { declared: false, skills: [] };
-  if (!Array.isArray(required) || required.length === 0) throw new Error("repository skill binding must declare at least one skill");
-  const root = await realpath(worktree);
-  const skills = [];
-  for (const item of required) {
-    if (!item || typeof item.path !== "string" || typeof item.sha256 !== "string") {
-      throw new Error("repository skill binding entries require path and sha256");
-    }
-    const candidate = path.resolve(root, item.path);
-    if (!candidate.startsWith(`${root}${path.sep}`)) throw new Error("repository skill path escapes worktree");
-    try { await access(candidate); }
-    catch { throw new Error(`repository skill missing: ${item.path}`); }
-    const actual = await sha256File(candidate);
-    if (actual !== item.sha256) throw new Error(`repository skill hash mismatch: ${item.path}`);
-    skills.push({ path: item.path, sha256: actual });
+  const declared = required !== undefined;
+  const requiredSkills = declared ? required : [];
+  const context = await inspectRepositoryContext({ worktree, requiredSkills });
+  if (!declared) return { declared: false, skills: [], context };
+  if (!Array.isArray(required) || required.length === 0) {
+    const error = new Error("repository skill binding must declare at least one skill");
+    error.code = "repository_context_invalid";
+    error.repositoryContext = context;
+    throw error;
   }
-  return { declared: true, skills };
+  if (context.status !== "pass") {
+    const error = new Error(context.issues.map((item) => item.message).join("; ") || "repository skill binding is invalid");
+    error.code = "repository_context_invalid";
+    error.repositoryContext = context;
+    throw error;
+  }
+  return {
+    declared: true,
+    skills: context.skills.map(({ path: relative, sha256 }) => ({ path: relative, sha256 })),
+    context
+  };
 }
 
 function triggerFrom(payload) {
@@ -71,7 +76,7 @@ async function resolveAssignment(projectRoot, trigger, explicitAssignment) {
   return { assignmentPath, assignment: JSON.parse(source), assignmentHash: sha256(source) };
 }
 
-async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null, qualityBaselineFingerprint = null, assignmentPacket = null }) {
+async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null, qualityBaselineFingerprint = null, assignmentPacket = null, repositorySkills = null }) {
   const evidence = {
     schema_version: 1,
     run_id: runId,
@@ -90,6 +95,7 @@ async function buildInvalidEvidence({ runId, trigger, assignment, reason, output
     assignment_packet: assignmentPacket ?? (assignment?.assignment_packet_path || assignment?.assignment_packet_sha256
       ? { path: assignment.assignment_packet_path ?? null, sha256: assignment.assignment_packet_sha256 ?? null }
       : null),
+    ...(repositorySkills ? { repository_skills: repositorySkills } : {}),
     gates: [],
     required_gates_passed: false,
     status: "invalid_context",
@@ -159,6 +165,7 @@ async function main() {
   let gateSelection = null;
   let qualityBaseline = null;
   let assignmentPacket = null;
+  let repositorySkills = null;
   try {
     let assignmentHash;
     ({ assignmentPath, assignment, assignmentHash } = await resolveAssignment(projectRoot, trigger, option("--assignment")));
@@ -188,7 +195,7 @@ async function main() {
     qualityBaseline = await resolveQualityContract(assignment, projectRoot);
     if ((await sha256File(prdPath)) !== assignment.expected_prd_sha256) throw new Error("PRD baseline hash mismatch");
     if ((await sha256File(cardPath)) !== assignment.expected_card_sha256) throw new Error("feature card hash mismatch");
-    const repositorySkills = await validateRepositorySkills(assignment.required_repository_skills, worktree);
+    repositorySkills = await validateRepositorySkills(assignment.required_repository_skills, worktree);
     const before = await calculateCandidateFingerprint(worktree);
     const branch = await worktreeBranch(worktree);
     if (assignment.expected_branch && assignment.expected_branch !== branch) throw new Error("worktree branch does not match assignment");
@@ -296,6 +303,7 @@ async function main() {
       gateSelection,
       qualityBaselineFingerprint: qualityBaseline?.fingerprint ?? null,
       assignmentPacket,
+      repositorySkills: repositorySkills ?? error.repositoryContext ?? null,
     });
     process.stdout.write(`${JSON.stringify({ run_id: runId, status: evidence.status, evidence: outputPath ?? null })}\n`);
     process.exitCode = 3;

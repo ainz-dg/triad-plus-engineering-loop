@@ -56,6 +56,12 @@ adapter. Ask the host agent to inspect or change a role model; it keeps
 the adapter declares as host-native. Unsupported fields are reported rather
 than silently substituted.
 
+For OpenCode, the canonical `reasoning_effort` value is materialized as the
+native per-agent `variant` field. Copilot uses its own native
+`reasoningEffort` field; these host contracts are intentionally not inferred
+from one another. The active host/session default remains separate from a
+materialized role profile.
+
 | Role | Responsibility |
 | --- | --- |
 | Orchestrator | Maintains goal/context and decides the next step. |
