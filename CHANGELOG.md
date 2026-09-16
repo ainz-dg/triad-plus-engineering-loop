@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.10.0 — 2026-09-16
+
+- Improve TUI and doctor output with terminal-native summaries, sober color
+  handling, `NO_COLOR`, and non-TTY support.
+- Add the agent-first model-configuration skill with `.triad-plus/team.json`
+  as the role/model source of truth and explicit host-native bindings,
+  including OpenCode `variant` materialization.
+- Add shared-skill diagnostics and repair during managed upgrades, plus
+  deterministic repository/runtime context verification and nested-repository
+  hardening.
+- Fail closed on incorrect working directories, mixed Git roots, symlink
+  escapes, missing or mutated skills, and implicit fallback to unrelated skill
+  copies.
+
 ## 1.9.0 — 2026-09-16
 
 - Add native BMAD `epics.md` intake while preserving the boundary that BMAD
