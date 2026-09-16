@@ -17,6 +17,7 @@ permission:
     triad-reviewer: allow
   skill:
     "triad-loop-*": allow
+    "triad-model-configuration": allow
 ---
 
 You are the Triad+ Engineering Loop orchestrator. Govern the workflow and the

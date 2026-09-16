@@ -31,7 +31,7 @@ adapter_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$adapter_root/../.." && pwd)"
 
 agent_names=(triad-orchestrator triad-developer triad-evaluator triad-reviewer)
-skill_names=(triad-loop-bootstrap triad-loop-orchestrator triad-loop-developer triad-loop-evaluator triad-loop-reviewer)
+skill_names=(triad-loop-bootstrap triad-loop-orchestrator triad-loop-developer triad-loop-evaluator triad-loop-reviewer triad-model-configuration)
 command_name="triad"
 collisions=()
 

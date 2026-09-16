@@ -134,6 +134,7 @@ try {
   assert.match(developerProfile, /gpt-5\.6-luna/);
   assert.match(developerProfile, /precise and focused/);
   assert.match(developerProfile, /identify yourself as Lin, the Triad\+ Developer/);
+  await readFile(join(configuredControl, '.agents', 'skills', 'triad-model-configuration', 'SKILL.md'), 'utf8');
   const instructionPath = join(configuredControl, 'AGENTS.md');
   assert.match(await readFile(instructionPath, 'utf8'), /Orchestrator is `Ada` for this run/);
   await writeFile(instructionPath, `${await readFile(instructionPath, 'utf8')}\n## Owner note\nKeep this note.\n`);
@@ -142,6 +143,10 @@ try {
   await writeFile(legacyRunState, 'version: 2\nupdated_at: null\nproject_decision: not_started\n');
   const stalePrompt = join(configuredCodexHome, 'prompts', 'triad.md');
   await writeFile(stalePrompt, 'stale prompt\n');
+  const staleProfile = join(configuredCodexHome, 'agents', 'triad_developer.toml');
+  await writeFile(staleProfile, `${await readFile(staleProfile, 'utf8')}`
+    .replace(/model = .*$/m, 'model = "stale/provider-model"')
+    .replace(/model_reasoning_effort = .*$/m, 'model_reasoning_effort = "low"'));
   const plannedUpgrade = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'upgrade', '--host', 'codex', '--control', configuredControl, '--global'
   ], { cwd: repositoryRoot, env: { ...process.env, CODEX_HOME: configuredCodexHome }, encoding: 'utf8' });
@@ -161,6 +166,9 @@ try {
   assert.match(await readFile(legacyRunState, 'utf8'), /^delivery:\n  status: not_delivered/m);
   assert.equal(await readFile(join(configuredControl, '.triad-plus', 'team.json'), 'utf8'), await readFile(teamConfigSource, 'utf8'));
   assert.ok((await stat(join(configuredControl, '.triad-plus', 'backups'))).isDirectory());
+  const reboundDeveloperProfile = await readFile(staleProfile, 'utf8');
+  assert.match(reboundDeveloperProfile, /model = "gpt-5\.6-luna"/);
+  assert.match(reboundDeveloperProfile, /model_reasoning_effort = "max"/);
   const shippedCodexHooks = JSON.parse(await readFile(join(repositoryRoot, 'integrations', 'codex', 'hooks.json'), 'utf8'));
   assert.equal(typeof shippedCodexHooks.description, 'string');
   assert.equal('minimum_codex_cli_version' in shippedCodexHooks, false);
@@ -178,6 +186,7 @@ try {
       /model: "gpt-5\.6-luna"/
     );
     if (host === 'opencode') await assertOpenCodeBindings(control, configuredRoleBindings);
+    await readFile(join(control, hostDirectory, 'skills', 'triad-model-configuration', 'SKILL.md'), 'utf8');
     assert.ok((await readFile(join(control, hostDirectory, 'commands', 'triad.md'), 'utf8')).includes(userFacingIdentityInvariant));
   }
 
@@ -248,6 +257,7 @@ try {
     /Triad\+ workflow/
   );
   assert.ok((await readFile(join(antigravityControl, '.agents', 'skills', 'triad', 'SKILL.md'), 'utf8')).includes(userFacingIdentityInvariant));
+  await readFile(join(antigravityControl, '.agents', 'skills', 'triad-model-configuration', 'SKILL.md'), 'utf8');
   const antigravityHome = join(fixtureRoot, 'antigravity-home');
   const antigravityGlobalControl = join(fixtureRoot, 'antigravity-global-control');
   const globalAntigravity = spawnSync(process.execPath, [
@@ -280,6 +290,7 @@ try {
   assert.equal(installedIntake.status, 0, installedIntake.stderr);
   assert.match(installedIntake.stdout, /"story_id":"S1"/);
   assert.ok((await readFile(join(fixtureRoot, 'hermes-home', 'skills', 'triad', 'SKILL.md'), 'utf8')).includes(userFacingIdentityInvariant));
+  await readFile(join(fixtureRoot, 'hermes-home', 'skills', 'triad-model-configuration', 'SKILL.md'), 'utf8');
   const copilotControl = join(fixtureRoot, 'copilot-configured-control');
   const copilot = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'init', '--host', 'copilot', '--control', copilotControl, '--team-config', teamConfigSource
@@ -290,6 +301,7 @@ try {
   assert.match(copilotDeveloper, /model: "gpt-5\.6-luna"/);
   assert.match(copilotDeveloper, /reasoningEffort: "max"/);
   assert.match(await readFile(join(copilotControl, '.github', 'skills', 'triad', 'SKILL.md'), 'utf8'), /explicitly run[\s\S]*triad-verify/);
+  await readFile(join(copilotControl, '.github', 'skills', 'triad-model-configuration', 'SKILL.md'), 'utf8');
   const copilotDoctor = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'doctor', '--host', 'copilot', '--control', copilotControl
   ], { cwd: repositoryRoot, encoding: 'utf8' });

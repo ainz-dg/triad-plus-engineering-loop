@@ -10,6 +10,10 @@ npx triad-plus
 The interactive setup selects a host, optional user-level command, language,
 owner address, role display names/personas, models, and whether the optional
 Evaluator+ is enabled. It changes files only after `install` is typed.
+Before confirmation it prints a compact summary of the host, control workspace,
+interaction settings, Evaluator+, and each role's model/binding. Colors are
+used only for an interactive terminal and are disabled by `NO_COLOR` or when
+output is not a TTY.
 
 For repeatable setup:
 
@@ -45,6 +49,12 @@ The saved `.triad-plus/team.json` separates stable role IDs from display names,
 personas, models, and supported effort/options. Existing schema-version-1 team
 files remain valid. Core roles are always enabled; Evaluator+ is enabled only
 when `roles.evaluator.enabled` is `true`.
+
+The shared `triad-model-configuration` skill is installed with the selected
+adapter. Ask the host agent to inspect or change a role model; it keeps
+`.triad-plus/team.json` as the source of truth and re-materializes only fields
+the adapter declares as host-native. Unsupported fields are reported rather
+than silently substituted.
 
 | Role | Responsibility |
 | --- | --- |

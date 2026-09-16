@@ -7,7 +7,8 @@ export const sharedSkillNames = [
   'triad-loop-orchestrator',
   'triad-loop-developer',
   'triad-loop-evaluator',
-  'triad-loop-reviewer'
+  'triad-loop-reviewer',
+  'triad-model-configuration'
 ];
 
 export const roleDefinitions = [
