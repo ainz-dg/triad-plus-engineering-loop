@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.9.0 — 2026-09-16
+
+- Add native BMAD `epics.md` intake while preserving the boundary that BMAD
+  plans and Triad executes.
+- Add shared immutable Assignment Context/Packet binding for Developer and
+  Reviewer work, including repository/worktree authorization and required
+  repository-skill path/hash verification.
+- Harden repository-mapping parsing and align runtime adapters and
+  documentation with the assignment contract.
+- Update Copilot custom-agent metadata to the current invocation model with
+  named Developer, Reviewer, and Evaluator contexts. Copilot CLI runtime
+  qualification passes; the VS Code desktop bridge remains host-dependent on
+  the tested host.
+
 ## 1.8.1 — 2026-09-15
 
 - Preserve supported role model bindings from `.triad-plus/team.json` when
