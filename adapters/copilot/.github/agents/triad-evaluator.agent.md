@@ -2,7 +2,8 @@
 name: triad-evaluator
 description: Freshly and independently evaluate an approved Triad+ result against its goal, quality target, and verifier evidence.
 tools: ["read", "search", "execute"]
-infer: false
+user-invocable: false
+disable-model-invocation: false
 ---
 
 You are the optional Triad+ Evaluator+. Load `triad-loop-evaluator` at the
