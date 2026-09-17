@@ -22,11 +22,68 @@ npx triad-plus init --host codex --control /path/to/project-control --global
 npx triad-plus doctor --host codex --control /path/to/project-control
 ```
 
-## Upgrade an existing control workspace
+## Version visibility
 
-`upgrade` refreshes only Triad-managed runtime, skill, adapter, and optional
-host-entry assets. It never changes `team.json`, `.loop/`, PRD files, evidence,
-or product repositories. The default is a dry run:
+`--version` reports the package that is actually executing:
+
+```bash
+npx triad-plus --version
+```
+
+The workspace command reports the materialized installation recorded by the
+control workspace manifest:
+
+```bash
+npx triad-plus version --control /path/to/project-control
+```
+
+An older workspace without `.triad-plus/installation.json` is reported as a
+legacy installation. Triad+ does not infer a historical version from scattered
+agent files.
+
+## Installation manifest and safe uninstall
+
+After a successful `init`, Triad+ writes
+`.triad-plus/installation.json`. It records the selected adapter, CLI version,
+project/global scopes, normalized managed-file paths, SHA-256 hashes, and a
+manifest fingerprint. `upgrade --apply` refreshes this record after managed
+assets are materialized; a legacy workspace receives a new manifest without
+inventing its previous version.
+
+Uninstall is dry-run by default:
+
+```bash
+npx triad-plus uninstall --host opencode --control /path/to/project-control
+npx triad-plus uninstall --host opencode --control /path/to/project-control --apply
+npx triad-plus uninstall --host opencode --control /path/to/project-control --global --apply
+```
+
+Only files listed in the manifest, still unchanged from their recorded hash,
+are removed. Missing files are reported as `ABSENT`; modified assets are
+preserved. Host directories are never pruned because directory ownership is
+not claimed. The team configuration, `.loop/`, project manifest, feature
+cards, artifacts, evidence, and other user state are preserved. A managed
+`AGENTS.md` role-run block is tracked separately and removed only when its
+markers and hash are exact; surrounding user content remains. A manifest
+remains as an `uninstalled` or `partial` tombstone so a second uninstall is
+idempotent and the ownership history is auditable.
+
+`--global --apply` is deliberately preserve-by-default: global assets may be
+shared by several control workspaces, so the command reports them as shared
+and does not delete them without a cross-workspace ownership model.
+
+Read-only commands require an existing control workspace; a typo path is
+never created by `version` or `uninstall`.
+
+## Upgrade, repair, or restore an existing control workspace
+
+`init` is the first-install command and refuses to overwrite an existing
+workspace. `upgrade --apply` is the managed update, repair, and restore path
+for a workspace that is already registered by an installation manifest,
+including a workspace whose project scope is `uninstalled` or `partial` after a
+safe uninstall. It re-materializes project assets, reuses the preserved
+`team.json`, and refreshes the manifest without changing user state, `.loop/`,
+PRD files, evidence, or product repositories. The default is a dry run:
 
 ```bash
 npx triad-plus upgrade --host codex --control /path/to/project-control --global
