@@ -550,6 +550,7 @@ async function installationAssetIssues(controlRoot, adapter, installContext, man
       let managed;
       try { managed = managedBlockIn(source, asset.start_marker, asset.end_marker); } catch { managed = null; }
       if (managed && sha256Text(managed.content) !== asset.sha256) issues.push({ asset, status: 'modified' });
+      else if (managed && expectedState === 'uninstalled') issues.push({ asset, status: 'present_after_uninstall' });
       else if (!managed && expectedState !== 'uninstalled') issues.push({ asset, status: 'modified' });
       continue;
     }
@@ -1026,9 +1027,19 @@ async function uninstall(options) {
   });
   await writeInstallationManifest(controlRoot, updated);
   process.stdout.write(`\nInstallation manifest updated ${installationManifestPath(controlRoot)}\n`);
-  process.stdout.write(status === 'uninstalled'
-    ? 'Uninstall complete; user state was preserved.\n'
-    : 'Uninstall completed conservatively; modified assets were preserved.\n');
+  const projectPartial = scopeStatus.project === 'partial';
+  const globalPreserved = options.global && scopeStatus.global === 'partial';
+  if (status === 'uninstalled') {
+    process.stdout.write('Complete project uninstall; user state was preserved.\n');
+  } else if (projectPartial && globalPreserved) {
+    process.stdout.write('Partial uninstall; modified or unverifiable project assets and shared global assets were preserved.\n');
+  } else if (projectPartial) {
+    process.stdout.write('Partial project uninstall; modified or unverifiable assets were preserved.\n');
+  } else if (globalPreserved) {
+    process.stdout.write('Project uninstall complete; global assets were intentionally preserved because shared ownership could not be proven.\n');
+  } else {
+    process.stdout.write('Uninstall completed conservatively; preserved assets remain in place.\n');
+  }
 }
 
 async function doctor(options) {
@@ -1043,6 +1054,7 @@ async function doctor(options) {
   }
   for (const adapter of requested) {
     const installContext = context(controlRoot);
+    const installation = await inspectInstallation(controlRoot, adapter, installContext);
     const absent = [];
     for (const target of adapter.projectPaths(controlRoot, installContext)) if (!(await exists(target))) absent.push(target);
     const globalDetected = adapter.globalPaths ? await anyExist(adapter.globalPaths(installContext)) : false;
@@ -1060,8 +1072,7 @@ async function doctor(options) {
     const triadSkillTargets = targets.filter((target) => /[/\\]skills[/\\]triad$/.test(target));
     const capability = manifest ? capabilitySnapshot(controlRoot, manifestPath) : null;
     process.stdout.write(`\n${formatDoctorSection(`Triad+ doctor — ${adapter.label}`)}\n`);
-    process.stdout.write(`${formatDoctorLine(adapter.label, absent.length || globalAbsent.length ? 'incomplete' : 'OK')}\n`);
-    const installation = await inspectInstallation(controlRoot, adapter, installContext);
+    process.stdout.write(`${formatDoctorLine(adapter.label, absent.length || globalAbsent.length || installation.issues.length ? 'incomplete' : 'OK')}\n`);
     process.stdout.write(`${formatDoctorSection('Triad+ installation')}\n`);
     process.stdout.write(`  ${formatDoctorLine('CLI version', packageVersion)}\n`);
     if (installation.state === 'legacy') {

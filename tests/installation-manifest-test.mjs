@@ -68,7 +68,7 @@ try {
 
     const applied = assertOk(run(['uninstall', '--host', host, '--control', control, '--apply']));
     assert.match(applied.stdout, /Installation manifest updated/);
-    assert.match(applied.stdout, /Uninstall complete/);
+    assert.match(applied.stdout, /Complete project uninstall/);
     const after = await manifestAt(control);
     assert.equal(after.status, 'uninstalled');
     assert.equal(after.scope_status.project, 'uninstalled');
@@ -124,6 +124,32 @@ try {
   const agentsAfterUninstall = await readFile(join(configuredControl, 'AGENTS.md'), 'utf8');
   assert.match(agentsAfterUninstall, /# User instructions\nKeep this content\./);
   assert.doesNotMatch(agentsAfterUninstall, /triad-plus:managed-instructions:/);
+
+  // upgrade --apply is the managed restore path after uninstall; user state and
+  // the team configuration survive while project assets are materialized again.
+  const restored = assertOk(run(['upgrade', '--host', 'opencode', '--control', configuredControl, '--apply']));
+  assert.match(restored.stdout, /Installation manifest updated/);
+  const restoredManifest = await manifestAt(configuredControl);
+  assert.equal(restoredManifest.status, 'installed');
+  assert.equal(restoredManifest.scope_status.project, 'installed');
+  assert.equal(restoredManifest.triad_version, packageVersion);
+  assert.equal(await readFile(teamPath, 'utf8'), teamBeforeUninstall);
+  const restoredAgents = await readFile(join(configuredControl, 'AGENTS.md'), 'utf8');
+  assert.equal((restoredAgents.match(/triad-plus:managed-instructions:start/g) ?? []).length, 1);
+  assert.equal((restoredAgents.match(/triad-plus:managed-instructions:end/g) ?? []).length, 1);
+  const restoredDoctor = assertOk(run(['doctor', '--host', 'opencode', '--control', configuredControl], { NO_COLOR: '1' })).stdout;
+  assert.match(restoredDoctor, new RegExp(`Installed version\\s+${packageVersion}`));
+  assert.match(restoredDoctor, /Manifest\s+OK/);
+
+  const postUninstallBlockControl = join(fixtureRoot, 'post-uninstall-block-control');
+  assertOk(run(['init', '--host', 'opencode', '--control', postUninstallBlockControl, '--team-config', configuredTeam]));
+  const postUninstallBlockPath = join(postUninstallBlockControl, 'AGENTS.md');
+  const postUninstallBlock = await readFile(postUninstallBlockPath, 'utf8');
+  assertOk(run(['uninstall', '--host', 'opencode', '--control', postUninstallBlockControl, '--apply']));
+  assert.doesNotMatch(await readFile(postUninstallBlockPath, 'utf8'), /triad-plus:managed-instructions:/);
+  await writeFile(postUninstallBlockPath, postUninstallBlock);
+  const postUninstallDoctor = assertOk(run(['doctor', '--host', 'opencode', '--control', postUninstallBlockControl], { NO_COLOR: '1' })).stdout;
+  assert.match(postUninstallDoctor, /Manifest\s+managed asset modified/);
 
   const createdOverlayControl = join(fixtureRoot, 'created-overlay-control');
   assertOk(run(['init', '--host', 'opencode', '--control', createdOverlayControl, '--team-config', configuredTeam]));
@@ -197,7 +223,7 @@ try {
   assert.match(sharedUninstallA.stdout, /global ownership may be shared/);
   assert.equal(await readFile(sharedAssetB.path, 'utf8').then((text) => text.length > 0), true);
   const sharedDoctorB = assertOk(run(['doctor', '--host', 'opencode', '--control', sharedControlB], { ...sharedGlobalEnv, NO_COLOR: '1' })).stdout;
-  assert.match(sharedDoctorB, /Installed version\s+1\.10\.0/);
+  assert.match(sharedDoctorB, new RegExp(`Installed version\\s+${packageVersion}`));
 
   const globalModifiedControl = join(fixtureRoot, 'global-modified-control');
   assertOk(run(['init', '--host', 'copilot', '--control', globalModifiedControl, '--global'], globalEnv));

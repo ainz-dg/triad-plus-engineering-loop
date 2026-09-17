@@ -15,7 +15,11 @@ npx triad-plus version --control /path/to/triad-control
 
 `legacy / manifest missing` means the workspace predates the installation
 manifest. Run `upgrade --apply` to materialize a current manifest; Triad+ does
-not infer the old version. `manifest invalid` means the ownership record or its
+not infer the old version. The same `upgrade --apply` command is the managed
+restore path after a safe uninstall leaves an `uninstalled` or `partial`
+manifest: it re-materializes managed assets and reuses the preserved team
+configuration and user state. `init` is reserved for first installation and
+refuses existing paths. `manifest invalid` means the ownership record or its
 fingerprint is malformed and should be reviewed before any uninstall.
 
 Doctor also reports `CLI newer / upgrade available` and `CLI older than

@@ -120,6 +120,9 @@ npx triad-plus version --control /absolute/path/to/triad-control
 Successful `init` and `upgrade --apply` operations record exact Triad-owned
 files in `.triad-plus/installation.json`. This manifest does not own
 `.triad-plus/team.json`, `.loop/`, product files, or evidence.
+`init` is the first-install path; `upgrade --apply` is also the managed
+update/repair/restore path for a registered workspace, including one left
+`uninstalled` or `partial` by safe uninstall.
 
 Uninstall is conservative and dry-run by default:
 

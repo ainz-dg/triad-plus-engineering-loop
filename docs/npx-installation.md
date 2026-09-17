@@ -75,11 +75,15 @@ and does not delete them without a cross-workspace ownership model.
 Read-only commands require an existing control workspace; a typo path is
 never created by `version` or `uninstall`.
 
-## Upgrade an existing control workspace
+## Upgrade, repair, or restore an existing control workspace
 
-`upgrade` refreshes only Triad-managed runtime, skill, adapter, and optional
-host-entry assets. It never changes `team.json`, `.loop/`, PRD files, evidence,
-or product repositories. The default is a dry run:
+`init` is the first-install command and refuses to overwrite an existing
+workspace. `upgrade --apply` is the managed update, repair, and restore path
+for a workspace that is already registered by an installation manifest,
+including a workspace whose project scope is `uninstalled` or `partial` after a
+safe uninstall. It re-materializes project assets, reuses the preserved
+`team.json`, and refreshes the manifest without changing user state, `.loop/`,
+PRD files, evidence, or product repositories. The default is a dry run:
 
 ```bash
 npx triad-plus upgrade --host codex --control /path/to/project-control --global
