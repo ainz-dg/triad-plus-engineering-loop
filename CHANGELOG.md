@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.11.0 — 2026-09-17
 
 - Add an installation manifest that records Triad-owned assets, materialized
   version, adapter scopes, hashes, and deterministic ownership fingerprint.
