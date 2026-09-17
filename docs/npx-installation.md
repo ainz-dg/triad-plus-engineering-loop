@@ -60,11 +60,20 @@ npx triad-plus uninstall --host opencode --control /path/to/project-control --gl
 
 Only files listed in the manifest, still unchanged from their recorded hash,
 are removed. Missing files are reported as `ABSENT`; modified assets are
-preserved. Empty directories created by Triad may be pruned after their files
-are removed. The team configuration, `.loop/`, project manifest, feature
-cards, artifacts, evidence, and other user state are preserved. A manifest
+preserved. Host directories are never pruned because directory ownership is
+not claimed. The team configuration, `.loop/`, project manifest, feature
+cards, artifacts, evidence, and other user state are preserved. A managed
+`AGENTS.md` role-run block is tracked separately and removed only when its
+markers and hash are exact; surrounding user content remains. A manifest
 remains as an `uninstalled` or `partial` tombstone so a second uninstall is
 idempotent and the ownership history is auditable.
+
+`--global --apply` is deliberately preserve-by-default: global assets may be
+shared by several control workspaces, so the command reports them as shared
+and does not delete them without a cross-workspace ownership model.
+
+Read-only commands require an existing control workspace; a typo path is
+never created by `version` or `uninstall`.
 
 ## Upgrade an existing control workspace
 

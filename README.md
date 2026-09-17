@@ -130,7 +130,11 @@ npx triad-plus uninstall --host opencode --control /absolute/path/to/triad-contr
 
 Only unchanged files recorded by the manifest are removed. Modified or
 unknown files are preserved and reported; user state remains available for a
-future installation or review.
+future installation or review. Generic host directories are never pruned. A
+managed `AGENTS.md` role-run block is removed only when its markers and hash
+are exact; surrounding user content is preserved. Global assets are shown but
+preserved by default with `--global` because another control workspace may
+share them.
 
 ## Optional immutable quality target
 

@@ -50,5 +50,10 @@ Only unchanged files listed in `.triad-plus/installation.json` are removed.
 `ABSENT` files are harmless. A `PRESERVE` line means the file was modified, no
 longer matches the trusted managed plan, or is not a regular file; no force
 option exists for this operation. Add `--global` only when user-level Triad
-assets should also be considered. Team config, loop state, cards, artifacts,
-evidence, and other user files are preserved.
+assets should also be considered. Global assets are nevertheless preserved by
+default because another workspace may share them. Team config, loop state,
+cards, artifacts, evidence, generic host directories, and other user files are
+preserved. A managed `AGENTS.md` block is removed only when its exact markers
+and hash still match; a modified or ambiguous block leaves the uninstall
+partial. `version` and `uninstall` reject nonexistent control paths without
+creating them.

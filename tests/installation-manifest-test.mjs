@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,6 +79,17 @@ try {
     assert.match(second.stdout, /Installation manifest updated/);
   }
 
+  for (const [host, control, directory, parent] of [
+    ['opencode', join(fixtureRoot, 'directory-survival-opencode'), join(fixtureRoot, 'directory-survival-opencode', '.opencode', 'agents'), '.opencode'],
+    ['antigravity', join(fixtureRoot, 'directory-survival-antigravity'), join(fixtureRoot, 'directory-survival-antigravity', '.agents', 'agents'), '.agents']
+  ]) {
+    assertOk(run(['init', '--host', host, '--control', control]));
+    assert.equal((await stat(directory)).isDirectory(), true);
+    assertOk(run(['uninstall', '--host', host, '--control', control, '--apply']));
+    assert.equal((await stat(directory)).isDirectory(), true);
+    assert.equal((await stat(join(control, parent))).isDirectory(), true);
+  }
+
   const configuredControl = join(fixtureRoot, 'configured-opencode-control');
   const configuredTeam = join(fixtureRoot, 'configured-team.json');
   const team = {
@@ -92,17 +103,42 @@ try {
     }
   };
   await writeFile(configuredTeam, `${JSON.stringify(team, null, 2)}\n`);
+  const preexistingAgents = '# User instructions\nKeep this content.\n';
+  await mkdir(configuredControl, { recursive: true });
+  await writeFile(join(configuredControl, 'AGENTS.md'), preexistingAgents);
   assertOk(run(['init', '--host', 'opencode', '--control', configuredControl, '--team-config', configuredTeam]));
   const teamPath = join(configuredControl, '.triad-plus', 'team.json');
   const teamBeforeUninstall = await readFile(teamPath, 'utf8');
+  const configuredManifest = await manifestAt(configuredControl);
+  const overlayAsset = configuredManifest.managed_assets.find((asset) => asset.kind === 'managed_block' && asset.path === 'AGENTS.md');
+  assert.ok(overlayAsset, 'expected managed AGENTS.md block record');
+  const configuredDryRun = assertOk(run(['uninstall', '--host', 'opencode', '--control', configuredControl]));
+  assert.match(configuredDryRun.stdout, /WOULD REMOVE block AGENTS\.md/);
   const customAgent = join(configuredControl, '.opencode', 'agents', 'custom-user-agent.md');
   await writeFile(customAgent, 'user-owned agent\n');
-  const configuredManifest = await manifestAt(configuredControl);
   assert.ok(!configuredManifest.managed_assets.some((asset) => asset.path.endsWith('custom-user-agent.md')));
   const configuredUninstall = assertOk(run(['uninstall', '--host', 'opencode', '--control', configuredControl, '--apply']));
   assert.match(configuredUninstall.stdout, /Preserved state/);
   assert.equal(await readFile(teamPath, 'utf8'), teamBeforeUninstall);
   assert.equal(await readFile(customAgent, 'utf8'), 'user-owned agent\n');
+  const agentsAfterUninstall = await readFile(join(configuredControl, 'AGENTS.md'), 'utf8');
+  assert.match(agentsAfterUninstall, /# User instructions\nKeep this content\./);
+  assert.doesNotMatch(agentsAfterUninstall, /triad-plus:managed-instructions:/);
+
+  const createdOverlayControl = join(fixtureRoot, 'created-overlay-control');
+  assertOk(run(['init', '--host', 'opencode', '--control', createdOverlayControl, '--team-config', configuredTeam]));
+  assert.match(await readFile(join(createdOverlayControl, 'AGENTS.md'), 'utf8'), /triad-plus:managed-instructions:start/);
+  assertOk(run(['uninstall', '--host', 'opencode', '--control', createdOverlayControl, '--apply']));
+  assert.doesNotMatch(await readFile(join(createdOverlayControl, 'AGENTS.md'), 'utf8'), /triad-plus:managed-instructions:/);
+
+  const modifiedOverlayControl = join(fixtureRoot, 'modified-overlay-control');
+  assertOk(run(['init', '--host', 'opencode', '--control', modifiedOverlayControl, '--team-config', configuredTeam]));
+  const modifiedAgents = join(modifiedOverlayControl, 'AGENTS.md');
+  await writeFile(modifiedAgents, `${(await readFile(modifiedAgents, 'utf8')).replace('Triad+ role-run overlay', 'User-modified overlay')}`);
+  const modifiedOverlayUninstall = assertOk(run(['uninstall', '--host', 'opencode', '--control', modifiedOverlayControl, '--apply']));
+  assert.match(modifiedOverlayUninstall.stdout, /PRESERVE\s+AGENTS\.md/);
+  assert.match(await readFile(modifiedAgents, 'utf8'), /User-modified overlay/);
+  assert.equal((await manifestAt(modifiedOverlayControl)).status, 'partial');
 
   const legacyControl = join(fixtureRoot, 'legacy-upgrade-control');
   assertOk(run(['init', '--host', 'opencode', '--control', legacyControl]));
@@ -148,6 +184,21 @@ try {
   assert.equal((await manifestAt(globalControl)).scope_status.global, 'installed');
   assert.equal(await readFile(globalEntry.path, 'utf8').then((text) => text.length > 0), true);
 
+  const sharedGlobalHome = join(fixtureRoot, 'shared-global-home');
+  const sharedGlobalEnv = { HOME: sharedGlobalHome };
+  const sharedControlA = join(fixtureRoot, 'shared-control-a');
+  const sharedControlB = join(fixtureRoot, 'shared-control-b');
+  assertOk(run(['init', '--host', 'opencode', '--control', sharedControlA, '--global'], sharedGlobalEnv));
+  assertOk(run(['init', '--host', 'opencode', '--control', sharedControlB, '--global'], sharedGlobalEnv));
+  const sharedManifestB = await manifestAt(sharedControlB);
+  const sharedAssetB = sharedManifestB.managed_assets.find((asset) => asset.scope === 'global' && asset.path.endsWith('/triad-orchestrator.md'));
+  assert.ok(sharedAssetB);
+  const sharedUninstallA = assertOk(run(['uninstall', '--host', 'opencode', '--control', sharedControlA, '--global', '--apply'], sharedGlobalEnv));
+  assert.match(sharedUninstallA.stdout, /global ownership may be shared/);
+  assert.equal(await readFile(sharedAssetB.path, 'utf8').then((text) => text.length > 0), true);
+  const sharedDoctorB = assertOk(run(['doctor', '--host', 'opencode', '--control', sharedControlB], { ...sharedGlobalEnv, NO_COLOR: '1' })).stdout;
+  assert.match(sharedDoctorB, /Installed version\s+1\.10\.0/);
+
   const globalModifiedControl = join(fixtureRoot, 'global-modified-control');
   assertOk(run(['init', '--host', 'copilot', '--control', globalModifiedControl, '--global'], globalEnv));
   const globalModifiedManifest = await manifestAt(globalModifiedControl);
@@ -173,8 +224,21 @@ try {
   await writeFile(join(malformedControl, '.triad-plus', 'installation.json'), '{ malformed');
   const malformedDoctor = assertOk(run(['doctor', '--host', 'opencode', '--control', malformedControl], { NO_COLOR: '1' })).stdout;
   assert.match(malformedDoctor, /Manifest\s+invalid/);
-  const legacyVersion = assertOk(run(['version', '--control', join(fixtureRoot, 'no-manifest-control')])).stdout;
+  const legacyVersionControl = join(fixtureRoot, 'no-manifest-control');
+  await mkdir(legacyVersionControl, { recursive: true });
+  const legacyVersion = assertOk(run(['version', '--control', legacyVersionControl])).stdout;
   assert.match(legacyVersion, /unknown \(legacy installation\)/);
+
+  const missingVersionControl = join(fixtureRoot, 'missing-version-control');
+  const missingVersion = run(['version', '--control', missingVersionControl]);
+  assert.notEqual(missingVersion.status, 0);
+  assert.match(missingVersion.stderr, /workspace does not exist/);
+  assert.equal(await (async () => { try { await stat(missingVersionControl); return true; } catch { return false; } })(), false);
+  const missingUninstallControl = join(fixtureRoot, 'missing-uninstall-control');
+  const missingUninstall = run(['uninstall', '--host', 'opencode', '--control', missingUninstallControl]);
+  assert.notEqual(missingUninstall.status, 0);
+  assert.match(missingUninstall.stderr, /workspace does not exist/);
+  assert.equal(await (async () => { try { await stat(missingUninstallControl); return true; } catch { return false; } })(), false);
 
   process.stdout.write('Triad+ installation manifest, version, and safe uninstall tests passed.\n');
 } finally {

@@ -52,6 +52,12 @@ install never writes a success manifest. Legacy workspaces are migrated by
 `upgrade --apply` using the currently executing package version; the previous
 version is not guessed.
 
+When a team configuration is materialized, the managed role-run block in
+`AGENTS.md` is recorded as a bounded block asset. Uninstall removes that block
+only when its markers and hash still match, never the surrounding user file.
+Global assets are shared-capable and therefore preserved by default by
+`uninstall --global`.
+
 `doctor` reports CLI version, installed version, manifest state, adapter, and
 project/global scope. It reports version skew explicitly and never queries npm
 for `latest`.

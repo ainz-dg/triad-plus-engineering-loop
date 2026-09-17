@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access, cp, mkdir, readFile, rm, rmdir, stat, writeFile, lstat, readdir } from 'node:fs/promises';
+import { access, cp, mkdir, readFile, rm, stat, writeFile, lstat, readdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -29,6 +29,7 @@ import {
   loadInstallationManifest,
   manifestIsUninstalled,
   manifestScopeStatus,
+  sha256Text,
   sha256File,
   writeInstallationManifest
 } from '../runtime/lib/installation-manifest.mjs';
@@ -53,7 +54,7 @@ Usage:
 Adapters: ${listAdapters().map((adapter) => adapter.id).join(', ')}
 
 The control path is a project-control workspace, not a product repository.
-Installation refuses every asset overwrite. Upgrade is a dry run unless --apply is supplied.
+Installation refuses conflicting asset overwrites; identical global assets may be reused. Upgrade is a dry run unless --apply is supplied.
 `);
   process.exit(exitCode);
 }
@@ -91,6 +92,16 @@ async function exists(target) {
 async function requireDirectory(target) {
   if (!(await exists(target))) return mkdir(target, { recursive: true });
   if (!(await stat(target)).isDirectory()) throw new Error(`Control path is not a directory: ${target}`);
+}
+
+async function requireExistingDirectory(target) {
+  let info;
+  try { info = await stat(target); }
+  catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`Control workspace does not exist: ${target}`);
+    throw error;
+  }
+  if (!info.isDirectory()) throw new Error(`Control path is not a directory: ${target}`);
 }
 
 function codexHome() {
@@ -151,9 +162,9 @@ async function sourceFiles(source) {
   return files;
 }
 
-/** Expand registry assets to the exact files copied, never to a host directory. */
-async function materializedAssetPaths(assets, root, installContext) {
-  const paths = [];
+/** Expand registry assets to exact source/destination file pairs, never to a host directory. */
+async function materializedAssetPairs(assets, root, installContext) {
+  const pairs = [];
   for (const asset of assets) {
     const destination = resolveDestination(asset.destination, root, installContext);
     if (asset.source === 'shared-skills') {
@@ -161,7 +172,7 @@ async function materializedAssetPaths(assets, root, installContext) {
         const source = join(packageRoot, 'skills', name);
         const sourceRoot = resolve(source);
         for (const file of await sourceFiles(sourceRoot)) {
-          paths.push(join(destination, name, relative(sourceRoot, file)));
+          pairs.push({ source: file, target: join(destination, name, relative(sourceRoot, file)) });
         }
       }
       continue;
@@ -169,13 +180,18 @@ async function materializedAssetPaths(assets, root, installContext) {
     const source = sourcePath(asset.source);
     const sourceInfo = await lstat(source);
     if (asset.file || sourceInfo.isFile()) {
-      paths.push(destination);
+      pairs.push({ source, target: destination });
       continue;
     }
     const sourceRoot = resolve(source);
-    for (const file of await sourceFiles(sourceRoot)) paths.push(join(destination, relative(sourceRoot, file)));
+    for (const file of await sourceFiles(sourceRoot)) pairs.push({ source: file, target: join(destination, relative(sourceRoot, file)) });
   }
-  return [...new Set(paths.map((target) => resolve(target)))];
+  return pairs.map((pair) => ({ source: resolve(pair.source), target: resolve(pair.target) }));
+}
+
+/** Expand registry assets to the exact files copied, never to a host directory. */
+async function materializedAssetPaths(assets, root, installContext) {
+  return (await materializedAssetPairs(assets, root, installContext)).map((pair) => pair.target);
 }
 
 function generatedRoleAssetPaths(adapter, installContext, scope, team) {
@@ -205,6 +221,7 @@ function overallInstallationStatus(scopeStatus) {
 async function installationManifestFor({ adapter, controlRoot, installContext, team, global = false, previous = null, installedAt = null }) {
   const projectAssets = await collectInstallationAssets(adapter, controlRoot, installContext, 'project', team);
   const previousManifest = previous?.manifest ?? previous;
+  const overlayAssets = await managedOverlayRecord(controlRoot, previousManifest, team);
   const globalConfigured = Boolean(global || previousManifest?.scopes?.global);
   const globalAssets = global
     ? await collectInstallationAssets(adapter, controlRoot, installContext, 'global', team)
@@ -222,7 +239,7 @@ async function installationManifestFor({ adapter, controlRoot, installContext, t
     updatedAt: new Date().toISOString(),
     scopes: { project: true, global: globalConfigured },
     scopeStatus,
-    managedAssets: [...projectAssets, ...globalAssets],
+    managedAssets: [...projectAssets, ...overlayAssets, ...globalAssets],
     status: overallInstallationStatus(scopeStatus)
   });
 }
@@ -277,22 +294,49 @@ outside Triad+.
 ${overlayEnd}`;
 }
 
+function managedBlockIn(source, startMarker = overlayStart, endMarker = overlayEnd) {
+  const startCount = source.split(startMarker).length - 1;
+  const endCount = source.split(endMarker).length - 1;
+  if (startCount === 0 && endCount === 0) return null;
+  if (startCount !== 1 || endCount !== 1) throw new Error('Managed instruction block is ambiguous: duplicate or incomplete markers.');
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (end < 0) throw new Error('Managed instruction block has invalid marker order.');
+  const blockEnd = end + endMarker.length;
+  return { start, end, blockEnd, content: source.slice(start, blockEnd) };
+}
+
 async function overlayPlan(controlRoot, team) {
   const target = join(controlRoot, 'AGENTS.md');
   const overlay = instructionOverlay(team);
   if (!(await exists(target))) return { target, action: 'create', content: `# Project instructions\n\n${overlay}\n` };
   const source = await readFile(target, 'utf8');
-  const start = source.indexOf(overlayStart);
-  const end = source.indexOf(overlayEnd);
-  if (start === -1 && end === -1) return { target, action: 'append', content: `${source.replace(/\s*$/, '')}\n\n${overlay}\n` };
-  if (start < 0 || end < start) throw new Error(`Cannot safely update managed instruction block: ${target}`);
-  return { target, action: 'update', content: `${source.slice(0, start)}${overlay}${source.slice(end + overlayEnd.length)}` };
+  const managed = managedBlockIn(source);
+  if (!managed) return { target, action: 'append', content: `${source}${source.endsWith('\n') ? '\n' : '\n\n'}${overlay}\n` };
+  return { target, action: 'update', content: `${source.slice(0, managed.start)}${overlay}${source.slice(managed.blockEnd)}` };
 }
 
 async function applyOverlay(controlRoot, apply, team) {
   const plan = await overlayPlan(controlRoot, team);
   process.stdout.write(`  Instructions ${apply ? plan.action : `would ${plan.action}`} ${plan.target}\n`);
   if (apply) await writeFile(plan.target, plan.content, 'utf8');
+}
+
+async function managedOverlayRecord(controlRoot, previousManifest, team) {
+  const previousBlocks = (previousManifest?.managed_assets ?? []).filter((asset) => asset.kind === 'managed_block' && asset.scope === 'project');
+  if (!team) return previousBlocks;
+  const target = join(controlRoot, 'AGENTS.md');
+  const source = await readFile(target, 'utf8');
+  const managed = managedBlockIn(source);
+  if (!managed) throw new Error(`Managed instruction block is missing after materialization: ${target}`);
+  return [{
+    scope: 'project',
+    path: 'AGENTS.md',
+    kind: 'managed_block',
+    start_marker: overlayStart,
+    end_marker: overlayEnd,
+    sha256: sha256Text(managed.content)
+  }];
 }
 
 async function loadTeamConfig(options) {
@@ -411,6 +455,29 @@ async function anyExist(paths) {
   return false;
 }
 
+async function globalPathReusable(target, pairs) {
+  let info;
+  try { info = await lstat(target); } catch (error) {
+    if (error.code === 'ENOENT') return true;
+    throw error;
+  }
+  if (info.isDirectory()) {
+    const descendants = pairs.filter((pair) => pathWithin(target, pair.target));
+    if (descendants.length === 0) return false;
+    for (const pair of descendants) {
+      let pairInfo;
+      try { pairInfo = await lstat(pair.target); } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        return false;
+      }
+      if (!pairInfo.isFile() || await sha256File(pair.target) !== await sha256File(pair.source)) return false;
+    }
+    return true;
+  }
+  const pair = pairs.find((candidate) => candidate.target === resolve(target));
+  return Boolean(pair && info.isFile() && await sha256File(target) === await sha256File(pair.source));
+}
+
 function versionTuple(value) {
   const match = String(value ?? '').match(/^(?:v)?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
   return match ? match.slice(1).map(Number) : null;
@@ -455,6 +522,7 @@ function displayManagedAssetPath(asset) {
 
 function assetAllowedByRegistry(managedPaths, controlRoot, asset) {
   const target = manifestAssetPath(controlRoot, asset);
+  if (asset.kind === 'managed_block') return asset.scope === 'project' && target === resolve(controlRoot, 'AGENTS.md');
   return managedPaths.has(target);
 }
 
@@ -470,6 +538,19 @@ async function installationAssetIssues(controlRoot, adapter, installContext, man
         continue;
       }
       issues.push({ asset, status: `unreadable:${error.code ?? 'error'}` });
+      continue;
+    }
+    if (asset.kind === 'managed_block') {
+      if (!info.isFile()) {
+        issues.push({ asset, status: 'modified' });
+        continue;
+      }
+      let source;
+      try { source = await readFile(target, 'utf8'); } catch { issues.push({ asset, status: 'unreadable' }); continue; }
+      let managed;
+      try { managed = managedBlockIn(source, asset.start_marker, asset.end_marker); } catch { managed = null; }
+      if (managed && sha256Text(managed.content) !== asset.sha256) issues.push({ asset, status: 'modified' });
+      else if (!managed && expectedState !== 'uninstalled') issues.push({ asset, status: 'modified' });
       continue;
     }
     if (!info.isFile()) {
@@ -640,17 +721,34 @@ async function init(options) {
   let previousManifest = null;
   if (await exists(installationManifestPath(controlRoot))) previousManifest = await loadInstallationManifest(controlRoot);
   const installContext = context(controlRoot);
-  const planned = [
+  const projectPlanned = [
     ...adapter.projectPaths(controlRoot, installContext),
-    ...(team ? [teamConfigPath(controlRoot)] : []),
-    ...(options.global ? adapter.globalPaths(installContext) : []),
-    ...(team && options.global && adapter.modelBinding === 'global-profiles' ? adapter.roleModelPaths(installContext) : []),
-    ...(team && options.global && adapter.modelBinding === 'project-frontmatter' && adapter.globalRoleModelPaths
-      ? adapter.globalRoleModelPaths(installContext)
-      : [])
+    ...(team ? [teamConfigPath(controlRoot)] : [])
   ];
-  const existing = await collisions(planned);
-  if (existing.length > 0) throw new Error(`Installation aborted; existing paths would be overwritten:\n${existing.map((target) => `  ${target}`).join('\n')}`);
+  const existingProject = await collisions(projectPlanned);
+  if (existingProject.length > 0) throw new Error(`Installation aborted; existing paths would be overwritten:\n${existingProject.map((target) => `  ${target}`).join('\n')}`);
+  if (options.global) {
+    const globalPlanned = [
+      ...adapter.globalPaths(installContext),
+      ...(team && adapter.modelBinding === 'global-profiles' ? adapter.roleModelPaths(installContext) : []),
+      ...(team && adapter.modelBinding === 'project-frontmatter' && adapter.globalRoleModelPaths
+        ? adapter.globalRoleModelPaths(installContext)
+        : [])
+    ];
+    const globalPairs = await materializedAssetPairs(adapter.globalAssets, controlRoot, installContext);
+    const teamModelPaths = team
+      ? new Set([
+        ...(adapter.modelBinding === 'global-profiles' && typeof adapter.roleModelPaths === 'function' ? adapter.roleModelPaths(installContext) : []),
+        ...(adapter.modelBinding === 'project-frontmatter' && typeof adapter.globalRoleModelPaths === 'function' ? adapter.globalRoleModelPaths(installContext) : [])
+      ].map((target) => resolve(target)))
+      : new Set();
+    const existingGlobal = [];
+    for (const target of globalPlanned) {
+      if (!(await exists(target))) continue;
+      if (teamModelPaths.has(resolve(target)) || !(await globalPathReusable(target, globalPairs))) existingGlobal.push(target);
+    }
+    if (existingGlobal.length > 0) throw new Error(`Installation aborted; existing global paths would be overwritten:\n${existingGlobal.map((target) => `  ${target}`).join('\n')}`);
+  }
   await installAssets(adapter.projectAssets, controlRoot, installContext);
   if (team) await writeTeamConfig(controlRoot, team);
   if (team) await applyOverlay(controlRoot, true, team);
@@ -714,7 +812,7 @@ async function upgrade(options) {
   if (!adapter) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
-  await requireDirectory(controlRoot);
+  await requireExistingDirectory(controlRoot);
   let previousManifest = null;
   if (await exists(installationManifestPath(controlRoot))) previousManifest = await loadInstallationManifest(controlRoot);
   if (previousManifest && previousManifest.manifest.adapter !== adapter.id) {
@@ -778,7 +876,7 @@ function installationScopeText(manifest, scope) {
 async function versionCommand(options) {
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
-  await requireDirectory(controlRoot);
+  await requireExistingDirectory(controlRoot);
   process.stdout.write(`Triad+ CLI        ${packageVersion}\n`);
   process.stdout.write(`Workspace         ${controlRoot}\n`);
   let loaded;
@@ -806,27 +904,12 @@ async function versionCommand(options) {
   process.stdout.write(`Global install    ${installationScopeText(manifest, 'global')}\n`);
 }
 
-async function pruneEmptyParents(target, stopRoot) {
-  let current = dirname(target);
-  const root = resolve(stopRoot);
-  while (current !== root && pathWithin(root, current)) {
-    let entries;
-    try { entries = await readdir(current); } catch (error) {
-      if (error.code === 'ENOENT') return;
-      throw error;
-    }
-    if (entries.length > 0) return;
-    await rmdir(current);
-    current = dirname(current);
-  }
-}
-
 async function uninstall(options) {
   const adapter = getAdapter(options.host);
   if (!adapter) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
-  await requireDirectory(controlRoot);
+  await requireExistingDirectory(controlRoot);
   const loaded = await loadInstallationManifest(controlRoot);
   process.stdout.write(`Triad+ uninstall — ${adapter.label}\n`);
   if (!loaded) {
@@ -839,6 +922,7 @@ async function uninstall(options) {
   const installContext = context(controlRoot);
   const selectedScopes = options.global ? ['project', 'global'] : ['project'];
   const scopeStats = Object.fromEntries(selectedScopes.map((scope) => [scope, { modified: 0, removed: 0 }]));
+  if (options.global) process.stdout.write('Global assets are preserved because cross-workspace ownership cannot be proven.\n');
   for (const scope of selectedScopes) {
     const registryPaths = await managedAssetPaths(adapter, controlRoot, installContext, scope);
     process.stdout.write(`\n${scope === 'project' ? 'Project' : 'Global'} managed assets\n`);
@@ -847,12 +931,6 @@ async function uninstall(options) {
     for (const asset of entries) {
       const target = manifestAssetPath(controlRoot, asset);
       const display = displayManagedAssetPath(asset);
-      if (!assetAllowedByRegistry(registryPaths, controlRoot, asset)) {
-        process.stdout.write(`  PRESERVE  ${display}\n`);
-        process.stdout.write('            path is not in the current adapter managed plan\n');
-        scopeStats[scope].modified += 1;
-        continue;
-      }
       let info;
       try { info = await lstat(target); } catch (error) {
         if (error.code === 'ENOENT') {
@@ -862,6 +940,46 @@ async function uninstall(options) {
         process.stdout.write(`  PRESERVE  ${display}\n`);
         process.stdout.write(`            cannot inspect asset: ${error.message}\n`);
         scopeStats[scope].modified += 1;
+        continue;
+      }
+      if (scope === 'global') {
+        process.stdout.write(`  PRESERVE  ${display}\n`);
+        process.stdout.write('            global ownership may be shared by another control workspace\n');
+        scopeStats[scope].modified += 1;
+        continue;
+      }
+      if (!assetAllowedByRegistry(registryPaths, controlRoot, asset)) {
+        process.stdout.write(`  PRESERVE  ${display}\n`);
+        process.stdout.write('            path is not in the current adapter managed plan\n');
+        scopeStats[scope].modified += 1;
+        continue;
+      }
+      if (asset.kind === 'managed_block') {
+        if (!info.isFile()) {
+          process.stdout.write(`  PRESERVE  ${display}\n`);
+          process.stdout.write('            managed block host file is not a regular file\n');
+          scopeStats[scope].modified += 1;
+          continue;
+        }
+        let source;
+        let managed;
+        try {
+          source = await readFile(target, 'utf8');
+          managed = managedBlockIn(source, asset.start_marker, asset.end_marker);
+        } catch {
+          managed = null;
+        }
+        if (!managed || sha256Text(managed.content) !== asset.sha256) {
+          process.stdout.write(`  PRESERVE  ${display}\n`);
+          process.stdout.write('            managed block is modified, ambiguous, or unverifiable\n');
+          scopeStats[scope].modified += 1;
+          continue;
+        }
+        process.stdout.write(`  ${options.apply ? 'REMOVE' : 'WOULD REMOVE'} block ${display}\n`);
+        if (options.apply) {
+          await writeFile(target, `${source.slice(0, managed.start)}${source.slice(managed.blockEnd)}`, 'utf8');
+          scopeStats[scope].removed += 1;
+        }
         continue;
       }
       if (!info.isFile()) {
@@ -880,7 +998,6 @@ async function uninstall(options) {
       process.stdout.write(`  ${options.apply ? 'REMOVE' : 'WOULD REMOVE'}   ${display}\n`);
       if (options.apply) {
         await rm(target, { force: true });
-        await pruneEmptyParents(target, scope === 'project' ? controlRoot : homedir());
         scopeStats[scope].removed += 1;
       }
     }

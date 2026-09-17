@@ -21,7 +21,7 @@ const TOP_LEVEL_KEYS = new Set([
   'status',
   'fingerprint'
 ]);
-const ASSET_KEYS = new Set(['scope', 'path', 'kind', 'sha256']);
+const ASSET_KEYS = new Set(['scope', 'path', 'kind', 'sha256', 'start_marker', 'end_marker']);
 
 function invalid(message) {
   const error = new Error(message);
@@ -127,7 +127,18 @@ export function validateInstallationManifest(manifest) {
     if (!SCOPES.has(asset.scope)) throw invalid(`installation manifest managed asset scope is invalid: ${asset.scope}`);
     const normalized = asset.scope === 'project' ? normalizeRelative(asset.path) : normalizeAbsolute(asset.path);
     if (normalized !== asset.path) throw invalid(`installation manifest managed asset path is not normalized: ${asset.path}`);
-    if (asset.kind !== 'file') throw invalid(`installation manifest managed asset kind is unsupported: ${asset.kind}`);
+    if (asset.kind === 'file') {
+      if (asset.start_marker !== undefined || asset.end_marker !== undefined) {
+        throw invalid(`installation manifest file asset cannot contain managed block markers: ${asset.path}`);
+      }
+    } else if (asset.kind === 'managed_block') {
+      if (asset.scope !== 'project') throw invalid(`installation manifest managed block must be project-scoped: ${asset.path}`);
+      if (typeof asset.start_marker !== 'string' || !asset.start_marker || typeof asset.end_marker !== 'string' || !asset.end_marker || asset.start_marker === asset.end_marker) {
+        throw invalid(`installation manifest managed block markers are invalid: ${asset.path}`);
+      }
+    } else {
+      throw invalid(`installation manifest managed asset kind is unsupported: ${asset.kind}`);
+    }
     if (typeof asset.sha256 !== 'string' || !SHA256.test(asset.sha256)) throw invalid(`installation manifest managed asset sha256 is invalid: ${asset.path}`);
     const key = `${asset.scope}:${asset.path}`;
     if (seen.has(key)) throw invalid(`installation manifest managed asset is duplicated: ${key}`);
@@ -195,6 +206,10 @@ async function walkFiles(target, files) {
 
 export async function sha256File(filePath) {
   return digest(await readFile(filePath));
+}
+
+export function sha256Text(value) {
+  return digest(value);
 }
 
 /** Collect the exact regular files materialized below one or more asset roots. */
