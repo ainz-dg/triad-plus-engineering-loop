@@ -167,6 +167,15 @@ planning; Triad owns execution, verification, review, and delivery.
 ready-for-dev Stories, debugging, and automation. It is no longer the primary
 BMAD workflow. See the [BMAD integration guide](docs/bmad-integration.md).
 
+## Human-readable delivery reports
+
+Triad+ can materialize deterministic Markdown views from canonical control-plane
+records: one report for each terminal Card and a human-first final handoff. The
+views include baseline-attributed changed paths, attempts, verifier gates,
+independent review, provenance, residual risks, and practical-test links. They
+never replace the JSON/YAML evidence or add an LLM reporting call. See the
+[human-readable reports guide](docs/human-readable-reports.md).
+
 ## Quick start for every runtime
 
 Requirements: Node.js 20+ and one supported coding-agent host.

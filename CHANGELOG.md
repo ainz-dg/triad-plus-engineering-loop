@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add deterministic human-readable Markdown views for terminal Cards and the
+  final delivery handoff, derived from canonical evidence with baseline-based
+  changed-path attribution and truthful blocked/not-delivered reporting.
+
 ## 1.11.0 — 2026-09-17
 
 - Add an installation manifest that records Triad-owned assets, materialized

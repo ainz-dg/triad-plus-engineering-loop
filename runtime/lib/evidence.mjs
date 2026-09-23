@@ -29,3 +29,14 @@ export async function writeAtomicJson(targetPath, value) {
   await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   await rename(temporaryPath, targetPath);
 }
+
+/**
+ * Persist a derived human-readable artifact without exposing a partially
+ * written report to the owner or to a resumed Orchestrator.
+ */
+export async function writeAtomicText(targetPath, value) {
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  const temporaryPath = `${targetPath}.tmp`;
+  await writeFile(temporaryPath, String(value), "utf8");
+  await rename(temporaryPath, targetPath);
+}

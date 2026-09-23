@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "project_id": "REPLACE_ME",
+  "card": {
+    "id": "REPLACE_ME",
+    "title": "REPLACE_ME",
+    "goal": "REPLACE_ME",
+    "outcome": "REPLACE_ME",
+    "target_repository": "REPLACE_ME",
+    "card_path": "features/REPLACE_ME.md"
+  },
+  "status": "approved",
+  "implementation": { "summary": "REPLACE_ME" },
+  "attempts": [],
+  "verification": [],
+  "review": null,
+  "final": {
+    "repository": "REPLACE_ME",
+    "branch": "REPLACE_ME",
+    "commit": "REPLACE_ME",
+    "base_commit": "REPLACE_ME",
+    "candidate_fingerprint": "REPLACE_ME",
+    "worktree": "REPLACE_ME_ABSOLUTE_PRODUCT_WORKTREE"
+  },
+  "evidence_refs": [],
+  "risks": [],
+  "deferred": []
+}

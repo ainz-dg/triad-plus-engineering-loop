@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "project_id": "REPLACE_ME",
+  "decision": "delivered",
+  "executive_summary": "REPLACE_ME",
+  "cards": [],
+  "code_areas": [],
+  "residual": [],
+  "verification": "REPLACE_ME",
+  "review": "REPLACE_ME",
+  "branch_commits": [],
+  "practical_test": [],
+  "evaluator": "not configured",
+  "delivery": "REPLACE_ME",
+  "risks": []
+}

@@ -30,7 +30,10 @@ authority after the planning handoff.
    repositories, branches, and worktrees.
 3. Copy the approved PRD to `artifacts/prd.md`; record source, collection time,
    snapshot, revision when available, and SHA-256.
-4. Copy `assets/loop-template/` to `.loop/`. For ordinary PRD-only input,
+4. Copy `assets/loop-template/` to `.loop/`. This includes derived report
+   templates under `runtime/report-context/`; keep report contexts and
+   `card-reports/` in the control workspace, never in product source. For
+   ordinary PRD-only input,
    create bounded feature cards under `features/` and a complete
    `feature-plan.md`. For native BMAD input, ingest the canonical Stories and
    materialize one normal Card per Story instead; do not perform a second

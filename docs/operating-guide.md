@@ -95,6 +95,15 @@ reports, and handoff in a separate project-control workspace. Never place tokens
 or secrets there. Hooks are an optimization, not authority; explicit verification
 is always the fallback. See the [compatibility matrix](compatibility.md).
 
+For every terminal Card, the Orchestrator may render a deterministic
+`card-reports/<card-id>.md` view from the canonical Card, attempt, verifier, and
+Reviewer records. The renderer attributes the complete changed-path delta to the
+Card baseline, including rework, renames, and deletions. The final handoff opens
+with a human-readable summary and links to those reports while retaining the
+technical delivery evidence. Reports are atomic, repeatable, relative-path
+views; they are not a new source of truth or an additional agent call. See the
+[human-readable reports guide](human-readable-reports.md).
+
 For a configured demo service, record its command, local URL, remote-access mode,
 and remote URL in the project and handoff. `localhost` is local-only; do not give
 it to a remote tester as a reachable endpoint. Start the service only on the

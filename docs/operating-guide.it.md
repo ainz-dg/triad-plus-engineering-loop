@@ -96,6 +96,15 @@ inserire token o segreti. Gli hook sono un’ottimizzazione, non autorità: il
 dispatch esplicito della verification resta sempre disponibile. Vedi la
 [matrice di compatibilità](compatibility.md).
 
+Per ogni Card terminale l’Orchestrator può generare una vista deterministica
+`card-reports/<card-id>.md` dai record canonici di Card, attempt, verifier e
+Reviewer. Il renderer attribuisce al baseline completo della Card il delta dei
+path modificati, inclusi rework, rinomina e cancellazione. L’handoff finale si
+apre con un riepilogo leggibile e collega questi report, mantenendo anche le
+evidence tecniche di delivery. I report sono scritti atomicamente, sono
+ripetibili e usano riferimenti relativi: non sono una nuova source of truth né
+una chiamata aggiuntiva a un agente. Vedi la [guida ai report leggibili](human-readable-reports.md).
+
 Per ogni demo configurata, registra nel progetto e nell’handoff comando, URL
 locale, modalità di accesso remoto e URL remoto. `localhost` è solo locale: non
 va indicato a chi prova da remoto. Avvia il servizio soltanto su richiesta del

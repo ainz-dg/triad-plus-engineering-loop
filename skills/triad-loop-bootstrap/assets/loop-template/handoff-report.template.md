@@ -1,5 +1,19 @@
 # Delivery handoff — <project ID>
 
+## Executive summary
+
+`<human-first summary of the delivery decision, product outcome, and any blocked or deferred work>`
+
+## Card-by-card results
+
+| Card | Result | Outcome | Commit | Candidate fingerprint | Evaluator+ | Human-readable report |
+| --- | --- | --- | --- | --- | --- | --- |
+| `<ID>` | `<approved|blocked|not delivered>` | `<summary>` | `<commit>` | `<fingerprint>` | `<report or not configured>` | `<relative card-reports/<ID>.md path>` |
+
+The Markdown reports are derived views. The control-workspace run state,
+verification evidence, review records, delivery gates, and optional Evaluator+
+report remain authoritative.
+
 ## Decision
 
 `delivered | delivery_blocked | delivered_without_demo`
