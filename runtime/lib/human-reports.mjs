@@ -95,14 +95,14 @@ function normalizeChangedPaths(changes, context) {
   }));
 }
 
-function validateAttempt(attempt, index) {
+function validateAttempt(attempt, index, context = {}) {
   if (!objectLike(attempt)) throw reportError("human_report_invalid", `attempt ${index + 1} must be an object`);
   return {
     number: attempt.number ?? attempt.attempt ?? index + 1,
     outcome: text(attempt.outcome ?? attempt.status, "not recorded"),
     resolution: text(attempt.resolution ?? attempt.resolution_kind, "none"),
     candidate_fingerprint: optionalString(attempt.candidate_fingerprint, `attempt ${index + 1} candidate_fingerprint`),
-    evidence_refs: list(attempt.evidence_refs),
+    evidence_refs: list(attempt.evidence_refs).map((ref) => reportPath(ref, context)),
     notes: text(attempt.notes, "—"),
   };
 }
@@ -115,7 +115,7 @@ function validateVerification(run, index, context = {}) {
     gates: list(run.gates).map((gate) => ({
       id: text(gate?.id, "unknown"),
       status: text(gate?.status, "not recorded"),
-      evidence_refs: list(gate?.evidence_refs),
+      evidence_refs: list(gate?.evidence_refs).map((ref) => reportPath(ref, context)),
       exit_code: gate?.exit_code ?? "—",
       duration_ms: gate?.duration_ms ?? "—",
     })),
@@ -174,7 +174,7 @@ export function normalizeCardReportInput(input, { projectRoot = null, worktree =
   }
   const context = { projectRoot, worktree };
   const final = validateFinal(input.final ?? {}, status);
-  const attempts = list(input.attempts).map(validateAttempt);
+  const attempts = list(input.attempts).map((attempt, index) => validateAttempt(attempt, index, context));
   const verification = list(input.verification ?? input.verification_runs).map((run, index) => validateVerification(run, index, context));
   const review = validateReview(input.review, context);
   if (status === "approved") {
@@ -344,7 +344,7 @@ function normalizeHandoffInput(input, options = {}) {
     candidate_fingerprint: optionalString(card.candidate_fingerprint, `handoff card ${card.id} candidate_fingerprint`),
     verification: text(card.verification, "Not recorded."),
     review: text(card.review, "Not recorded."),
-    evaluator_report: reportPath(card.evaluator_report),
+    evaluator_report: reportPath(card.evaluator_report, options),
     evidence_refs: list(card.evidence_refs).map((ref) => reportPath(ref, options)),
   }));
   if (!cards.length) throw reportError("human_report_invalid", "handoff requires at least one card result");
@@ -362,7 +362,10 @@ function normalizeHandoffInput(input, options = {}) {
     evaluator: text(input.evaluator, "Not configured."),
     delivery: text(input.delivery, "Not recorded."),
     quality_contract: text(input.quality_contract, "Not configured."),
-    delivery_criteria: list(input.delivery_criteria),
+    delivery_criteria: list(input.delivery_criteria).map((criterion) => ({
+      ...criterion,
+      evidence_refs: list(criterion?.evidence_refs).map((ref) => reportPath(ref, options)),
+    })),
     demo: text(input.demo, "Not configured."),
     evidence_refs: list(input.evidence_refs).map((ref) => reportPath(ref, options)),
     exceptions: list(input.exceptions),

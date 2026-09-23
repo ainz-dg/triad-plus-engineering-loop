@@ -204,6 +204,54 @@ fail-closed escalation; do not dispatch a Developer or consume retry budget.
    while a dependency-satisfied card remains `ready`; stop only for a declared
    escalation, a blocked card, or when every required card is terminal.
 
+## Human-readable terminal reports
+
+Human-readable reports are derived views, not a second control plane and not a
+new LLM task. For every terminal Card, assemble a small JSON context from the
+canonical card, attempts, verifier evidence, Reviewer record, final commit, and
+candidate fingerprint. Do not copy Developer prose as changed-path evidence.
+
+For an approved Card, the context must include the final commit and fingerprint,
+at least one current passing verifier record, an independent Reviewer approval,
+and the complete Card-baseline commit. Materialize the report with the installed
+runtime command, which collects the complete baseline delta from Git:
+
+```bash
+node .triad-runtime/triad-human-report.mjs \
+  --mode card \
+  --project /absolute/path/to/control-workspace \
+  --input .loop/runtime/report-context/<card-id>.json \
+  --output card-reports/<card-id>.md \
+  --worktree /absolute/path/to/product-worktree \
+  --base-commit <card-baseline-commit>
+```
+
+Generate this only after the Card reaches its terminal state. A blocked or
+not-delivered Card must include a truthful reason and must never be rendered as
+approved. The renderer is atomic and idempotent; a resumed run may repeat the
+same command without creating duplicate reports. It records additions,
+modifications, deletions, and renames from the Card baseline, including paths
+left by earlier rework attempts. Keep report paths relative to the control
+workspace and never emit machine-specific absolute paths.
+
+After all required Cards and delivery criteria are closed, assemble a derived
+handoff context and run:
+
+```bash
+node .triad-runtime/triad-human-report.mjs \
+  --mode handoff \
+  --project /absolute/path/to/control-workspace \
+  --input .loop/runtime/report-context/delivery.json \
+  --output handoff.md
+```
+
+The handoff must open with an executive summary and Card-by-Card report links,
+then preserve the technical branch/commit map, verifier/review/evaluator
+evidence, delivery criteria, demos, risks, and practical-test instructions.
+Missing or invalid final evidence is a report-generation error, not a success
+claim. Do not add a second report agent or overwrite an approved report with a
+later non-terminal candidate.
+
 ## Unattended continuation rule
 
 The normal chain is unattended: Developer completion → verification → Reviewer

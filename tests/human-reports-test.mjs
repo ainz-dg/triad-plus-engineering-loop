@@ -54,10 +54,10 @@ const input = {
   status: "approved",
   implementation: { summary: "Implemented the bounded outcome." },
   attempts: [
-    { attempt: 1, outcome: "rework", resolution_kind: "reviewer_rework", candidate_fingerprint: "a".repeat(64), notes: "Reviewer requested a bounded correction." },
+    { attempt: 1, outcome: "rework", resolution_kind: "reviewer_rework", candidate_fingerprint: "a".repeat(64), evidence_refs: ["/Users/alice/control/log.txt"], notes: "Reviewer requested a bounded correction." },
     { attempt: 2, outcome: "pass", resolution_kind: "none", candidate_fingerprint: finalFingerprint, notes: "Current candidate verified." }
   ],
-  verification: [{ run_id: "verify-2", status: "pass", candidate_fingerprint: finalFingerprint, evidence_path: ".loop/evidence/CARD-001/attempt-002/verification.json", gates: [{ id: "test", status: "pass", evidence_refs: [".loop/evidence/CARD-001/attempt-002/logs/test.stdout.log"], exit_code: 0, duration_ms: 12 }] }],
+  verification: [{ run_id: "verify-2", status: "pass", candidate_fingerprint: finalFingerprint, evidence_path: ".loop/evidence/CARD-001/attempt-002/verification.json", gates: [{ id: "test", status: "pass", evidence_refs: ["/Users/alice/control/gate.log", ".loop/evidence/CARD-001/attempt-002/logs/test.stdout.log"], exit_code: 0, duration_ms: 12 }] }],
   review: { reviewer: "Yuri", decision: "approved", candidate_fingerprint: finalFingerprint, evidence_path: ".loop/reviews/CARD-001.md", risks: ["none"], findings: [{ severity: "low", finding: "No blocking finding.", evidence: "review", resolution: "accepted" }] },
   final: { repository: "product", branch: "feat/card", commit: finalCommit, base_commit: baseline, candidate_fingerprint: finalFingerprint, worktree: product },
   evidence_refs: [".loop/evidence/CARD-001/attempt-002/verification.json"],
@@ -77,6 +77,8 @@ assert.match(report, /renamed\.js/);
 assert.match(report, /README\.md/);
 assert.match(report, /Assignment Packet/);
 assert.match(report, /test\.stdout\.log/);
+assert.match(report, /<external path>/);
+assert.doesNotMatch(report, /\/Users\/alice\/control/);
 assert.match(report, /reviewer_rework/);
 assert.match(report, /APPROVED/);
 assert.doesNotMatch(report, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -108,7 +110,7 @@ const handoffInput = {
   project_id: "human-report-fixture",
   decision: "delivered",
   executive_summary: "One bounded card was approved and delivered.",
-  cards: [{ id: "CARD-001", title: "Produce a bounded candidate", status: "approved", summary: "Delivered.", report_path: "card-reports/CARD-001.md", commit: finalCommit, candidate_fingerprint: finalFingerprint, evaluator_report: ".loop/evaluator/CARD-001.json", evidence_refs: [".loop/evidence/CARD-001/attempt-002/verification.json"], verification: "PASS", review: "approved" }],
+  cards: [{ id: "CARD-001", title: "Produce a bounded candidate", status: "approved", summary: "Delivered.", report_path: "card-reports/CARD-001.md", commit: finalCommit, candidate_fingerprint: finalFingerprint, evaluator_report: "/Users/alice/control/evaluator/CARD-001.json", evidence_refs: [".loop/evidence/CARD-001/attempt-002/verification.json"], verification: "PASS", review: "approved" }],
   code_areas: ["src.js"],
   residual: [],
   verification: "All required gates PASS.",
@@ -125,7 +127,7 @@ const handoffInput = {
   delivery_closure_record: ".loop/run-state.yaml delivery.status=delivered",
   final_message: ".loop/evidence/final-owner-message.md",
   quality_contract: "not configured",
-  delivery_criteria: [{ id: "delivery-001", verdict: "PASS", evidence_refs: ["handoff"] }],
+  delivery_criteria: [{ id: "delivery-001", verdict: "PASS", evidence_refs: ["/Users/alice/control/handoff"] }],
   demo: "not configured",
   evidence_refs: [".loop/run-state.yaml"],
   exceptions: [],
@@ -141,7 +143,8 @@ assert.match(handoffReport, /card-reports\/CARD-001\.md/);
 assert.match(handoffReport, /Independent Reviewer approved/);
 assert.match(handoffReport, /PRD baseline/);
 assert.match(handoffReport, /delivery-001/);
-assert.match(handoffReport, /evaluator\/CARD-001\.json/);
+assert.match(handoffReport, /<external path>/);
+assert.doesNotMatch(handoffReport, /\/Users\/alice\/control/);
 
 const invalid = { ...input, final: { repository: "product", branch: "feat/card", base_commit: baseline } };
 await writeJson(path.join(control, "invalid.json"), invalid);
