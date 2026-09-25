@@ -20,6 +20,7 @@
     "commit": "REPLACE_ME",
     "base_commit": "REPLACE_ME",
     "candidate_fingerprint": "REPLACE_ME",
+    "committed_candidate_fingerprint": null,
     "worktree": "REPLACE_ME_ABSOLUTE_PRODUCT_WORKTREE"
   },
   "evidence_refs": [],

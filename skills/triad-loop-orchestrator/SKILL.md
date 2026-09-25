@@ -213,8 +213,17 @@ candidate fingerprint. Do not copy Developer prose as changed-path evidence.
 
 For an approved Card, the context must include the final commit and fingerprint,
 at least one current passing verifier record, an independent Reviewer approval,
-and the complete Card-baseline commit. Materialize the report with the installed
-runtime command, which collects the complete baseline delta from Git:
+and the complete Card-baseline commit. The final candidate fingerprint in this
+context is the identity recorded by the passing verifier (the pre-commit
+candidate), not a newly recalculated commit fingerprint. Preserve the verifier's
+`candidate_manifest` alongside that record. The report runtime binds that
+independently verified path/content manifest to the final commit delta and
+records both the verified fingerprint and the committed fingerprint. It ignores
+only the expected `git_head` identity change caused by committing; added,
+removed, renamed, or modified paths and their content hashes must still match.
+If a legacy verifier record has no manifest, the historical fingerprint equality
+check remains fail-closed. Materialize the report with the installed runtime
+command, which collects the complete baseline delta from Git:
 
 ```bash
 node .triad-runtime/triad-human-report.mjs \

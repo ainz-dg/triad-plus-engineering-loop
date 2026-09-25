@@ -1,6 +1,6 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { calculateCandidateFingerprintAtCommit, collectCandidateChangesAtCommit } from "./fingerprint.mjs";
+import { calculateCandidateFingerprintAtCommit, candidateManifestsBind, collectCandidateChangesAtCommit } from "./fingerprint.mjs";
 import { writeAtomicText } from "./evidence.mjs";
 
 export const HUMAN_REPORT_SCHEMA_VERSION = 1;
@@ -121,6 +121,7 @@ function validateVerification(run, index, context = {}) {
     })),
     evidence_path: reportPath(run.evidence_path ?? run.path, context),
     candidate_fingerprint: optionalString(run.candidate_fingerprint, `verification ${index + 1} candidate_fingerprint`),
+    candidate_manifest: run.candidate_manifest ?? run.baseline?.candidate_manifest ?? null,
     notes: text(run.notes, "—"),
   };
 }
@@ -150,6 +151,7 @@ function validateFinal(final, status) {
     commit: optionalString(final.commit ?? final.final_commit, "final commit"),
     base_commit: optionalString(final.base_commit, "final base_commit"),
     candidate_fingerprint: optionalString(final.candidate_fingerprint, "final candidate_fingerprint"),
+    committed_candidate_fingerprint: optionalString(final.committed_candidate_fingerprint, "final committed_candidate_fingerprint"),
     worktree: optionalString(final.worktree, "final worktree"),
     repository: optionalString(final.repository, "final repository"),
   };
@@ -260,7 +262,7 @@ export function renderCardReport(input, options = {}) {
     ? review.findings.map((finding) => `| ${tableCell(finding.severity)} | ${tableCell(finding.finding)} | ${tableCell(finding.evidence)} | ${tableCell(finding.resolution)} |`)
     : ["| — | No findings recorded | — | None |"];
   const finalEvidence = report.status === "approved"
-    ? `- Final commit: \`${tableCell(report.final.commit)}\`\n- Candidate fingerprint: \`${tableCell(report.final.candidate_fingerprint)}\`\n- Reviewer decision: \`${tableCell(review?.decision)}\``
+    ? `- Final commit: \`${tableCell(report.final.commit)}\`\n- Verified candidate fingerprint: \`${tableCell(report.final.candidate_fingerprint)}\`\n- Committed candidate fingerprint: \`${tableCell(report.final.committed_candidate_fingerprint ?? "not recorded")}\`\n- Reviewer decision: \`${tableCell(review?.decision)}\``
     : `- Terminal state: \`${status}\`\n- Reason: ${text(report.block_reason)}`;
   return `# Card report — ${report.card.id}: ${report.card.title}
 
@@ -466,6 +468,7 @@ export async function writeCardReport(input, { outputPath, projectRoot = null, w
   const preliminary = normalizeCardReportInput(input, { projectRoot, worktree });
   let changedPaths = preliminary.changed_paths;
   let changedPathsBase = preliminary.changed_paths_base ?? baseCommit;
+  let committedCandidateFingerprint = preliminary.final.committed_candidate_fingerprint;
   if (preliminary.status === "approved") {
     if (!worktree || !(baseCommit ?? preliminary.final.base_commit) || !preliminary.final.commit) {
       throw reportError("human_report_invalid", "approved card report requires a worktree, card baseline, and final commit for canonical evidence");
@@ -480,11 +483,25 @@ export async function writeCardReport(input, { outputPath, projectRoot = null, w
       baseCommit: candidate.base_commit,
       commit: candidate.git_head,
     });
-    if (actualFingerprint.value !== preliminary.final.candidate_fingerprint) {
+    const passingRuns = preliminary.verification.filter((run) =>
+      (run.status === "pass" || run.status === "PASS")
+      && run.candidate_fingerprint === preliminary.final.candidate_fingerprint);
+    const passingRun = passingRuns.find((run) => run.candidate_manifest) ?? passingRuns[0];
+    if (passingRun?.candidate_manifest) {
+      if (!candidateManifestsBind(passingRun.candidate_manifest, actualFingerprint.manifest, { expectedBaseCommit: candidate.base_commit })) {
+        throw reportError("human_report_invalid", "committed candidate does not match the independently verified candidate manifest");
+      }
+    } else if (actualFingerprint.value !== preliminary.final.candidate_fingerprint) {
       throw reportError("human_report_invalid", "final candidate fingerprint does not match the final commit delta");
     }
+    committedCandidateFingerprint = actualFingerprint.value;
   }
-  const report = { ...preliminary, changed_paths: changedPaths ?? [], changed_paths_base: changedPathsBase };
+  const report = {
+    ...preliminary,
+    final: { ...preliminary.final, committed_candidate_fingerprint: committedCandidateFingerprint ?? null },
+    changed_paths: changedPaths ?? [],
+    changed_paths_base: changedPathsBase
+  };
   const markdown = renderCardReport(report, { projectRoot, worktree });
   if (outputPath) {
     try {

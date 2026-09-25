@@ -29,9 +29,13 @@ node .triad-runtime/triad-human-report.mjs \
   --base-commit <card-baseline-commit>
 ```
 
-For an approved Card the renderer requires a final commit, candidate
-fingerprint, passing verifier evidence, independent Reviewer approval, and the
-complete changed-path manifest. A blocked or not-delivered terminal Card must
+For an approved Card the renderer requires a final commit, the candidate
+fingerprint recorded by passing verifier evidence, independent Reviewer
+approval, and the complete changed-path manifest. Current verifier evidence
+also carries a `candidate_manifest` with the verified paths and content hashes.
+The renderer binds that manifest to the final commit delta (allowing the
+expected `git_head` change caused by the commit) and records the resulting
+committed fingerprint separately. A blocked or not-delivered terminal Card must
 include a truthful reason and never claims delivery. Writes are atomic and
 re-running the command with the same context is idempotent.
 
@@ -49,4 +53,3 @@ The handoff opens with the executive summary and Card results, then preserves
 links to the technical evidence, branch/commit map, quality-contract closure,
 Evaluator+ result, delivery gates, demo details, risks, and practical test.
 It is a view for people, not an alternative delivery state machine.
-

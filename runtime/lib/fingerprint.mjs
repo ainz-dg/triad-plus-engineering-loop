@@ -63,6 +63,67 @@ function pathsFor(entry) {
   return entry.status === "renamed" ? [entry.source, entry.destination] : [entry.path];
 }
 
+function candidateManifest(candidate, files) {
+  return {
+    base_commit: candidate.base_commit,
+    git_head: candidate.git_head,
+    changes: candidate.changes,
+    ignored_paths: candidate.ignored_paths,
+    files,
+  };
+}
+
+/**
+ * Return the content/path binding captured for a candidate independently of
+ * the Git commit identity used to produce it. The fingerprint value below
+ * intentionally retains its historical git_head binding; reports use this
+ * manifest to bind that verified candidate to the later commit tree.
+ */
+export function candidateManifestFor(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!Array.isArray(value.files) || !Array.isArray(value.changes)) return null;
+  return {
+    base_commit: value.base_commit ?? null,
+    git_head: value.git_head ?? null,
+    changes: value.changes,
+    ignored_paths: Array.isArray(value.ignored_paths) ? value.ignored_paths : [],
+    files: value.files,
+  };
+}
+
+function changePaths(manifest) {
+  return (manifest?.changes ?? []).flatMap((change) => change?.status === "renamed"
+    ? [change.source, change.destination]
+    : [change.path]).filter((value) => typeof value === "string").sort();
+}
+
+function fileEntries(manifest) {
+  return (manifest?.files ?? [])
+    .map((file) => ({ path: file?.path, sha256: file?.sha256 }))
+    .sort((left, right) => String(left.path).localeCompare(String(right.path)));
+}
+
+function ignoredPaths(manifest) {
+  return [...new Set(manifest?.ignored_paths ?? [])].filter((value) => typeof value === "string").sort();
+}
+
+/**
+ * Compare a verifier's pre-commit manifest with a commit-derived manifest.
+ * git_head is deliberately excluded: committing an unchanged candidate is
+ * expected to change that identity. Paths and content hashes are not ignored,
+ * so a file added or modified after verification fails closed.
+ */
+export function candidateManifestsBind(verified, committed, { expectedBaseCommit = null } = {}) {
+  const left = candidateManifestFor(verified);
+  const right = candidateManifestFor(committed);
+  if (!left || !right) return false;
+  if (expectedBaseCommit && (left.base_commit !== expectedBaseCommit || right.base_commit !== expectedBaseCommit)) return false;
+  if (left.base_commit !== right.base_commit) return false;
+  if (JSON.stringify(ignoredPaths(left)) !== JSON.stringify(ignoredPaths(right))) return false;
+  if (JSON.stringify(fileEntries(left)) !== JSON.stringify(fileEntries(right))) return false;
+  return JSON.stringify(changePaths(left)) === JSON.stringify(changePaths(right));
+}
+
 export async function collectCandidateChanges(worktree, { baseCommit = null } = {}) {
   const root = await realpath(worktree);
   const head = (await gitLines(root, ["rev-parse", "HEAD"]))[0] ?? "NO_HEAD";
@@ -120,7 +181,7 @@ export async function collectCandidateChangesAtCommit(worktree, { baseCommit, co
 }
 
 async function commitFileHash(root, commit, relativePath) {
-  const result = await runProcess("git", ["show", `${commit}:${relativePath}`], { cwd: root, timeoutMs: 15_000 });
+  const result = await runProcess("git", ["show", `${commit}:${relativePath}`], { cwd: root, timeoutMs: 15_000, encoding: null });
   if (result.exitCode !== 0) throw new Error(`git show failed for ${commit}:${relativePath}`);
   return digest(result.stdout);
 }
@@ -144,7 +205,13 @@ export async function calculateCandidateFingerprintAtCommit(worktree, { baseComm
     files.push({ path: relativePath, sha256: contentHash });
   }
   const canonical = JSON.stringify({ git_head: candidate.git_head, files });
-  return { algorithm: "sha256", value: digest(canonical), git_head: candidate.git_head, files };
+  return {
+    algorithm: "sha256",
+    value: digest(canonical),
+    git_head: candidate.git_head,
+    files,
+    manifest: candidateManifest(candidate, files),
+  };
 }
 
 export async function worktreeBranch(worktree) {
@@ -181,5 +248,11 @@ export async function calculateCandidateFingerprint(worktree) {
     files.push({ path: relativePath, sha256: contentHash });
   }
   const canonical = JSON.stringify({ git_head: candidate.git_head, files });
-  return { algorithm: "sha256", value: digest(canonical), git_head: candidate.git_head, files };
+  return {
+    algorithm: "sha256",
+    value: digest(canonical),
+    git_head: candidate.git_head,
+    files,
+    manifest: candidateManifest(candidate, files),
+  };
 }
