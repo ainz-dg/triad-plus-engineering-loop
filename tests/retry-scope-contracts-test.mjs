@@ -122,7 +122,7 @@ async function createVerifierFixture(root, { gateCommand = "true", scope = true,
     expected_prd_sha256: await digest(path.join(root, "artifacts", "prd.md")), expected_card_sha256: await digest(path.join(root, "features", "TEST-001.md")),
     expected_gates_sha256: await digest(gatesPath), verification_run_id: "run-1"
   };
-  if (scope) {
+  if (scope === true) {
     const contractPath = path.join(root, "scope-contracts", "TEST-001.json");
     const source = contract({
       allowed_paths: ["src/component/**", "tests/component/**"],
@@ -134,6 +134,10 @@ async function createVerifierFixture(root, { gateCommand = "true", scope = true,
       path: "scope-contracts/TEST-001.json", sha256: await digest(contractPath), repository_id: "product",
       card_baseline: { repository_id: "product", git_head: baseline, initial_state: initialState }
     };
+  } else if (scope === null) {
+    // Preserve the historical v1.12.1 generated-assignment sentinel so the
+    // compatibility path proves that trusted gates still execute.
+    assignment.scope_contract = null;
   }
   const assignmentPath = path.join(root, ".loop", "runtime", "assignments", "developer-1.json");
   await writeJson(assignmentPath, assignment);
@@ -195,6 +199,25 @@ async function assertVerifierScopeBehavior(root) {
   const legacyRun = await invoke(legacyRoot, "developer-1");
   assert.equal(legacyRun.result.status, 0, JSON.stringify(legacyRun.evidence));
   assert.equal(legacyRun.evidence.scope.status, "not_configured");
+
+  const nullRoot = path.join(root, "legacy-null-scope");
+  const nullGateMarker = path.join(nullRoot, "null-scope-gate-ran");
+  await createVerifierFixture(nullRoot, { scope: null, gateCommand: `touch ${nullGateMarker}` });
+  const nullRun = await invoke(nullRoot, "developer-1");
+  assert.equal(nullRun.result.status, 0, JSON.stringify(nullRun.evidence));
+  assert.equal(nullRun.evidence.scope.status, "not_configured", "historical null scope sentinel must use legacy behavior");
+  assert.equal(await exists(nullGateMarker), true, "null scope sentinel must not suppress trusted gates");
+
+  for (const [label, malformed] of [["string", "not-a-scope-contract"], ["array", []]]) {
+    const malformedRoot = path.join(root, `malformed-${label}-scope`);
+    const malformedFixture = await createVerifierFixture(malformedRoot, { scope: false });
+    malformedFixture.assignment.scope_contract = malformed;
+    await writeJson(malformedFixture.assignmentPath, malformedFixture.assignment);
+    const malformedRun = await invoke(malformedRoot, "developer-1");
+    assert.equal(malformedRun.result.status, 3, `${label} scope contract must fail closed`);
+    assert.equal(malformedRun.evidence.status, "invalid_context");
+    assert.match(malformedRun.evidence.failure.reason, /scope_contract (?:must be an object when declared|requires path, sha256, and repository_id)/);
+  }
 
   const dirtyRoot = path.join(root, "dirty-baseline");
   const dirty = await createVerifierFixture(dirtyRoot, { initialState: "dirty" });

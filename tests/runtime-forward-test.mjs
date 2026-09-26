@@ -303,6 +303,8 @@ try {
   assert.match(runStateTemplate, /^delivery:\n  status: not_delivered/m);
   const assignmentTemplate = await readFile(path.join(repositoryRoot, 'skills', 'triad-loop-bootstrap', 'assets', 'loop-template', 'runtime', 'assignments', 'assignment.template.json'), 'utf8');
   assert.match(assignmentTemplate, /"required_gate_ids": \[\]/);
+  const assignmentTemplateValue = JSON.parse(assignmentTemplate);
+  assert.equal(Object.hasOwn(assignmentTemplateValue, 'scope_contract'), false, 'unconfigured assignments must omit scope_contract rather than materialize null');
   assert.match(assignmentTemplate, /"assignment_packet_path": null/);
   assert.match(assignmentTemplate, /"assignment_packet_sha256": null/);
   const evidenceSchema = JSON.parse(await readFile(path.join(repositoryRoot, 'schemas', 'verification-evidence.schema.json'), 'utf8'));

@@ -115,7 +115,10 @@ function withinRoot(root, candidate, label) {
 
 async function scopePreflight(projectRoot, worktree, assignment) {
   const specification = assignment.scope_contract;
-  if (specification === undefined) {
+  // v1.12.1's assignment template materialized an unconfigured scope as
+  // `null`. Treat that historical sentinel exactly like an omitted contract,
+  // while continuing to fail closed for every malformed non-null value.
+  if (specification === undefined || specification === null) {
     const candidate = await collectCandidateChanges(worktree);
     return {
       configured: false,

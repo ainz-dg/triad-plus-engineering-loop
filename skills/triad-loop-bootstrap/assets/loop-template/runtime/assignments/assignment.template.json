@@ -20,7 +20,6 @@
   "quality_baseline_path": null,
   "expected_quality_baseline_fingerprint": null,
   "required_gate_ids": [],
-  "scope_contract": null,
   "required_repository_skills": [
     {
       "path": ".agents/skills/router/SKILL.md",
