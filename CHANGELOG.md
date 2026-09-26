@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.12.1 — 2026-09-26
+
+- Bind approved human-readable Card reports to the independently verified
+  candidate manifest, preserving the pre-commit verifier fingerprint while
+  recording the committed fingerprint separately.
+- Preserve raw candidate bytes for commit-derived hashes, fail closed on
+  post-verification path/content changes, and retain legacy no-manifest
+  behavior without silently widening the verified candidate.
+
 ## 1.12.0 — 2026-09-23
 
 - Add deterministic human-readable Markdown views for terminal Cards and the
