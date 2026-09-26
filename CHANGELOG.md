@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.12.2 — 2026-09-26
+
+- Fix compatibility for historical assignments with `scope_contract: null` and
+  omit unconfigured scope contracts from new bootstrap templates while keeping
+  valid scope enforcement fail-closed.
+- Clarify the exact explicit verifier identity/run-id invocation contract and
+  the omission rule for unconfigured repository-skill bindings.
+- Clarify the bounded Card and delivery handoff report-context contract without
+  changing Reviewer independence or deterministic verification semantics.
 
 ## 1.12.1 — 2026-09-26
 
