@@ -153,7 +153,24 @@ fail-closed escalation; do not dispatch a Developer or consume retry budget.
    for a missing detail or contradiction, not systematic startup context.
 4. After completion, move to `verifying`. Follow the recorded dispatch route:
    wait for a valid hook-produced file when one is configured, otherwise invoke
-   the verifier explicitly. Accept only current evidence whose assignment ID,
+   the verifier with the exact active Developer identity. For explicit dispatch,
+   pipe the trigger JSON and bind the same run ID on stdin and argv:
+
+   ```bash
+   agent_id="<assignment.agent_id>"
+   run_id="<assignment.verification_run_id>"
+   printf '{"event":"manual_explicit_dispatch","agent_id":"%s","agent_type":"triad_developer","run_id":"%s"}' "$agent_id" "$run_id" |
+     node .triad-runtime/triad-verify.mjs \
+       --project /absolute/path/to/control-workspace \
+       --assignment /absolute/path/to/control-workspace/.loop/runtime/assignments/<assignment-file>.json \
+       --run-id "$run_id"
+   ```
+
+   Do not substitute a generic `manual` trigger or a different agent identity.
+   When no repository skills are configured, omit
+   `required_repository_skills` from the assignment; a present empty array is
+   a declared binding and fails closed. These are existing runtime semantics,
+   not a new verification behavior. Accept only current evidence whose assignment ID,
    feature, attempt, PRD/card/gate hashes, expected branch, and candidate
    fingerprint match the active candidate. When an opt-in scope contract is
    configured, `triad-verify` first compares the complete candidate delta from

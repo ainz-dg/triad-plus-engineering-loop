@@ -17,6 +17,36 @@ An agent-reported claim is not the same as verification evidence. A Developer ca
 report the commands it ran; `triad-verify` independently observes declared
 required `control-plane` gates and writes atomic evidence.
 
+## Explicit verifier dispatch contract
+
+When the configured route is `explicit_dispatch`, invoke the installed verifier
+with the active assignment's exact Developer identity. The trigger is supplied
+as JSON on stdin; it is not inferred from the shell process or from the card:
+
+```bash
+agent_id="<assignment.agent_id>"
+run_id="<assignment.verification_run_id>"
+printf '{"event":"manual_explicit_dispatch","agent_id":"%s","agent_type":"triad_developer","run_id":"%s"}' "$agent_id" "$run_id" |
+  node .triad-runtime/triad-verify.mjs \
+    --project /absolute/path/to/control-workspace \
+    --assignment /absolute/path/to/control-workspace/.loop/runtime/assignments/<assignment-file>.json \
+    --run-id "$run_id"
+```
+
+`agent_id` must match the active assignment exactly and `agent_type` must be
+`triad_developer`. The `run_id` on stdin and `--run-id` must match the active
+assignment when one is bound. A missing or mismatched trigger is
+`invalid_context`; no gate runs and no retry/remediation budget is consumed.
+
+When the repository has no router or required repository skills, omit the
+`required_repository_skills` property from the assignment. Do not represent an
+unconfigured binding as a present empty array: a present array is a declared
+binding and must contain at least one validated skill. This documents existing
+runtime behavior; it does not add a new verifier mode or transition.
+
+`triad-verify.mjs` does not expose a help screen. Use the assignment, project
+configuration, and this explicit recipe rather than invoking it with `--help`.
+
 ## Immutable Quality Contract
 
 Projects may opt into `project.quality_contract` with a project-relative JSON
