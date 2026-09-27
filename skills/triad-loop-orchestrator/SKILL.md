@@ -10,8 +10,12 @@ ordinary implementation or review. Read `project.yaml`, the frozen PRD, queue,
 decision policy, current records, and `.triad-plus/team.json` when present.
 The control workspace is the policy/state/evidence source; a delegated
 Developer or Reviewer operates from the assigned product worktree. Prepare one
-immutable Assignment Packet per assignment so role contexts do not reconstruct
-the entire PRD/ADR from scratch.
+immutable Assignment Packet for the active card attempt, at the first role
+dispatch, so role contexts do not reconstruct the entire PRD/ADR from scratch.
+Once that packet is bound to the attempt, every later role in the same attempt
+reuses the exact bound path and SHA-256. Role-specific context belongs in the
+role assignment/prompt, not in a rebuilt packet. A new attempt gets a new
+packet; a rework transition never mutates the previous attempt's packet.
 
 Before the first owner-facing reply, read `.triad-plus/team.json` when it exists.
 User-facing identity is permanent: adopt its non-empty
@@ -115,9 +119,14 @@ fail-closed escalation; do not dispatch a Developer or consume retry budget.
    `relevant_prd_excerpts`, `relevant_adr_excerpts`, `acceptance_criteria`,
    `verification_mapping`, `expected_paths`, `constraints`, `risks`, and
    `previous_evidence` (short text or references, never whole source files).
-   Before each delegation, publish an owner-facing
+   Before the first role delegation for an active attempt, publish an owner-facing
    activation notice that attributes the configured display name, technical role,
-   and card/attempt to that role. Then run the exact packet command:
+   and card/attempt to that role. If the attempt already has a bound
+   `assignment_packet_path` and `assignment_packet_sha256` from an earlier role,
+   do not run the packet-builder again: validate the existing immutable packet
+   with the normal runtime/context checks and carry that same binding into the
+   next role. Only a new attempt without a bound packet may run the exact packet
+   command:
 
    ```bash
    node .triad-runtime/triad-assignment-packet.mjs \
@@ -127,7 +136,13 @@ fail-closed escalation; do not dispatch a Developer or consume retry budget.
 
    It atomically creates (or verifies) the immutable packet, binds its path and
    SHA-256 to the assignment, and returns explicit `dispatch.cwd`, control
-   workspace, repository, branch, card, packet, and mandatory-skill paths.
+   workspace, repository, branch, card, packet, and mandatory-skill paths. Do
+   not invoke this builder with a Reviewer-specific assignment after the
+   Developer packet is already bound: the Reviewer receives the original
+   packet, while its independent findings and context are supplied separately.
+   If the existing binding is missing or fails validation, classify the attempt
+   as invalid context and stop; never rebuild the packet with different role
+   context to make the hash fit.
    Require each delegated Developer and Reviewer to run the installed runtime
    context diagnostic from its actual activation cwd before reading repository
    skills:
@@ -194,8 +209,11 @@ fail-closed escalation; do not dispatch a Developer or consume retry budget.
    invalidated evidence never advances the card.
 6. Dispatch the Reviewer with the same immutable Assignment Packet and
    `cwd`/`workdir` equal to the candidate worktree when the review needs direct
-   candidate inspection. Add the diff, Developer report, verifier evidence,
-   prior attempts, and risks. The Reviewer may consult only a necessary PRD/ADR
+   candidate inspection. Reuse the attempt's bound packet path and SHA-256; do
+   not call `triad-assignment-packet.mjs` again with a Reviewer-specific
+   assignment JSON. Add the diff, Developer report, verifier evidence, prior
+   attempts, and risks to the Reviewer activation context outside the immutable
+   packet. The Reviewer may consult only a necessary PRD/ADR
    section when the packet is insufficient; it must not reconstruct the whole
    requirement by default. Record its recommendation:
    - `approved`: verify scope/evidence, commit the card locally, promote every
