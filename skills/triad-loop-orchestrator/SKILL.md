@@ -424,3 +424,33 @@ node .triad-runtime/triad-evaluator-validate.mjs --mode delivery \
 
 Record each delivery criterion and its evidence reference in the run/handoff,
 and declare delivery only when every required delivery criterion is `PASS`.
+
+## Hybrid control boundary
+
+The Orchestrator is the semantic governor; the deterministic control plane owns
+mechanical lifecycle transitions whose answer is already determined by
+validated state and existing policy. Do not keep an LLM parent active merely
+to sequence Developer completion → verifier, verifier PASS → Reviewer,
+Reviewer approval → commit/next Card, or final Triad approval → optional
+Evaluator+/delivery closure.
+
+The host-independent transition contract is implemented by
+`runtime/lib/orchestrator-control.mjs`. A thin host/adapter driver may apply
+its returned actions, but it must not interpret PRD/ADR prose, judge Reviewer
+findings, replace the verifier, or invent retry policy. The driver must reuse
+the existing assignment-packet, verifier, retry-accounting, and Evaluator+
+validation primitives.
+
+For a local declared driver proof, the exact entry point is:
+
+```bash
+node .triad-runtime/triad-control-run.mjs --config /absolute/path/to/run.json
+```
+
+The config supplies explicit role commands and paths. It is not a new workflow
+DSL: commands are adapter capabilities, while action selection remains the
+pure control function. A missing, stale, mismatched, ambiguous, or semantically
+governed result must return `semantic_escalation`, `owner_escalation`, or
+`blocked` and must not be guessed. Reviewer independence, immutable packet
+reuse within an attempt, new packets for new attempts, and Evaluator+ fresh /
+blind post-run semantics remain unchanged.
