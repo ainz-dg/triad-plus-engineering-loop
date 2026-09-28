@@ -46,3 +46,26 @@ interval: the parent refreshes status and waits again in the same turn. A
 progress update never returns control to the owner while delegated work
 remains active; completion is collected automatically and proceeds to
 verification, review, and the next dependency-satisfied card.
+
+## Deterministic standalone role dispatch
+
+The optional hybrid control driver can launch a configured role without keeping
+an LLM Orchestrator parent alive for mechanical lifecycle sequencing:
+
+```bash
+node .triad-runtime/adapters/codex/run-role.mjs \
+  --role developer \
+  --control /absolute/path/to/control \
+  --cwd /absolute/path/to/product \
+  --prompt-file /absolute/path/to/prompt.txt \
+  --profile-source /absolute/path/to/.codex/agents/triad_developer.toml \
+  --model <host-model> \
+  --local-provider ollama
+```
+
+The launcher copies the selected configured TOML profile into an isolated
+temporary Codex home and invokes the native `codex exec --profile
+triad_<role>` mechanism. It never edits the user's Codex home or the managed
+profile. Reviewer output is normalized only from Codex `agent_message` events;
+tool/reasoning examples, missing markers, malformed payloads, and duplicates
+fail closed. The shared control driver remains host-independent.

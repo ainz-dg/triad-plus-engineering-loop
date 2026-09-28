@@ -61,6 +61,8 @@ const definitions = [
     modelBinding: 'global-profiles',
     globalEntry: true,
     projectAssets: [
+      { source: 'adapters/codex/run-role.mjs', destination: '.triad-runtime/adapters/codex/run-role.mjs', file: true },
+      { source: 'adapters/codex/reviewer-result.mjs', destination: '.triad-runtime/adapters/codex/reviewer-result.mjs', file: true },
       sharedSkills('.agents/skills'),
       ...projectRuntimeAssets('codex')
     ],
@@ -70,6 +72,8 @@ const definitions = [
     ],
     projectPaths(controlRoot) {
       return [
+        join(controlRoot, '.triad-runtime', 'adapters', 'codex', 'run-role.mjs'),
+        join(controlRoot, '.triad-runtime', 'adapters', 'codex', 'reviewer-result.mjs'),
         ...sharedSkillNames.map((name) => join(controlRoot, '.agents', 'skills', name)),
         join(controlRoot, '.triad-runtime')
       ];
