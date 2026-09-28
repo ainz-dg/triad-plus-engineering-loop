@@ -1,4 +1,15 @@
-import { validateReviewerResult } from '../../runtime/lib/reviewer-result.mjs';
+import { access } from 'node:fs/promises';
+
+const sourceRuntime = new URL('../../runtime/lib/reviewer-result.mjs', import.meta.url);
+const installedRuntime = new URL('../../lib/reviewer-result.mjs', import.meta.url);
+let validatorModule;
+try {
+  await access(sourceRuntime);
+  validatorModule = await import(sourceRuntime.href);
+} catch {
+  validatorModule = await import(installedRuntime.href);
+}
+const { validateReviewerResult } = validatorModule;
 
 function invalid(message) {
   const error = new Error(`invalid Codex Reviewer result: ${message}`);
@@ -82,4 +93,3 @@ export function parseCodexReviewerResultJsonl(source) {
   if (candidates.length !== 1) invalid(`expected exactly one result marker, found ${candidates.length}`);
   return validateReviewerResult(candidates[0]);
 }
-
