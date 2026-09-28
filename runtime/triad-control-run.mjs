@@ -6,6 +6,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { nextAction } from './lib/orchestrator-control.mjs';
 import { resolveAssignmentContext, validateAssignmentPacket } from './lib/assignment-packet.mjs';
+import { parseReviewerResultJsonl } from './lib/reviewer-result.mjs';
 
 function option(argv, name) {
   const index = argv.indexOf(name);
@@ -188,8 +189,15 @@ async function main() {
   record(state, decision);
   if (decision.action !== 'collect_reviewer_result') fail(`expected collect_reviewer_result, got ${decision.action}`);
 
-  const reviewerContract = await readJson(path.resolve(config.reviewer.result_file), 'Reviewer result');
-  if (!['approved', 'rework', 'blocked'].includes(reviewerContract.decision)) fail('Reviewer result decision must be approved, rework, or blocked');
+  let reviewerContract;
+  try {
+    reviewerContract = parseReviewerResultJsonl(reviewerResult.stdout);
+  } catch (error) {
+    fail(error.message);
+  }
+  // Persist the validated native result for auditability; it is never an
+  // input that can override the streamed role output.
+  await writeOutput(config.reviewer.result_file, reviewerContract);
   state = { ...state, phase: 'reviewer_result', reviewer: { verdict: reviewerContract.decision } };
   if (reviewerContract.decision !== 'approved') {
     const stopped = nextAction({ ...state, retry: config.reviewer.retry ?? { kind: 'reviewer_rework', allowed: false } });

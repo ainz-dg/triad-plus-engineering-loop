@@ -65,6 +65,8 @@ done
 if [[ "$project_install" == true ]]; then
   cp -R "$repository_root/runtime" "$project_root/.triad-runtime"
   cp -R "$repository_root/schemas" "$project_root/.triad-runtime/schemas"
+  mkdir -p "$project_root/.triad-runtime/adapters/opencode"
+  cp "$adapter_root/run-role.mjs" "$project_root/.triad-runtime/adapters/opencode/run-role.mjs"
   cp "$adapter_root/runtime.json" "$project_root/.triad-runtime/adapter.json"
 fi
 

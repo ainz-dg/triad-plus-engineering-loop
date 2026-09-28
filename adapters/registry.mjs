@@ -99,6 +99,7 @@ const definitions = [
     projectAssets: [
       { source: 'adapters/opencode/.opencode/agents', destination: '.opencode/agents' },
       { source: 'adapters/opencode/.opencode/commands/triad.md', destination: '.opencode/commands/triad.md', file: true },
+      { source: 'adapters/opencode/run-role.mjs', destination: '.triad-runtime/adapters/opencode/run-role.mjs', file: true },
       sharedSkills('.opencode/skills'),
       ...projectRuntimeAssets('opencode')
     ],
@@ -111,6 +112,7 @@ const definitions = [
       return [
         ...rolePaths(join(controlRoot, '.opencode'), roleDefinitions.map((role) => `triad-${role.id}`)),
         join(controlRoot, '.opencode', 'commands', 'triad.md'),
+        join(controlRoot, '.triad-runtime', 'adapters', 'opencode', 'run-role.mjs'),
         ...sharedSkillNames.map((name) => join(controlRoot, '.opencode', 'skills', name)),
         join(controlRoot, '.triad-runtime')
       ];

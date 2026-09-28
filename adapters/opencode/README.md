@@ -120,6 +120,30 @@ stops and then validates its evidence. It records this decision by running
 `.triad-runtime/triad-runtime-capabilities.mjs --host opencode`; no undocumented
 OpenCode lifecycle hook is assumed.
 
+## Standalone deterministic role dispatch
+
+The optional deterministic control driver can invoke one role as a separate
+OpenCode primary session with:
+
+```bash
+node adapters/opencode/run-role.mjs \
+  --role developer \
+  --control /absolute/path/to/control \
+  --cwd /absolute/path/to/product \
+  --prompt-file /absolute/path/to/prompt.txt \
+  --model provider/model
+```
+
+Normal Triad profiles remain hidden `subagent` roles for the Orchestrator Task
+tool. `run-role.mjs` temporarily materializes the selected managed profile as a
+native OpenCode `primary` role for the duration of the standalone process,
+restores the profile byte-for-byte, and never changes `.triad-plus/team.json`.
+The resulting OpenCode session metadata carries the requested role ID rather
+than silently falling back to the default host agent. The control driver parses
+the Reviewer JSONL text event and accepts exactly one bounded
+`TRIAD_REVIEW_RESULT` payload; tool output and prompt examples are not
+considered Reviewer verdicts.
+
 ## Verify installation
 
 From the selected control repository, confirm that OpenCode discovered the
