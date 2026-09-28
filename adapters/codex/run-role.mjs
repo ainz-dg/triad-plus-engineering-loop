@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -51,6 +51,22 @@ async function main() {
   const isolatedProfile = path.join(isolatedHome, `${profileName}.config.toml`);
   const prompt = await readFile(path.resolve(promptFile), 'utf8').catch((error) => fail(`cannot read prompt ${promptFile}: ${error.message}`));
   await writeFile(isolatedProfile, profile);
+  // Native authenticated runs need the existing host route, while the role
+  // profile must remain isolated. Copy only the ephemeral user config/auth
+  // inputs; never mutate the user's Codex home or persist these copies.
+  if (!localProvider) {
+    for (const file of ['config.toml', 'auth.json']) {
+      const source = path.join(codexHome, file);
+      const destination = path.join(isolatedHome, file);
+      try {
+        await access(source);
+        await copyFile(source, destination);
+        await chmod(destination, 0o600);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw new Error(`cannot stage Codex ${file}: ${error.message}`);
+      }
+    }
+  }
 
   const dispatch = {
     type: 'triad.codex.role_dispatch',
@@ -98,4 +114,3 @@ async function main() {
 }
 
 main().catch((error) => fail(error.message));
-

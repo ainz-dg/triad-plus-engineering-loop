@@ -66,6 +66,9 @@ node .triad-runtime/adapters/codex/run-role.mjs \
 The launcher copies the selected configured TOML profile into an isolated
 temporary Codex home and invokes the native `codex exec --profile
 triad_<role>` mechanism. It never edits the user's Codex home or the managed
-profile. Reviewer output is normalized only from Codex `agent_message` events;
+profile. For a host-native authenticated route (when `--local-provider` is not
+used), the existing user `config.toml` and `auth.json` are copied into that
+temporary home and removed with it after the invocation; no credentials or
+configuration are persisted or modified. Reviewer output is normalized only from Codex `agent_message` events;
 tool/reasoning examples, missing markers, malformed payloads, and duplicates
 fail closed. The shared control driver remains host-independent.
