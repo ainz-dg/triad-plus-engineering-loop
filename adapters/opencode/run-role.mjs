@@ -46,8 +46,8 @@ async function main() {
   // standalone deterministic driver temporarily materializes the same role as
   // primary, then restores the exact managed asset byte-for-byte.
   const standalone = original.slice(0, mode.index) + original.slice(mode.index).replace(mode[0], 'mode: primary');
-  await writeFile(profilePath, standalone);
   try {
+    await writeFile(profilePath, standalone);
     const prompt = await readFile(path.resolve(promptFile), 'utf8');
     const command = [binary, 'run', '--dir', controlRoot, '--agent', `triad-${role}`];
     if (model) command.push('--model', model);

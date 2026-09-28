@@ -82,16 +82,21 @@ function retryDecision(state, kind) {
 
 function selectAfterCommit(state) {
   const cards = Array.isArray(state.cards) ? state.cards : [];
+  const blocked = cards.find((card) => card?.required !== false && card.status === 'blocked');
+  if (blocked) return decision('blocked', 'required_card_blocked', { card_id: blocked.id, fail_closed: true });
   const next = nextReadyCard(cards);
   if (next) return decision('select_next_card', 'dependency_ready_card_available', { card_id: next.id });
   if (!allRequiredCardsTerminal(cards)) {
     return decision('owner_escalation', 'required_cards_incomplete_without_ready_card', { fail_closed: true });
   }
-  if (state.evaluator?.enabled === true && !state.evaluator?.result) {
+  if (state.evaluator?.enabled === true) {
+    if (state.evaluator.status === 'active' || state.evaluator.status === 'pending') {
+      return decision('wait_for_evaluator', 'evaluator_active');
+    }
+    if (state.evaluator.status === 'completed') {
+      return invalidState('evaluator_result_missing');
+    }
     return decision('dispatch_evaluator', 'all_required_cards_approved_evaluator_enabled');
-  }
-  if (state.evaluator?.enabled === true && state.evaluator?.status === 'active') {
-    return decision('wait_for_evaluator', 'evaluator_active');
   }
   return decision('close_delivery', 'all_required_cards_terminal');
 }

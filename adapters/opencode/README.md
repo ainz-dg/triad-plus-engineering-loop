@@ -144,6 +144,11 @@ the Reviewer JSONL text event and accepts exactly one bounded
 `TRIAD_REVIEW_RESULT` payload; tool output and prompt examples are not
 considered Reviewer verdicts.
 
+The standalone launcher is intended for one role process at a time per control
+workspace because it temporarily updates the selected managed profile. Normal
+Triad subagent dispatch does not mutate these profiles; do not run concurrent
+standalone launchers against the same workspace.
+
 ## Verify installation
 
 From the selected control repository, confirm that OpenCode discovered the

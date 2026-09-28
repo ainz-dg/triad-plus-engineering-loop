@@ -26,4 +26,3 @@ test('rejects missing, malformed, and duplicate Codex results', () => {
 });
 
 console.log('Codex Reviewer result normalization contract: PASS');
-

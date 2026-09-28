@@ -101,6 +101,8 @@ test('all approved cards close directly when Evaluator+ is disabled', () => {
 test('Evaluator+ is dispatched once, collected, and cannot reopen Triad', () => {
   const dispatch = nextAction({ phase: 'card_committed', cards: [card('approved')], evaluator: { enabled: true } });
   assert.equal(dispatch.action, 'dispatch_evaluator');
+  assert.equal(nextAction({ phase: 'card_committed', cards: [card('approved')], evaluator: { enabled: true, status: 'active' } }).action, 'wait_for_evaluator');
+  assert.equal(nextAction({ phase: 'card_committed', cards: [card('approved')], evaluator: { enabled: true, status: 'completed' } }).action, 'semantic_escalation');
   assert.equal(nextAction({ phase: 'evaluator_active', evaluator: { enabled: true, status: 'active' } }).action, 'wait_for_evaluator');
   assert.equal(nextAction({ phase: 'evaluator_active', evaluator: { enabled: true, status: 'completed' } }).action, 'collect_evaluator_result');
   for (const verdict of ['PASS', 'FAIL', 'INDETERMINATE']) {
@@ -108,6 +110,15 @@ test('Evaluator+ is dispatched once, collected, and cannot reopen Triad', () => 
     assert.equal(result.action, 'close_delivery');
     assert.match(result.reason, /cannot_reopen/);
   }
+});
+
+test('a blocked required card never proceeds to Evaluator+ or delivery', () => {
+  const result = nextAction({
+    phase: 'card_committed',
+    cards: [card('approved', 'CARD-001'), card('blocked', 'CARD-002'), card('ready', 'CARD-003')],
+    evaluator: { enabled: true }
+  });
+  assert.deepEqual(result, { action: 'blocked', reason: 'required_card_blocked', card_id: 'CARD-002', fail_closed: true });
 });
 
 test('delivery closure only becomes done after validated PASS', () => {
