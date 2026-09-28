@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.13.0 — 2026-09-28
+
+- Add the Hybrid Orchestrator control path: semantic Orchestrator governance
+  and judgment with a deterministic control plane for mechanically determined
+  lifecycle transitions.
+- Add deterministic native Developer and independent Reviewer dispatch for
+  OpenCode and Codex while preserving existing verifier authority and
+  separate role contexts.
+- Preserve immutable Assignment Packet reuse, retry/scope semantics,
+  fail-closed Reviewer-result normalization, and optional post-run Evaluator+
+  semantics.
+- Harden OpenCode profile restoration and Codex isolated temporary-home,
+  config, and auth cleanup for the new role-dispatch seams.
+
 ## 1.12.2 — 2026-09-26
 
 - Fix compatibility for historical assignments with `scope_contract: null` and
