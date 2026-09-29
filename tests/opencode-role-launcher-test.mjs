@@ -73,6 +73,12 @@ test('OpenCode standalone launcher restores the managed profile after role and p
   assert.equal(failed.status, 17, failed.stderr);
   assert.equal(await readFile(roleFailure.profile, 'utf8'), roleFailure.original);
 
+  const spawnFailure = await fixture();
+  const missingBinary = spawnSync(process.execPath, [launcher, '--role', 'developer', '--control', spawnFailure.control, '--cwd', spawnFailure.product, '--prompt-file', spawnFailure.prompt, '--opencode', join(spawnFailure.control, 'missing-opencode')], { encoding: 'utf8' });
+  assert.equal(missingBinary.status, 2);
+  assert.match(missingBinary.stderr, /spawnSync|ENOENT/);
+  assert.equal(await readFile(spawnFailure.profile, 'utf8'), spawnFailure.original);
+
   const promptFailure = await fixture();
   const missingPrompt = join(promptFailure.control, 'missing-prompt.txt');
   const missing = spawnSync(process.execPath, [launcher, '--role', 'developer', '--control', promptFailure.control, '--cwd', promptFailure.product, '--prompt-file', missingPrompt, '--opencode', promptFailure.fake], { encoding: 'utf8' });
