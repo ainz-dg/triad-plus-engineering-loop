@@ -13,8 +13,7 @@ function option(argv, name) {
 }
 
 function fail(message) {
-  process.stderr.write(`opencode role launcher: ${message}\n`);
-  process.exit(2);
+  throw new Error(message);
 }
 
 function usage(exitCode = 0) {
@@ -36,6 +35,8 @@ async function main() {
   if (!control || !cwd || !promptFile) fail('--control, --cwd, and --prompt-file are required');
 
   const controlRoot = path.resolve(control);
+  const productRoot = path.resolve(cwd);
+  const opencodeConfigRoot = path.join(controlRoot, '.opencode');
   const profilePath = path.join(controlRoot, '.opencode', 'agents', `triad-${role}.md`);
   const original = await readFile(profilePath, 'utf8').catch((error) => fail(`cannot read ${profilePath}: ${error.message}`));
   const mode = /^mode:\s*(subagent|primary)\s*$/m.exec(original);
@@ -48,12 +49,20 @@ async function main() {
   const standalone = original.slice(0, mode.index) + original.slice(mode.index).replace(mode[0], 'mode: primary');
   try {
     await writeFile(profilePath, standalone);
-    const prompt = await readFile(path.resolve(promptFile), 'utf8');
-    const command = [binary, 'run', '--dir', controlRoot, '--agent', `triad-${role}`];
+    const sourcePrompt = await readFile(path.resolve(promptFile), 'utf8');
+    const prompt = [
+      'Triad control workspace (authoritative control-plane paths):',
+      controlRoot,
+      'The product worktree is your current working directory. Read control-plane artifacts such as .triad-plus/team.json, assignments, packets, and verifier evidence from this workspace using explicit absolute paths; never copy them into the product worktree.',
+      '',
+      sourcePrompt.trim(),
+    ].join('\n');
+    const command = [binary, 'run', '--dir', productRoot, '--agent', `triad-${role}`];
     if (model) command.push('--model', model);
     command.push('--format', 'json', '--auto', '--', prompt.trim());
     const result = spawnSync(command[0], command.slice(1), {
-      cwd: path.resolve(cwd),
+      cwd: productRoot,
+      env: { ...process.env, OPENCODE_CONFIG_DIR: opencodeConfigRoot },
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
     });
@@ -66,4 +75,7 @@ async function main() {
   }
 }
 
-main().catch((error) => fail(error.message));
+main().catch((error) => {
+  process.stderr.write(`opencode role launcher: ${error.message}\n`);
+  process.exitCode = 2;
+});

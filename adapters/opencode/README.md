@@ -138,6 +138,11 @@ Normal Triad profiles remain hidden `subagent` roles for the Orchestrator Task
 tool. `run-role.mjs` temporarily materializes the selected managed profile as a
 native OpenCode `primary` role for the duration of the standalone process,
 restores the profile byte-for-byte, and never changes `.triad-plus/team.json`.
+The OpenCode session and OS process run from the declared product worktree;
+the managed profile remains in the control workspace and is discovered through
+the child-only `OPENCODE_CONFIG_DIR=<control>/.opencode` binding. Control-plane
+paths are supplied explicitly in the standalone prompt, so managed artifacts
+are not copied into the product worktree.
 The resulting OpenCode session metadata carries the requested role ID rather
 than silently falling back to the default host agent. The control driver parses
 the Reviewer JSONL text event and accepts exactly one bounded
