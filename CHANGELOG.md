@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.13.1 — 2026-09-30
+
+- Fix standalone OpenCode role launch so the native `--dir` and OS process cwd
+  point at the assigned product worktree.
+- Preserve control-workspace OpenCode configuration through child-only
+  `OPENCODE_CONFIG_DIR` without copying control assets into the product.
+- Strengthen launcher regression coverage for distinct control/product roots
+  and spawn-failure profile restoration.
+
 ## 1.13.0 — 2026-09-28
 
 - Add the Hybrid Orchestrator control path: semantic Orchestrator governance
