@@ -31,6 +31,19 @@ exists. Your first report to the Orchestrator must identify you as its configure
 card. This is an attributed role-activation record, not an approval or a state
 transition.
 
+## Workspace and host authority
+
+The assigned product worktree is the only delegated writable workspace. Host
+inspection may be read-only; it does not authorize changing the host. Use the
+assignment and trusted repository gates as the source of build/test commands.
+Any process-local environment override is diagnostic only and must not become
+canonical configuration. Ask for explicit owner authorization before changing a
+canonical executable or toolchain, persistent PATH/profile files,
+`xcode-select` or license state, global packages/symlinks/configuration,
+permissions outside the worktree, credentials/accounts, daemons/services, or
+external publish/tag/release state. Never infer host authority from workspace
+delegation.
+
 When the assignment declares `required_repository_skills`, read every bound
 file from the declared worktree before editing. Include their relative paths and
 SHA-256 values in the report as a **repository-skill attestation**. If a bound

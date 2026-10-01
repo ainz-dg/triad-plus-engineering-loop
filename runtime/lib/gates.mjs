@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { redactAndCap, writeLog } from "./evidence.mjs";
-import { runProcess } from "./process.mjs";
+import { describeCommandProvenance, runProcess } from "./process.mjs";
 
 function scalar(value) {
   const trimmed = value.trim();
@@ -28,17 +28,29 @@ export function parseQualityGates(source) {
   } catch {}
   const gates = [];
   let current = null;
+  let nested = null;
+  let nestedIndent = -1;
   for (const rawLine of source.split("\n")) {
     const line = rawLine.replace(/\s+#.*$/, "");
-    const match = line.match(/^\s*(?:-\s+)?([a-z_]+):\s*(.*?)\s*$/i);
+    const match = line.match(/^(\s*)(?:-\s+)?([a-z_][a-z0-9_]*):\s*(.*?)\s*$/i);
     if (!match) continue;
-    const [, key, value] = match;
+    const [, indentation, key, value] = match;
     const parsedValue = key === "command" || key === "description" ? unquoteWhole(value) : scalar(value);
     if (line.trimStart().startsWith("- ")) {
       if (current) gates.push(current);
       current = { [key]: parsedValue };
+      nested = null;
+      nestedIndent = -1;
+    } else if (current && nested && indentation.length > nestedIndent) {
+      nested[key] = key === "description" ? unquoteWhole(value) : scalar(value);
+    } else if (current && value === "" && ["toolchain", "provenance"].includes(key)) {
+      nested = {};
+      current[key] = nested;
+      nestedIndent = indentation.length;
     } else if (current) {
       current[key] = parsedValue;
+      nested = null;
+      nestedIndent = -1;
     }
   }
   if (current) gates.push(current);
@@ -170,17 +182,34 @@ export function gateSelectionEvidence(selection) {
 
 export async function executeGates(gates, worktree, logDirectory) {
   const results = [];
+  const prepared = [];
+  // Resolve every declared toolchain before executing any gate. A bound gate
+  // that no longer resolves to the approved executable must fail closed before
+  // another gate can produce side effects.
   for (const gate of gates) {
     const required = gate.required !== false;
     const executor = gate.executor ?? "control-plane";
     if (executor !== "control-plane") {
-      results.push({ id: gate.id ?? "unknown", required, executor, status: "unsupported_executor", reason: `executor_${executor}_is_not_supported_in_v1` });
+      prepared.push({ gate, skip: { id: gate.id ?? "unknown", required, executor, status: "unsupported_executor", reason: `executor_${executor}_is_not_supported_in_v1` } });
       continue;
     }
     if (!gate.id || !gate.command || /^REPLACE_ME/.test(gate.command)) {
-      results.push({ id: gate.id ?? "unknown", required, executor, status: "invalid_gate", reason: "missing_trusted_command" });
+      prepared.push({ gate, skip: { id: gate.id ?? "unknown", required, executor, status: "invalid_gate", reason: "missing_trusted_command" } });
       continue;
     }
+    const provenance = await describeCommandProvenance(gate.command, [], {
+      cwd: worktree,
+      shell: true,
+      toolchain: gate.toolchain ?? gate.provenance
+    });
+    prepared.push({ gate, required, executor, provenance });
+  }
+  for (const entry of prepared) {
+    if (entry.skip) {
+      results.push(entry.skip);
+      continue;
+    }
+    const { gate, required, executor, provenance } = entry;
     const startedAt = Date.now();
     const result = await runProcess(gate.command, [], { cwd: worktree, shell: true, timeoutMs: (gate.timeout_seconds ?? 600) * 1000 });
     const stdout = redactAndCap(result.stdout);
@@ -197,6 +226,7 @@ export async function executeGates(gates, worktree, logDirectory) {
       stdout_ref: stdoutLog.ref,
       stderr_ref: stderrLog.ref,
       output_truncated: stdout.truncated || stderr.truncated,
+      provenance,
     });
   }
   return results;

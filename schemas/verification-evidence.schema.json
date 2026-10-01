@@ -84,7 +84,34 @@
         }
       }
     },
-    "gates": { "type": "array" },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": ["string", "null"] },
+          "required": { "type": "boolean" },
+          "executor": { "type": "string" },
+          "status": { "type": "string" },
+          "reason": { "type": ["string", "null"] },
+          "exit_code": { "type": ["integer", "null"] },
+          "duration_ms": { "type": ["integer", "null"] },
+          "stdout_ref": { "type": ["string", "null"] },
+          "stderr_ref": { "type": ["string", "null"] },
+          "output_truncated": { "type": "boolean" },
+          "provenance": {
+            "type": ["object", "null"],
+            "properties": {
+              "declared": { "type": "object" },
+              "provenance_status": { "type": "string" },
+              "resolved_executable": { "type": ["string", "null"] },
+              "sha256": { "type": ["string", "null"] },
+              "version": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
     "required_gates_passed": { "type": "boolean" },
     "status": { "enum": ["pass", "fail", "invalid_context", "infrastructure_error", "invalidated"] },
     "created_at": { "type": "string", "format": "date-time" }

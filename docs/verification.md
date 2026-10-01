@@ -84,6 +84,29 @@ it does not itself approve, rework, or transition a run.
 Evidence files and logs are diagnostics. Users normally need only the
 Orchestrator's summary and the Reviewer verdict.
 
+## Workspace versus host authority
+
+Triad delegates a product worktree, not the host. Roles may perform read-only
+host diagnostics and run commands explicitly declared by the assignment or
+trusted gate catalog. A process-local environment override is diagnostic only;
+it is never canonical project configuration. Changing canonical executables or
+toolchains, persistent PATH/profile files, `xcode-select` or license state,
+global packages/symlinks/configuration, permissions outside the assigned
+workspace, credentials/accounts, daemons/services, or publish/tag/release state
+requires explicit owner authorization unless the exact action was declared by
+the run. This boundary is independent of the adapter and does not pretend to
+provide OS-level sandboxing.
+
+For each control-plane gate, Triad records declared command and cwd plus a
+best-effort direct-executable provenance snapshot (resolved absolute path,
+binary SHA-256, and version when available). Composite shell commands are
+explicitly recorded as `unresolved_shell_command` rather than parsed. A gate
+may opt into a trusted `toolchain` binding (`executable`, `sha256`, and/or
+`version`); a mismatch or an unresolvable bound executable fails closed before
+any gate command runs. Legacy gates without a binding continue to run and are
+recorded as unbound; no environment variables or secrets are copied into
+evidence.
+
 ## Assignment packets and dispatch context
 
 The Orchestrator can create one immutable packet per active assignment with:

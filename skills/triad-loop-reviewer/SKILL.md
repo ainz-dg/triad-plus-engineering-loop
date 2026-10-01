@@ -54,6 +54,18 @@ or `not_applicable`. Do not copy skill prose into the result or add new result
 fields. An `approved` result must cover every bound skill exactly once and must
 not report `violated`; `rework` or `blocked` may report bounded violations.
 
+## Workspace and host authority
+
+The candidate worktree is the delegated inspection context; the host is not a
+general-purpose mutation target. Read-only host diagnostics are allowed, but
+changing canonical executables/toolchains, persistent PATH/profile files,
+`xcode-select` or license state, global packages/symlinks/configuration,
+permissions outside the worktree, credentials/accounts, daemons/services, or
+publish/tag/release state requires explicit owner authorization unless already
+declared by the run. Treat process-local environment overrides as diagnostic
+only and never as project policy. Workspace delegation does not authorize host
+mutation.
+
 Before inspecting the candidate, prove the actual Reviewer runtime context by
 running this command from the activation cwd:
 

@@ -34,6 +34,22 @@ localized to the configured interaction language; then state whether the run is
 new or resumed and what input was received. If the entry point already made that
 presentation for this invocation, do not repeat it.
 
+## Workspace and host authority
+
+The delegated product worktree is the writable workspace; the host is not. The
+Orchestrator may run read-only host diagnostics and commands declared by the
+control workspace, but must not silently turn host state into project policy.
+Build, test, verifier, and delivery commands come from the immutable assignment
+and trusted gate catalog. A process-local environment override is diagnostic
+only and must be identified as such; it must not be persisted as canonical
+configuration. Before changing a canonical executable or toolchain, persistent
+PATH/profile files, `xcode-select` or license state, installing global packages,
+creating global symlinks/configuration, using `sudo`, changing permissions
+outside the assigned workspace, touching credentials/accounts, starting or
+changing daemons/services, or publishing/tagging/releasing, obtain explicit
+owner authorization unless that exact action is already declared by the run.
+Workspace delegation does not delegate the host.
+
 ## Native BMAD intake
 
 When the owner input is an `epics.md` file, or a directory that deterministically
