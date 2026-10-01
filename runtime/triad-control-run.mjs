@@ -191,8 +191,14 @@ async function main() {
 
   let reviewerContract;
   try {
-    reviewerContract = parseReviewerResultJsonl(reviewerResult.stdout);
+    const boundSkillPaths = Array.isArray(packet?.metadata?.mandatory_skills)
+      ? packet.metadata.mandatory_skills.map((skill) => skill?.path).filter(Boolean)
+      : Array.isArray(assignment.required_repository_skills)
+        ? assignment.required_repository_skills.map((skill) => skill?.path).filter(Boolean)
+        : [];
+    reviewerContract = parseReviewerResultJsonl(reviewerResult.stdout, { boundSkillPaths });
   } catch (error) {
+    if (error?.code === 'reviewer_result_invalid') throw error;
     fail(error.message);
   }
   // Persist the validated native result for auditability; it is never an

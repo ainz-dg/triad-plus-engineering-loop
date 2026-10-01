@@ -25,4 +25,14 @@ test('rejects missing, malformed, and duplicate Codex results', () => {
   assert.throws(() => parseCodexReviewerResultJsonl(duplicate), /exactly one result marker/);
 });
 
+test('Codex adapter applies the shared bound-skill compliance contract', () => {
+  const skill = '.agents/skills/router/SKILL.md';
+  const source = event({ type: 'agent_message', text: `TRIAD_REVIEW_RESULT: ${JSON.stringify({
+    decision: 'approved',
+    skill_compliance: [{ path: skill, rule: 'router rule', status: 'compliant' }]
+  })}` });
+  assert.equal(parseCodexReviewerResultJsonl(source, { boundSkillPaths: [skill] }).skill_compliance[0].path, skill);
+  assert.throws(() => parseCodexReviewerResultJsonl(event({ type: 'agent_message', text: 'TRIAD_REVIEW_RESULT: {"decision":"approved"}' }), { boundSkillPaths: [skill] }), /cover every bound repository skill/);
+});
+
 console.log('Codex Reviewer result normalization contract: PASS');

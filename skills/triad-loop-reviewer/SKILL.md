@@ -30,6 +30,30 @@ mismatched, or unreported required repository skill is a `blocked` result until
 the Orchestrator creates a valid assignment; external context never substitutes
 for the repository skill policy.
 
+For every bound repository skill, perform the semantic compliance check required
+by that skill, not merely a hash check. The final structured result must include
+exactly one compact entry per bound skill when the decision is `approved`:
+
+```json
+{
+  "decision": "approved",
+  "skill_compliance": [
+    {
+      "path": ".agents/skills/component-workflow/SKILL.md",
+      "rule": "Red Flags / shared behavior placement",
+      "status": "compliant",
+      "evidence_refs": ["src/components/Foo.tsx"]
+    }
+  ]
+}
+```
+
+`path` must be one of the assignment's bound skill paths, `rule` is a short
+locator for the evaluated rule, and `status` is one of `compliant`, `violated`,
+or `not_applicable`. Do not copy skill prose into the result or add new result
+fields. An `approved` result must cover every bound skill exactly once and must
+not report `violated`; `rework` or `blocked` may report bounded violations.
+
 Before inspecting the candidate, prove the actual Reviewer runtime context by
 running this command from the activation cwd:
 

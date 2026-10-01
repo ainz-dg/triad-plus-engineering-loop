@@ -13,6 +13,14 @@ not claim to observe an LLM's private reasoning. Developer, Reviewer, and
 Evaluator+ must separately report their use of the same bound skills, so a
 missing or inconsistent attestation is visible to the Orchestrator.
 
+The Reviewer also returns a bounded `skill_compliance` list in its structured
+result when repository skills are bound. Each entry names one bound skill path,
+the compact rule locator evaluated, a `compliant`, `violated`, or
+`not_applicable` status, and optional evidence references. An approved result
+must cover every bound skill exactly once and cannot contain a violation. This
+semantic attestation complements, and does not replace, the verifier's
+path/SHA-256 identity check.
+
 An agent-reported claim is not the same as verification evidence. A Developer can
 report the commands it ran; `triad-verify` independently observes declared
 required `control-plane` gates and writes atomic evidence.

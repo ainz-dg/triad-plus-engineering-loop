@@ -77,7 +77,7 @@ function agentMessageText(event) {
 }
 
 /** Parse only Codex native final agent-message events. */
-export function parseCodexReviewerResultJsonl(source) {
+export function parseCodexReviewerResultJsonl(source, options = {}) {
   if (typeof source !== 'string' || source.length === 0) invalid('JSONL stream is empty');
   const candidates = [];
   for (const [lineNumber, line] of source.split(/\r?\n/).entries()) {
@@ -91,5 +91,5 @@ export function parseCodexReviewerResultJsonl(source) {
     for (const text of agentMessageText(event)) candidates.push(...markerPayloads(text));
   }
   if (candidates.length !== 1) invalid(`expected exactly one result marker, found ${candidates.length}`);
-  return validateReviewerResult(candidates[0]);
+  return validateReviewerResult(candidates[0], options);
 }
