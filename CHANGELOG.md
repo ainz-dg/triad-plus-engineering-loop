@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.14.0 — 2026-10-02
+
+- Require an independent Reviewer to report bounded semantic compliance for
+  every repository skill bound to an assignment; approval cannot omit bound-
+  skill coverage or approve a material violated rule.
+- Preserve deterministic separation: the verifier proves skill
+  identity/integrity while semantic interpretation remains Reviewer-owned.
+- Add explicit host authority guidance: “The workspace is delegated. The host
+  is not.”
+- Add command/toolchain provenance for Triad-controlled canonical commands,
+  including resolved executable identity when available and explicit unresolved
+  provenance for composite shell commands.
+- Add optional trusted gate toolchain binding with fail-closed behavior on
+  bound executable identity mismatch, without silent fallback or automatic
+  host repair.
+- Preserve backward compatibility for assignments without bound repository
+  skills and legacy gates without toolchain bindings.
+
 ## 1.13.1 — 2026-09-30
 
 - Fix standalone OpenCode role launch so the native `--dir` and OS process cwd
