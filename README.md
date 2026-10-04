@@ -24,6 +24,35 @@ Triad+ is for the moment after a coding agent says “done”: it gives that cla
 separate reviewer, deterministic checks, and an orchestrator that decides what
 happens next.
 
+## When to use Triad+
+
+Triad+ is not meant to be the default for every coding task.
+
+A single coding agent is a reasonable candidate when all of the following are
+true:
+
+- the change is localized, mechanical, or repetitive;
+- the diff and scope are small and explicit;
+- deterministic tests or oracles strongly cover the required behavior;
+- there is no shared-state, concurrency/order, public API or backward-
+  compatibility, parsing/security-sensitive, or material architecture risk;
+- the blast radius is low and the change is easy to reverse; and
+- repository-policy, skill, and integration ambiguity is absent.
+
+If any of those conditions are not clearly satisfied, Triad+ remains the
+conservative path: it adds deterministic evidence, an independent Reviewer,
+and Orchestrator-governed rework.
+
+This choice happens **before** entering Triad+. Once a task enters the loop, the
+normal `Developer → verification → Reviewer` path remains mandatory; this
+guidance selects between that full path and the single-agent candidate path, not
+a partial Triad mode.
+
+This guidance is based on a small, stratified benchmark and is intentionally
+conservative. The benchmark supports low-risk single-agent use as a candidate
+optimization; it does not prove that every higher-risk task benefits from
+Triad+ or that independent review has no value.
+
 ## How it works
 
 ```text
