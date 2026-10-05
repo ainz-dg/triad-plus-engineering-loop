@@ -120,12 +120,14 @@ async function resolveExistingPath(root, candidate, label) {
 /**
  * Load and fail closed on a repository-produced generic evidence manifest.
  * The manifest itself is control-workspace state; artifact paths are always
- * relative to its containing directory and are bound to one run/assignment
- * and the candidate fingerprint observed before gate execution.
+ * relative to the assignment's explicit evidence directory and are bound to
+ * one run/assignment and the candidate fingerprint observed before gate
+ * execution.
  */
 export async function loadEvidenceManifest({
   projectRoot,
   manifestPath,
+  expectedEvidenceDirectory,
   expectedRunId,
   expectedAssignmentId,
   expectedFeatureId,
@@ -137,7 +139,19 @@ export async function loadEvidenceManifest({
   if (expectedCandidateFingerprint === undefined || expectedCandidateFingerprint === null) {
     throw invalid("expected candidate fingerprint is required");
   }
+  if (expectedEvidenceDirectory === undefined || expectedEvidenceDirectory === null) {
+    throw invalid("explicit evidence directory is required");
+  }
+  if (typeof expectedEvidenceDirectory !== "string" || path.isAbsolute(expectedEvidenceDirectory)) {
+    throw invalid("evidence directory must be project-relative");
+  }
+  const evidenceRootLocation = await resolveExistingPath(root, expectedEvidenceDirectory, "evidence directory");
+  const evidenceRootInfo = await stat(evidenceRootLocation.real);
+  if (!evidenceRootInfo.isDirectory()) throw invalid(`evidence directory is not a directory: ${expectedEvidenceDirectory}`);
   const manifestLocation = await resolveExistingPath(root, manifestPath, "evidence manifest");
+  if (manifestLocation.real !== evidenceRootLocation.real && !manifestLocation.real.startsWith(`${evidenceRootLocation.real}${path.sep}`)) {
+    throw invalid("evidence manifest must be inside the authorized evidence directory");
+  }
   let source;
   try { source = await readFile(manifestLocation.real, "utf8"); }
   catch (error) { throw invalid(`evidence manifest cannot be read: ${error.message}`); }
@@ -157,7 +171,7 @@ export async function loadEvidenceManifest({
   }
   const producerSet = new Set(producerGateIds);
   if (producerSet.size === 0) throw invalid("evidence manifest requires at least one passing producer gate");
-  const evidenceRoot = path.dirname(manifestLocation.real);
+  const evidenceRoot = evidenceRootLocation.real;
   const normalizedArtifacts = [];
   for (const artifact of manifest.artifacts) {
     if (producerSet.size > 0 && !producerSet.has(artifact.producer_gate_id)) {

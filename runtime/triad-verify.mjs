@@ -207,8 +207,11 @@ async function main() {
     if (assignment.expected_branch && assignment.expected_branch !== branch) throw new Error("worktree branch does not match assignment");
     if (assignment.evidence_manifest_path) {
       try {
+        if (!assignment.evidence_directory) throw new Error("evidence manifest requires an explicit evidence_directory");
         if (path.isAbsolute(assignment.evidence_manifest_path)) throw new Error("evidence manifest path must be project-relative");
         withinRoot(projectRoot, assignment.evidence_manifest_path, "evidence manifest path");
+        if (path.isAbsolute(assignment.evidence_directory)) throw new Error("evidence directory must be project-relative");
+        withinRoot(projectRoot, assignment.evidence_directory, "evidence directory");
       } catch (error) {
         error.code = "evidence_manifest_invalid";
         throw error;
@@ -276,6 +279,7 @@ async function main() {
         artifactManifest = await loadEvidenceManifest({
           projectRoot,
           manifestPath: assignment.evidence_manifest_path,
+          expectedEvidenceDirectory: assignment.evidence_directory,
           expectedRunId: runId,
           expectedAssignmentId: assignment.assignment_id,
           expectedFeatureId: assignment.feature_id,

@@ -97,9 +97,9 @@ control-plane-validated reference. Confirm that its run, assignment, feature,
 attempt, current-status, producer-gate, candidate-fingerprint, SHA-256, size,
 and authorized-root bindings are present before relying on it. Use the
 deterministic textual/structured artifact as the portable evidence path; inspect
-an image or other binary only when the active host explicitly supports the
-reference. Artifact presence or a passing repository assertion is not semantic
-approval: visual/layout intent and product quality remain Reviewer judgments.
+a binary reference only when the active host explicitly supports it. Artifact
+presence or a passing repository assertion is not semantic approval: product
+correctness, observable behavior, quality, and risk remain Reviewer judgments.
 
 - `approved` — all required criteria/gates have current evidence and no blocker;
 - `rework` — bounded actionable corrections are needed;

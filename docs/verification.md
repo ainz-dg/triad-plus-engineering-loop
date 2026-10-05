@@ -127,6 +127,26 @@ validated before `triad-verify` executes scope or gates, and a changed or
 missing packet fails closed as `assignment_packet_invalid`. Assignments without
 packet fields retain legacy behavior.
 
+## Optional generic evidence manifest
+
+An assignment may opt into one repository-owned evidence manifest by binding
+both `evidence_directory` and `evidence_manifest_path`. The manifest is a
+generic JSON record of bounded artifact metadata; it is not a browser, domain,
+or artifact-management subsystem. Its artifact paths are resolved only inside
+the explicit evidence directory and every artifact must be a regular file with
+the declared SHA-256 and byte length. The verifier also requires the manifest
+to match the active run, assignment, feature, attempt, producer gate, and
+pre-gate candidate fingerprint.
+
+The repository-owned gate creates the manifest and artifacts. `triad-verify`
+validates them after the declared gates and records compact `artifact_manifest`
+metadata in verification evidence. Missing, stale, tampered, out-of-root,
+traversal, symlink, or non-regular artifacts fail closed as
+`evidence_manifest_invalid`; a Reviewer is not dispatched. Assignments without
+`evidence_manifest_path` take the unchanged legacy path. Binary contents are
+not copied into role prompts; the Reviewer remains the semantic judge of any
+accepted reference.
+
 ## Card-declared required gates
 
 The work queue may carry a machine-readable `required_gates` list for an

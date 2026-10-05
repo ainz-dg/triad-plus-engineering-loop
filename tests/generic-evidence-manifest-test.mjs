@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,7 +27,7 @@ async function writeJson(file, value) {
 async function prepareFixture(root, { declareManifest = true, mutateCandidate = false } = {}) {
   const control = path.join(root, "control");
   const product = path.join(control, "product");
-  const evidence = path.join(control, ".loop", "evidence", "VISUAL-001", "attempt-001");
+  const evidence = path.join(control, ".loop", "evidence", "EVIDENCE-001", "attempt-001");
   const assignmentDir = path.join(control, ".loop", "runtime", "assignments");
   await mkdir(path.join(control, "artifacts"), { recursive: true });
   await mkdir(path.join(control, "features"), { recursive: true });
@@ -40,39 +40,39 @@ async function prepareFixture(root, { declareManifest = true, mutateCandidate = 
   }
   const branch = run("git", ["branch", "--show-current"], product).stdout.trim();
   const prdPath = path.join(control, "artifacts", "prd.md");
-  const cardPath = path.join(control, "features", "VISUAL-001.md");
+  const cardPath = path.join(control, "features", "EVIDENCE-001.md");
   const gatesPath = path.join(control, ".loop", "quality-gates.yaml");
-  await writeFile(prdPath, "# Visual evidence fixture\n");
-  await writeFile(cardPath, "# VISUAL-001\n\n## Outcome and scope\n\nBounded evidence fixture.\n\n## Acceptance criteria\n\n- Capture is bound to the verified candidate.\n");
+  await writeFile(prdPath, "# Generic evidence fixture\n");
+  await writeFile(cardPath, "# EVIDENCE-001\n\n## Outcome and scope\n\nBounded evidence fixture.\n\n## Acceptance criteria\n\n- Capture is bound to the verified candidate.\n");
   const assignment = {
     schema_version: 1,
-    assignment_id: "assignment-visual-001",
+    assignment_id: "assignment-evidence-001",
     status: "active",
-    agent_id: "developer-visual-001",
+    agent_id: "developer-evidence-001",
     agent_type: "triad_developer",
-    feature_id: "VISUAL-001",
+    feature_id: "EVIDENCE-001",
     attempt: 1,
     project_root: path.resolve(control),
     worktree: path.resolve(product),
     expected_branch: branch,
     repository_id: "product",
     prd_path: "artifacts/prd.md",
-    card_path: "features/VISUAL-001.md",
+    card_path: "features/EVIDENCE-001.md",
     gates_path: ".loop/quality-gates.yaml",
     expected_prd_sha256: digest(await readFile(prdPath)),
     expected_card_sha256: digest(await readFile(cardPath)),
-    verification_run_id: "run-visual-001",
-    evidence_directory: ".loop/evidence/VISUAL-001/attempt-001",
-    ...(declareManifest ? { evidence_manifest_path: ".loop/evidence/VISUAL-001/attempt-001/manifest.json" } : {}),
+    verification_run_id: "run-evidence-001",
+    evidence_directory: ".loop/evidence/EVIDENCE-001/attempt-001",
+    ...(declareManifest ? { evidence_manifest_path: ".loop/evidence/EVIDENCE-001/attempt-001/manifest.json" } : {}),
   };
   const candidateFingerprint = (await calculateCandidateFingerprint(product)).value;
-  const screenshot = Buffer.from("PNG-fixture-bytes\n");
-  const textual = JSON.stringify({ story: "fixture", viewport: { width: 390, height: 844 }, visible_nodes: 3 }) + "\n";
+  const binaryArtifact = Buffer.from("binary-fixture-bytes\n");
+  const textual = JSON.stringify({ story: "fixture", observations: ["bounded", "candidate-bound"] }) + "\n";
   const emitter = path.join(root, mutateCandidate ? "emit-and-mutate.mjs" : "emit.mjs");
-  await writeFile(emitter, `import { mkdir, writeFile } from "node:fs/promises";\nimport { createHash } from "node:crypto";\nconst root = ${JSON.stringify(evidence)};\nconst screenshot = Buffer.from(${JSON.stringify(screenshot.toString())});\nconst textual = ${JSON.stringify(textual)};\nawait mkdir(root, { recursive: true });\nawait writeFile(root + "/fixture.png", screenshot);\nawait writeFile(root + "/browser-facts.json", textual);\nconst digest = (value) => createHash("sha256").update(value).digest("hex");\nconst manifest = { schema_version: 1, run_id: "run-visual-001", assignment_id: "assignment-visual-001", feature_id: "VISUAL-001", attempt: 1, candidate_fingerprint: ${JSON.stringify(candidateFingerprint)}, status: "current", artifacts: [\n  { path: "fixture.png", media_type: "image/png", sha256: digest(screenshot), size_bytes: screenshot.length, producer_gate_id: "visual-check", run_id: "run-visual-001", assignment_id: "assignment-visual-001", candidate_fingerprint: ${JSON.stringify(candidateFingerprint)}, status: "current" },\n  { path: "browser-facts.json", media_type: "application/json", sha256: digest(textual), size_bytes: Buffer.byteLength(textual), producer_gate_id: "visual-check", run_id: "run-visual-001", assignment_id: "assignment-visual-001", candidate_fingerprint: ${JSON.stringify(candidateFingerprint)}, status: "current" }\n] };\nawait writeFile(root + "/manifest.json", JSON.stringify(manifest, null, 2) + "\\n");\n${mutateCandidate ? `await writeFile(${JSON.stringify(path.join(product, "candidate.txt"))}, "mutated during gate\\n");` : ""}\n`);
+  await writeFile(emitter, `import { mkdir, writeFile } from "node:fs/promises";\nimport { createHash } from "node:crypto";\nconst root = ${JSON.stringify(evidence)};\nconst binaryArtifact = Buffer.from(${JSON.stringify(binaryArtifact.toString())});\nconst textual = ${JSON.stringify(textual)};\nawait mkdir(root, { recursive: true });\nawait writeFile(root + "/capture.bin", binaryArtifact);\nawait writeFile(root + "/evidence-facts.json", textual);\nconst digest = (value) => createHash("sha256").update(value).digest("hex");\nconst manifest = { schema_version: 1, run_id: "run-evidence-001", assignment_id: "assignment-evidence-001", feature_id: "EVIDENCE-001", attempt: 1, candidate_fingerprint: ${JSON.stringify(candidateFingerprint)}, status: "current", artifacts: [\n  { path: "capture.bin", media_type: "application/octet-stream", sha256: digest(binaryArtifact), size_bytes: binaryArtifact.length, producer_gate_id: "evidence-check", run_id: "run-evidence-001", assignment_id: "assignment-evidence-001", candidate_fingerprint: ${JSON.stringify(candidateFingerprint)}, status: "current" },\n  { path: "evidence-facts.json", media_type: "application/json", sha256: digest(textual), size_bytes: Buffer.byteLength(textual), producer_gate_id: "evidence-check", run_id: "run-evidence-001", assignment_id: "assignment-evidence-001", candidate_fingerprint: ${JSON.stringify(candidateFingerprint)}, status: "current" }\n] };\nawait writeFile(root + "/manifest.json", JSON.stringify(manifest, null, 2) + "\\n");\n${mutateCandidate ? `await writeFile(${JSON.stringify(path.join(product, "candidate.txt"))}, "mutated during gate\\n");` : ""}\n`);
   const gateSource = JSON.stringify({
     schema_version: 1,
-    gates: [{ id: "visual-check", command: `node ${JSON.stringify(emitter)}`, required: true, executor: "control-plane", timeout_seconds: 10 }]
+    gates: [{ id: "evidence-check", command: `node ${JSON.stringify(emitter)}`, required: true, executor: "control-plane", timeout_seconds: 10 }]
   });
   await writeFile(gatesPath, `${gateSource}\n`);
   assignment.expected_gates_sha256 = digest(await readFile(gatesPath));
@@ -111,7 +111,7 @@ try {
   assert.equal(valid.evidence.artifact_manifest.run_id, fixture.assignment.verification_run_id);
   assert.equal(valid.evidence.artifact_manifest.assignment_id, fixture.assignment.assignment_id);
   assert.equal(valid.evidence.artifact_manifest.candidate_fingerprint, fixture.candidateFingerprint);
-  assert.deepEqual(valid.evidence.artifact_manifest.artifacts.map((item) => item.media_type), ["image/png", "application/json"]);
+  assert.deepEqual(valid.evidence.artifact_manifest.artifacts.map((item) => item.media_type), ["application/octet-stream", "application/json"]);
 
   const legacy = await prepareFixture(path.join(root, "legacy"), { declareManifest: false });
   const legacyResult = runVerifier(legacy);
@@ -125,41 +125,28 @@ try {
   assert.equal(mutatedResult.evidence.status, "invalidated");
   assert.equal(mutatedResult.evidence.failure.code, "candidate_changed_after_verification");
 
-  const direct = await loadEvidenceManifest({
+  const relativeManifestPath = ".loop/evidence/EVIDENCE-001/attempt-001/manifest.json";
+  const relativeEvidenceDirectory = ".loop/evidence/EVIDENCE-001/attempt-001";
+  const loadBound = (overrides = {}) => loadEvidenceManifest({
     projectRoot: fixture.control,
-    manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json",
-    expectedRunId: "run-visual-001",
-    expectedAssignmentId: "assignment-visual-001",
-    expectedFeatureId: "VISUAL-001",
+    manifestPath: relativeManifestPath,
+    expectedEvidenceDirectory: relativeEvidenceDirectory,
+    expectedRunId: "run-evidence-001",
+    expectedAssignmentId: "assignment-evidence-001",
+    expectedFeatureId: "EVIDENCE-001",
     expectedAttempt: 1,
     expectedCandidateFingerprint: fixture.candidateFingerprint,
-    producerGateIds: ["visual-check"],
+    producerGateIds: ["evidence-check"],
+    ...overrides,
   });
+  const direct = await loadBound();
   assert.equal(direct.artifacts.length, 2);
   await assert.rejects(
-    () => loadEvidenceManifest({
-      projectRoot: fixture.control,
-      manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json",
-      expectedRunId: "run-visual-001",
-      expectedAssignmentId: "assignment-visual-001",
-      expectedFeatureId: "VISUAL-001",
-      expectedAttempt: 1,
-      expectedCandidateFingerprint: fixture.candidateFingerprint,
-      producerGateIds: [],
-    }),
+    () => loadBound({ producerGateIds: [] }),
     (error) => error?.code === "evidence_manifest_invalid" && /passing producer gate/.test(error.message)
   );
   await assert.rejects(
-    () => loadEvidenceManifest({
-      projectRoot: fixture.control,
-      manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json",
-      expectedRunId: "run-visual-001",
-      expectedAssignmentId: "assignment-visual-001",
-      expectedFeatureId: "VISUAL-001",
-      expectedAttempt: 1,
-      expectedCandidateFingerprint: null,
-      producerGateIds: ["visual-check"],
-    }),
+    () => loadBound({ expectedCandidateFingerprint: null }),
     (error) => error?.code === "evidence_manifest_invalid" && /expected candidate fingerprint is required/.test(error.message)
   );
 
@@ -169,21 +156,21 @@ try {
   manifest.artifacts[0].sha256 = "0".repeat(64);
   await writeFile(manifestPath, json(manifest));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /SHA-256 mismatch/.test(error.message)
   );
   await writeFile(manifestPath, originalManifest);
   const unknownManifestProperty = { ...JSON.parse(originalManifest), unexpected: true };
   await writeFile(manifestPath, json(unknownManifestProperty));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /unknown property/.test(error.message)
   );
   await writeFile(manifestPath, originalManifest);
-  const missing = { ...JSON.parse(originalManifest), artifacts: [{ ...JSON.parse(originalManifest).artifacts[0], path: "missing.png" }] };
+  const missing = { ...JSON.parse(originalManifest), artifacts: [{ ...JSON.parse(originalManifest).artifacts[0], path: "missing.bin" }] };
   await writeFile(manifestPath, json(missing));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /is missing/.test(error.message)
   );
   await writeFile(manifestPath, originalManifest);
@@ -192,7 +179,7 @@ try {
   wrongCandidate.artifacts = wrongCandidate.artifacts.map((item) => ({ ...item, candidate_fingerprint: wrongCandidate.candidate_fingerprint }));
   await writeFile(manifestPath, json(wrongCandidate));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /candidate_fingerprint/.test(error.message)
   );
   await writeFile(manifestPath, originalManifest);
@@ -200,29 +187,69 @@ try {
   wrongSize.artifacts[0].size_bytes += 1;
   await writeFile(manifestPath, json(wrongSize));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /size mismatch/.test(error.message)
   );
   await writeFile(manifestPath, originalManifest);
-  const outside = { ...JSON.parse(originalManifest), artifacts: [{ ...JSON.parse(originalManifest).artifacts[0], path: "../../outside.png" }] };
+  const outside = { ...JSON.parse(originalManifest), artifacts: [{ ...JSON.parse(originalManifest).artifacts[0], path: "../../outside.bin" }] };
   await writeFile(manifestPath, json(outside));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /(escapes|parent traversal)/.test(error.message)
   );
   await writeFile(manifestPath, originalManifest);
-  const lexicalTraversal = { ...JSON.parse(originalManifest), artifacts: [{ ...JSON.parse(originalManifest).artifacts[0], path: "nested/../fixture.png" }] };
+  const lexicalTraversal = { ...JSON.parse(originalManifest), artifacts: [{ ...JSON.parse(originalManifest).artifacts[0], path: "nested/../capture.bin" }] };
   await writeFile(manifestPath, json(lexicalTraversal));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /parent traversal/.test(error.message)
   );
+  await writeFile(manifestPath, originalManifest);
+  const outsideBytes = Buffer.from("outside-artifact\n");
+  const outsidePath = path.join(root, "outside.bin");
+  const symlinkPath = path.join(fixture.evidence, "escape.bin");
+  await writeFile(outsidePath, outsideBytes);
+  await symlink(outsidePath, symlinkPath);
+  const symlinkManifest = {
+    ...JSON.parse(originalManifest),
+    artifacts: [{
+      ...JSON.parse(originalManifest).artifacts[0],
+      path: "escape.bin",
+      sha256: digest(outsideBytes),
+      size_bytes: outsideBytes.length,
+    }],
+  };
+  await writeFile(manifestPath, json(symlinkManifest));
+  await assert.rejects(
+    () => loadBound(),
+    (error) => error?.code === "evidence_manifest_invalid" && /symbolic link/.test(error.message)
+  );
+  await rm(symlinkPath, { force: true });
+  const directoryPath = path.join(fixture.evidence, "directory-artifact");
+  await mkdir(directoryPath);
+  const directoryManifest = {
+    ...JSON.parse(originalManifest),
+    artifacts: [{ ...JSON.parse(originalManifest).artifacts[0], path: "directory-artifact" }],
+  };
+  await writeFile(manifestPath, json(directoryManifest));
+  await assert.rejects(
+    () => loadBound(),
+    (error) => error?.code === "evidence_manifest_invalid" && /regular file/.test(error.message)
+  );
+  await rm(directoryPath, { recursive: true, force: true });
+  const manifestOutsideRootPath = path.join(fixture.control, "artifacts", "manifest-outside-evidence.json");
+  await writeFile(manifestOutsideRootPath, originalManifest);
+  await assert.rejects(
+    () => loadBound({ manifestPath: "artifacts/manifest-outside-evidence.json" }),
+    (error) => error?.code === "evidence_manifest_invalid" && /inside the authorized evidence directory/.test(error.message)
+  );
+  await rm(manifestOutsideRootPath, { force: true });
   await writeFile(manifestPath, originalManifest);
   const stale = { ...JSON.parse(originalManifest), run_id: "old-run" };
   stale.artifacts = stale.artifacts.map((item) => ({ ...item, run_id: "old-run" }));
   await writeFile(manifestPath, json(stale));
   await assert.rejects(
-    () => loadEvidenceManifest({ projectRoot: fixture.control, manifestPath: ".loop/evidence/VISUAL-001/attempt-001/manifest.json", expectedRunId: "run-visual-001", expectedAssignmentId: "assignment-visual-001", expectedFeatureId: "VISUAL-001", expectedAttempt: 1, expectedCandidateFingerprint: fixture.candidateFingerprint, producerGateIds: ["visual-check"] }),
+    () => loadBound(),
     (error) => error?.code === "evidence_manifest_invalid" && /run_id/.test(error.message)
   );
   await writeFile(manifestPath, originalManifest);
