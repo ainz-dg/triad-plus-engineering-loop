@@ -70,6 +70,18 @@ results, metrics, worktree/branch, risks, and blockers to the Orchestrator.
 Those are **agent-reported claims**. Do not call a `control-plane` gate passed;
 only the Triad verifier can produce environment-derived verification evidence.
 
+## Process / product naming boundary
+
+Triad process identifiers and bookkeeping metadata (`feature_id`,
+`assignment_id`, `run_id`, attempt numbers, gate IDs, and evidence IDs) are
+control-plane traceability only. Do not introduce them into product-owned
+names, descriptions, identifiers, tests, Storybook metadata, fixtures, source
+identifiers, or user-facing content solely for traceability. Keep that
+traceability in the Card, Assignment, and evidence metadata. Repository-owned
+naming conventions and explicit product requirements remain authoritative; if
+the product requirement itself calls for a particular name or identifier,
+preserve it.
+
 If a required local check fails, report the failure and do not claim readiness.
 For rework, address the Reviewer's bounded findings and leave a new candidate for
 verification. Do not approve, review, commit, push, publish, release, or alter
