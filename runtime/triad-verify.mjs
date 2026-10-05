@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAtomicJson } from "./lib/evidence.mjs";
 import { calculateCandidateFingerprint, collectCandidateChanges, worktreeBranch } from "./lib/fingerprint.mjs";
+import { loadEvidenceManifest } from "./lib/evidence-manifest.mjs";
 import { executeGates, gateSelectionEvidence, loadTrustedGates, resolveGateSelection } from "./lib/gates.mjs";
 import { resolveQualityContract } from "./lib/quality-baseline.mjs";
 import { evaluateScopeContract, parseScopeContract } from "./lib/scope-contract.mjs";
@@ -76,7 +77,7 @@ async function resolveAssignment(projectRoot, trigger, explicitAssignment) {
   return { assignmentPath, assignment: JSON.parse(source), assignmentHash: sha256(source) };
 }
 
-async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null, qualityBaselineFingerprint = null, assignmentPacket = null, repositorySkills = null }) {
+async function buildInvalidEvidence({ runId, trigger, assignment, reason, outputPath, failureCode = "verification_context_invalid", gateSelection = null, qualityBaselineFingerprint = null, assignmentPacket = null, repositorySkills = null, artifactManifest = null }) {
   const evidence = {
     schema_version: 1,
     run_id: runId,
@@ -95,6 +96,7 @@ async function buildInvalidEvidence({ runId, trigger, assignment, reason, output
     assignment_packet: assignmentPacket ?? (assignment?.assignment_packet_path || assignment?.assignment_packet_sha256
       ? { path: assignment.assignment_packet_path ?? null, sha256: assignment.assignment_packet_sha256 ?? null }
       : null),
+    ...(artifactManifest ? { artifact_manifest: artifactManifest } : {}),
     ...(repositorySkills ? { repository_skills: repositorySkills } : {}),
     gates: [],
     required_gates_passed: false,
@@ -169,6 +171,7 @@ async function main() {
   let qualityBaseline = null;
   let assignmentPacket = null;
   let repositorySkills = null;
+  let artifactManifest = null;
   try {
     let assignmentHash;
     ({ assignmentPath, assignment, assignmentHash } = await resolveAssignment(projectRoot, trigger, option("--assignment")));
@@ -202,6 +205,15 @@ async function main() {
     const before = await calculateCandidateFingerprint(worktree);
     const branch = await worktreeBranch(worktree);
     if (assignment.expected_branch && assignment.expected_branch !== branch) throw new Error("worktree branch does not match assignment");
+    if (assignment.evidence_manifest_path) {
+      try {
+        if (path.isAbsolute(assignment.evidence_manifest_path)) throw new Error("evidence manifest path must be project-relative");
+        withinRoot(projectRoot, assignment.evidence_manifest_path, "evidence manifest path");
+      } catch (error) {
+        error.code = "evidence_manifest_invalid";
+        throw error;
+      }
+    }
     const gatesPath = path.resolve(projectRoot, assignment.gates_path ?? ".loop/quality-gates.yaml");
     const trusted = await loadTrustedGates(gatesPath, assignment.expected_gates_sha256);
     if (!trusted.valid) throw new Error("quality gates are missing or changed from their declared hash");
@@ -259,6 +271,54 @@ async function main() {
     const gates = await executeGates(gateSelection.effective_gates, worktree, logDirectory);
     const after = await calculateCandidateFingerprint(worktree);
     const candidateChanged = before.value !== after.value;
+    if (assignment.evidence_manifest_path) {
+      try {
+        artifactManifest = await loadEvidenceManifest({
+          projectRoot,
+          manifestPath: assignment.evidence_manifest_path,
+          expectedRunId: runId,
+          expectedAssignmentId: assignment.assignment_id,
+          expectedFeatureId: assignment.feature_id,
+          expectedAttempt: assignment.attempt,
+          expectedCandidateFingerprint: before.value,
+          producerGateIds: gates.filter((gate) => gate.status === "pass").map((gate) => gate.id),
+        });
+      } catch (error) {
+        const evidence = {
+          schema_version: 1,
+          run_id: runId,
+          feature_id: assignment.feature_id,
+          attempt: assignment.attempt,
+          assignment_id: assignment.assignment_id,
+          assignment_sha256: assignmentHash,
+          trigger,
+          assignment_ref: path.relative(projectRoot, assignmentPath),
+          baseline: {
+            prd_sha256: assignment.expected_prd_sha256,
+            card_sha256: assignment.expected_card_sha256,
+            quality_baseline_fingerprint: qualityBaseline?.fingerprint ?? null,
+            gates_sha256: trusted.actualHash,
+            git_head: before.git_head,
+            candidate_fingerprint: before.value,
+            branch,
+          },
+          candidate_manifest: before.manifest,
+          assignment_packet: assignmentPacket,
+          repository_skills: repositorySkills,
+          scope,
+          gate_selection: gateSelectionEvidence(gateSelection),
+          gates,
+          required_gates_passed: false,
+          status: "invalid_context",
+          failure: { code: error.code ?? "evidence_manifest_invalid", reason: error.message },
+          created_at: new Date().toISOString(),
+        };
+        await writeAtomicJson(outputPath, evidence);
+        process.stdout.write(`${JSON.stringify({ run_id: runId, status: evidence.status, evidence: outputPath })}\n`);
+        process.exitCode = 3;
+        return;
+      }
+    }
     const requiredGatesPassed = !candidateChanged && gates.filter((gate) => gate.required).every((gate) => gate.status === "pass");
     const evidence = {
       schema_version: 1,
@@ -281,6 +341,7 @@ async function main() {
       candidate_manifest: before.manifest,
       assignment_packet: assignmentPacket,
       repository_skills: repositorySkills,
+      ...(artifactManifest ? { artifact_manifest: artifactManifest } : {}),
       scope,
       gate_selection: gateSelectionEvidence(gateSelection),
       gates,
@@ -309,6 +370,7 @@ async function main() {
       qualityBaselineFingerprint: qualityBaseline?.fingerprint ?? null,
       assignmentPacket,
       repositorySkills: repositorySkills ?? error.repositoryContext ?? null,
+      artifactManifest,
     });
     process.stdout.write(`${JSON.stringify({ run_id: runId, status: evidence.status, evidence: outputPath ?? null })}\n`);
     process.exitCode = 3;

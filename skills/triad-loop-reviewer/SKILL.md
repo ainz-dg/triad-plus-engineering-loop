@@ -92,6 +92,15 @@ invalidated, or failed verifier evidence. Independently rerun enough required
 checks and verify every acceptance criterion and metric as pass/fail. Return one
 recommendation with severity-ranked findings and evidence:
 
+When verifier evidence contains `artifact_manifest`, treat it as a generic,
+control-plane-validated reference. Confirm that its run, assignment, feature,
+attempt, current-status, producer-gate, candidate-fingerprint, SHA-256, size,
+and authorized-root bindings are present before relying on it. Use the
+deterministic textual/structured artifact as the portable evidence path; inspect
+an image or other binary only when the active host explicitly supports the
+reference. Artifact presence or a passing repository assertion is not semantic
+approval: visual/layout intent and product quality remain Reviewer judgments.
+
 - `approved` — all required criteria/gates have current evidence and no blocker;
 - `rework` — bounded actionable corrections are needed;
 - `blocked` — an owner decision or external condition is required.

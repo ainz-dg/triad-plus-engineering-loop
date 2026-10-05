@@ -382,6 +382,7 @@ function packetMetadata(assignment, context, packetPath) {
     prd_path: assignment.prd_path ?? null,
     gates_path: assignment.gates_path ?? null,
     verification_run_id: assignment.verification_run_id ?? null,
+    evidence_manifest_path: assignment.evidence_manifest_path ?? null,
     expected_hashes: {
       prd_sha256: assignment.expected_prd_sha256 ?? null,
       card_sha256: assignment.expected_card_sha256 ?? null,
@@ -473,6 +474,8 @@ export async function buildAssignmentPacket(assignment, { projectRoot = process.
     "## Dispatch contract",
     "",
     `The host MUST launch this role with cwd/workdir equal to the assigned product worktree (${metadata.cwd}). Control-workspace paths remain explicit in the metadata and are not discovered by walking from the product repository. Developer and Reviewer use this same packet; Reviewer additionally receives the candidate and verifier evidence.`,
+    "",
+    "If an evidence manifest path is bound above, it is a compact, generic metadata reference only. The verifier validates its artifact bytes and candidate/run binding before Reviewer activation; binary contents are not injected into the role context by this packet.",
     "",
     "## Tool discipline",
     "",

@@ -220,6 +220,18 @@ fail-closed escalation; do not dispatch a Developer or consume retry budget.
    When a Quality Contract is bound, `triad-verify` performs that baseline
    preflight before the expensive gates and records its fingerprint in
    `evidence.baseline.quality_baseline_fingerprint`.
+   When an assignment explicitly binds `evidence_manifest_path`, the repository
+   gate may produce a generic JSON evidence manifest in the declared control
+   workspace path. `triad-verify` loads it only after gate execution, resolves
+   every artifact under the manifest's containing evidence root, verifies the
+   byte SHA-256 and size, and checks the run, assignment, feature, attempt,
+   producer-gate, current-status, and exact pre-gate candidate-fingerprint
+   bindings. Missing, stale, tampered, out-of-root, or path-traversal evidence
+   is `invalid_context` with `evidence_manifest_invalid`; no Reviewer is
+   dispatched. The resulting evidence contains compact artifact metadata only.
+   Do not inject binary bytes into role prompts. The Reviewer receives the
+   ordinary verifier evidence and may inspect an approved reference when the
+   host supports it; text/structured evidence remains the portable fallback.
 5. A passing verifier result is **environment-derived evidence**. Move only then
    to `in_review`. Missing, stale, failed, timed-out, invalid-context, or
    invalidated evidence never advances the card.

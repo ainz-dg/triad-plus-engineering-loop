@@ -54,6 +54,44 @@
         "sha256": { "type": ["string", "null"], "pattern": "^[a-fA-F0-9]{64}$" }
       }
     },
+    "artifact_manifest": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["path", "sha256", "root", "schema_version", "run_id", "assignment_id", "feature_id", "attempt", "candidate_fingerprint", "status", "artifacts"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "root": { "type": "string", "minLength": 1 },
+        "schema_version": { "const": 1 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "assignment_id": { "type": "string", "minLength": 1 },
+        "feature_id": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "candidate_fingerprint": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "status": { "const": "current" },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "root", "media_type", "sha256", "size_bytes", "producer_gate_id", "run_id", "assignment_id", "candidate_fingerprint", "status"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "root": { "type": "string", "minLength": 1 },
+              "media_type": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+              "size_bytes": { "type": "integer", "minimum": 0 },
+              "producer_gate_id": { "type": "string", "minLength": 1 },
+              "run_id": { "type": "string", "minLength": 1 },
+              "assignment_id": { "type": "string", "minLength": 1 },
+              "candidate_fingerprint": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+              "status": { "const": "current" }
+            }
+          }
+        }
+      }
+    },
     "scope": {
       "type": "object",
       "properties": {

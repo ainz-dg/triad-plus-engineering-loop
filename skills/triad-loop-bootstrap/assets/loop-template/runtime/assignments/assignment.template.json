@@ -32,6 +32,7 @@
   ],
   "verification_run_id": "REPLACE_ME_UUID",
   "evidence_directory": ".loop/evidence/REPLACE_ME_FEATURE_ID/attempt-001",
+  "evidence_manifest_path": null,
   "assignment_packet_path": null,
   "assignment_packet_sha256": null,
   "context": {
