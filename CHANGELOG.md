@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.15.0 — 2026-10-07
+
+- Add a minimal, generic evidence manifest and integrity seam with
+  evidence-root, candidate, run, and assignment binding plus fail-closed
+  validation.
+- Preserve backward-compatible no-manifest behavior and compact evidence
+  metadata without automatic binary prompt injection.
+- Keep Triad process metadata separate from product-owned naming; control-plane
+  IDs are not imposed on product names solely for traceability.
+
 ## 1.14.0 — 2026-10-02
 
 - Require an independent Reviewer to report bounded semantic compliance for
