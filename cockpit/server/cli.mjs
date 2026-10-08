@@ -27,9 +27,10 @@ try {
     port,
     log: ({ method, route, status }) => process.stderr.write(`${method} ${route} ${status}\n`),
   });
-  // The session URL carries the secret; it is printed once for the local owner.
+  // The URL carries a one-time login code (not the session secret). It is
+  // printed once to this terminal and stops working after its first use.
   process.stdout.write(`Triad Cockpit (read-only) listening on http://${started.address}:${started.port}\n`);
-  process.stdout.write(`Open once to establish a session: ${started.sessionUrl}\n`);
+  process.stdout.write(`Open once to establish a session (single use): ${started.sessionUrl}\n`);
   process.stdout.write("Press Ctrl+C to stop.\n");
   const stop = async () => {
     await started.close();

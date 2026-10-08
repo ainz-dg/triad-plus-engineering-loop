@@ -60,16 +60,26 @@ function bearerToken(header) {
 }
 
 /**
- * Build the request handler. `log` receives only method, route template, and
- * status: never query strings, tokens, paths, or artifact content.
+ * Build the request handler.
+ *
+ * Two secrets: `token` is the session secret (cookie or Bearer) and never
+ * appears in a URL; `loginCode` is a one-time code that may appear in the
+ * launch URL and is exchanged, once, for the session cookie via a 303 redirect
+ * to a token-free location. `log` receives only method, route template, and
+ * status: never query strings, secrets, paths, or artifact content.
  */
-export async function createCockpitHandler({ controlRoot, token, log = () => {} }) {
+export async function createCockpitHandler({ controlRoot, token, loginCode = null, log = () => {} }) {
   if (typeof token !== "string" || token.length < 32) throw new Error("a session token of at least 32 characters is required");
+  if (loginCode !== null && (typeof loginCode !== "string" || loginCode.length < 32 || loginCode === token)) {
+    throw new Error("a distinct one-time login code of at least 32 characters is required");
+  }
   const reader = await createWorkspaceReader(controlRoot);
   let allowedHosts = new Set();
+  let pendingCode = loginCode;
 
   const routes = [
     { method: "GET", pattern: /^\/api\/session$/, name: "/api/session", handler: session, public: true },
+    { method: "GET", pattern: /^\/$/, name: "/", handler: async () => [200, { cockpit: "read-only", session: "active", api: "/api/workspace" }] },
     { method: "GET", pattern: /^\/api\/workspace$/, name: "/api/workspace", handler: async () => [200, await readWorkspace(reader, { cockpitVersion })] },
     { method: "GET", pattern: /^\/api\/projects\/([^/]+)\/cards$/, name: "/api/projects/:project/cards", handler: withProject(async (project) => [200, await listCards(reader, project)]) },
     {
@@ -114,11 +124,15 @@ export async function createCockpitHandler({ controlRoot, token, log = () => {} 
   }
 
   async function session(_params, url, response) {
-    if (!sameSecret(token, url.searchParams.get("token"))) {
-      return [401, { error: { code: "unauthorized", message: "invalid session token" } }];
+    // Single use: once exchanged (or if none was issued) the code is dead, so a
+    // copy left in terminal scrollback, history, or a screenshot is worthless.
+    if (pendingCode === null || !sameSecret(pendingCode, url.searchParams.get("code"))) {
+      return [401, { error: { code: "unauthorized", message: "invalid or already used login code" } }];
     }
+    pendingCode = null;
     response.setHeader("Set-Cookie", `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`);
-    return [200, { session: "established", read_only: true }];
+    // 303 to a fixed, query-free location removes the code from the address bar.
+    return [303, null, { Location: "/" }];
   }
 
   async function handle(request, response) {
@@ -153,8 +167,13 @@ export async function createCockpitHandler({ controlRoot, token, log = () => {} 
       let params;
       try { params = matched.pattern.exec(url.pathname).slice(1).map((value) => decodeURIComponent(value)); }
       catch { error(response, 400, "bad_request", "malformed path parameter"); return; }
-      const [status, body] = await matched.handler(params, url, response);
-      send(response, status, body);
+      const [status, body, headers] = await matched.handler(params, url, response);
+      if (body === null) {
+        response.writeHead(status, { ...SECURITY_HEADERS, "Content-Length": 0, ...headers });
+        response.end();
+      } else {
+        send(response, status, body, headers);
+      }
     } catch (caught) {
       if (caught instanceof AccessError) error(response, 403, caught.code, caught.message);
       else error(response, 500, "internal_error", "the request could not be completed");
@@ -173,7 +192,8 @@ export async function createCockpitHandler({ controlRoot, token, log = () => {} 
 export async function startCockpitServer({ controlRoot, port = 0, host = LOOPBACK, token = randomBytes(32).toString("hex"), log } = {}) {
   if (host !== LOOPBACK) throw new Error(`the Cockpit binds only to ${LOOPBACK}`);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("port must be an integer between 0 and 65535");
-  const handler = await createCockpitHandler({ controlRoot, token, log });
+  const loginCode = randomBytes(32).toString("hex");
+  const handler = await createCockpitHandler({ controlRoot, token, loginCode, log });
   const server = http.createServer(handler);
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;
@@ -191,7 +211,8 @@ export async function startCockpitServer({ controlRoot, port = 0, host = LOOPBAC
     token,
     address: address.address,
     port: address.port,
-    sessionUrl: `http://${LOOPBACK}:${address.port}/api/session?token=${token}`,
+    // Carries only the one-time code, never the session secret.
+    sessionUrl: `http://${LOOPBACK}:${address.port}/api/session?code=${loginCode}`,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }

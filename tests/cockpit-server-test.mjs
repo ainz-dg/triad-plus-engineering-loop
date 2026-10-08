@@ -22,7 +22,6 @@ for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execF
 }
 syncBuiltinESMExports();
 const { startCockpitServer } = await import("../cockpit/server/server.mjs");
-const { parseWorkQueueItems } = await import("../cockpit/server/work-queue.mjs");
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -264,7 +263,12 @@ try {
   assert.deepEqual(listed["1.2"].observed.attempt_numbers, [1, 2]);
   assert.equal(listed["1.3"].observed.verification_count, 0);
   assert.equal(listed["1.3"].observed.latest_verification, null);
-  assert.ok(cards.body.work_queue.warnings.some((warning) => /nested/.test(warning)), "nested YAML is reported, not guessed");
+  // The nested `owner` mapping is dropped and named, never reported as null.
+  assert.equal(cards.body.work_queue.status, "partial");
+  assert.deepEqual(listed["1.3"].declared.unsupported_keys, ["owner"]);
+  assert.equal(Object.hasOwn(listed["1.3"].declared, "owner"), false);
+  assert.equal(listed["1.3"].declared.depends_on, null, "an absent list is null, not an invented []");
+  assert.ok(cards.body.work_queue.warnings.some((warning) => warning.includes("key owner not read")));
   assert.deepEqual(cards.body.unmatched_evaluations.map((entry) => entry.feature_id), ["1.1+1.2"]);
   const diagnosticSources = cards.body.diagnostics.map((entry) => entry.source);
   assert.ok(diagnosticSources.includes(".loop/runtime/assignments/broken.json"), "invalid assignment is reported");
@@ -278,10 +282,18 @@ try {
   const verification11 = attempt11.verifications[0];
   assert.equal(verification11.status, "pass");
   assert.equal(verification11.provenance, "code-written");
-  assert.equal(verification11.freshness.status, "current");
+  // Bindings, recency, and the candidate are separate; the candidate is never
+  // claimed checked and no single "current" verdict exists.
+  assert.equal(verification11.freshness.control_bindings.status, "unchanged");
+  assert.ok(verification11.freshness.control_bindings.checks.every((check) => check.result === "match"));
+  assert.equal(verification11.freshness.recency.status, "latest_for_card");
+  assert.equal(verification11.freshness.candidate.status, "not_checked");
+  assert.equal(verification11.freshness.candidate.recorded_fingerprint, "fp-11");
+  assert.equal(Object.hasOwn(verification11.freshness, "status"), false);
+  assert.ok(!JSON.stringify(card11View).includes('"current"'));
   assert.equal(verification11.gates[0].stdout_log, ".loop/evidence/1.1/attempt-001/logs/npm-test.stdout.log");
   assert.equal(card11View.evaluations[0].status, "valid");
-  assert.equal(card11View.evaluations[0].candidate_binding.result, "matches_latest_pass");
+  assert.equal(card11View.evaluations[0].candidate_binding.result, "same_as_latest_pass_record");
   assert.equal(card11View.control_run.status, "done");
   assert.equal(card11View.control_run.reviewer.status, "valid");
   assert.equal(card11View.control_run.reviewer.decision, "approved");
@@ -291,11 +303,12 @@ try {
   const card12View = (await request("/api/projects/root/cards/1.2")).body;
   const [attempt121, attempt122] = card12View.attempts;
   assert.equal(attempt121.verifications[0].status, "fail");
-  assert.equal(attempt121.verifications[0].freshness.status, "stale");
-  assert.ok(attempt121.verifications[0].freshness.checks.some((check) => check.check === "newer_verification_for_card"));
+  assert.equal(attempt121.verifications[0].freshness.control_bindings.status, "changed");
+  assert.equal(attempt121.verifications[0].freshness.recency.status, "superseded");
   assert.equal(attempt121.assignments[0].packet.status, "missing");
-  assert.equal(attempt122.verifications[0].freshness.status, "stale");
-  assert.deepEqual(attempt122.verifications[0].freshness.checks.find((check) => check.check === "card_sha256"), { check: "card_sha256", result: "mismatch" });
+  assert.equal(attempt122.verifications[0].freshness.control_bindings.status, "changed");
+  assert.equal(attempt122.verifications[0].freshness.recency.status, "latest_for_card");
+  assert.deepEqual(attempt122.verifications[0].freshness.control_bindings.checks.find((check) => check.check === "card_sha256"), { check: "card_sha256", result: "mismatch" });
   assert.deepEqual(attempt122.documents.map((document) => document.source), [".loop/evidence/1.2/attempt-002/review-report.md"]);
   assert.equal(card12View.evaluations[0].status, "invalid");
   assert.equal(card12View.evaluations[0].provenance, "agent-declared");
@@ -345,13 +358,39 @@ try {
   // Authentication and session.
   assert.equal((await request("/api/workspace", { auth: false })).status, 401);
   assert.equal((await request("/api/workspace", { auth: false, headers: { authorization: "Bearer wrong" } })).status, 401);
-  assert.equal((await request("/api/session?token=wrong", { auth: false })).status, 401);
-  const session = await request(`/api/session?token=${cockpit.token}`, { auth: false });
-  assert.equal(session.status, 200);
+  // The launch URL carries only a one-time code, never the session secret.
+  const launch = new URL(cockpit.sessionUrl);
+  const loginCode = launch.searchParams.get("code");
+  assert.equal(launch.pathname, "/api/session");
+  assert.deepEqual([...launch.searchParams.keys()], ["code"]);
+  assert.ok(loginCode.length >= 64 && loginCode !== cockpit.token);
+  assert.ok(!cockpit.sessionUrl.includes(cockpit.token), "the session secret never appears in a URL");
+  // The session secret is not accepted as a login code, and wrong codes fail.
+  assert.equal((await request(`/api/session?token=${cockpit.token}`, { auth: false })).status, 401);
+  assert.equal((await request(`/api/session?code=${cockpit.token}`, { auth: false })).status, 401);
+  assert.equal((await request("/api/session?code=wrong", { auth: false })).status, 401);
+
+  const session = await request(`/api/session?code=${loginCode}`, { auth: false });
+  // 303 to a fixed, query-free location: the code leaves the address bar.
+  assert.equal(session.status, 303);
+  assert.equal(session.headers.location, "/");
+  assert.equal(session.headers["referrer-policy"], "no-referrer");
+  assert.equal(session.headers["cache-control"], "no-store");
+  assert.equal(session.body, null, "the redirect has no body that could link elsewhere");
   const cookie = session.headers["set-cookie"][0];
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Strict/);
-  assert.equal((await request("/api/workspace", { auth: false, headers: { cookie: cookie.split(";")[0] } })).status, 200);
+  assert.ok(!cookie.includes(loginCode), "the cookie holds the session secret, not the code");
+  const sessionCookie = cookie.split(";")[0];
+  const landing = await request("/", { auth: false, headers: { cookie: sessionCookie } });
+  assert.equal(landing.status, 200);
+  assert.equal(landing.headers["referrer-policy"], "no-referrer");
+  assert.equal((await request("/api/workspace", { auth: false, headers: { cookie: sessionCookie } })).status, 200);
+  // Single use: a replayed launch URL (history, scrollback, screenshot) fails.
+  assert.equal((await request(`/api/session?code=${loginCode}`, { auth: false })).status, 401);
+  assert.equal((await request("/", { auth: false })).status, 401, "the landing page still requires the session");
+  // Every response, including errors, forbids Referer leakage.
+  assert.equal((await request("/api/projects/root/cards/9.9")).headers["referrer-policy"], "no-referrer");
 
   // DNS-rebinding style Host headers are refused even with a valid token.
   assert.equal((await request("/api/workspace", { headers: { host: "evil.example" } })).status, 403);
@@ -371,7 +410,9 @@ try {
 // No secret reached any response, no sensitive data reached the server log.
 assert.ok(bodies.every((body) => !body.includes(secret)), "outside or excluded content must never be served");
 const logText = JSON.stringify(logs);
-assert.ok(!logText.includes(cockpit.token), "token must not be logged");
+assert.ok(!logText.includes(cockpit.token), "session secret must not be logged");
+assert.ok(!logText.includes(new URL(cockpit.sessionUrl).searchParams.get("code")), "login code must not be logged");
+assert.ok(logs.some((entry) => entry.route === "/api/session" && entry.status === 303), "the exchange itself is logged by route only");
 assert.ok(!logText.includes("secret") && !logText.includes("?"), "paths and queries must not be logged");
 assert.ok(logs.every((entry) => Object.keys(entry).sort().join() === "method,route,status"));
 
@@ -385,10 +426,5 @@ for (const name of await readdir(path.join(repositoryRoot, "cockpit", "server"))
   // Method calls such as RegExp#exec are fine; bare process primitives are not.
   assert.ok(!/child_process|(?<![.\w])(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/.test(source), `${name} must not reference process execution`);
 }
-
-// The work-queue reader keeps IDs as strings and stops at the next top-level key.
-const parsed = parseWorkQueueItems("items:\n  - id: 1.10\n    attempts: 3\n    state: 'ready' # comment\nother:\n  - id: X\n");
-assert.deepEqual(parsed.items.map((item) => [item.id, item.state, item.attempts]), [["1.10", "ready", "3"]]);
-assert.deepEqual(parseWorkQueueItems("version: 2\n"), { items: [], warnings: ["no top-level items: list"] });
 
 process.stdout.write("cockpit server tests passed\n");

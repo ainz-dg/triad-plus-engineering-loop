@@ -23,9 +23,10 @@ and does not change how Triad+ runs:
 node cockpit/server/cli.mjs --control <project-control-path> [--port <n>]
 ```
 
-The server binds to `127.0.0.1` (port `0` = ephemeral) and prints a one-time
-session URL. Opening it sets an `HttpOnly`, `SameSite=Strict` cookie; scripts
-may send `Authorization: Bearer <token>` instead. Stop it with Ctrl+C.
+The server binds to `127.0.0.1` (port `0` = ephemeral) and prints a launch
+URL carrying a **one-time login code**. Opening it sets an `HttpOnly`,
+`SameSite=Strict` session cookie and redirects (`303`) to `/`, so the code
+leaves the address bar and cannot be replayed. Stop the server with Ctrl+C.
 
 ## Data model
 
@@ -68,18 +69,76 @@ Every object carries `provenance`, so a client can tell fact from declaration.
 
 ## Freshness of verifier evidence
 
-Code-written evidence is not assumed current. For each `verification.json` the
-backend hashes the control-workspace files the verifier bound and reports:
+Code-written evidence is not assumed valid now. Each verification gets a
+`freshness` object with three **independent** axes and deliberately no
+combined verdict, so nothing reads as "the candidate was re-verified".
 
-| Status | Meaning |
+| Axis | Values | What was actually checked |
+|---|---|---|
+| `control_bindings` | `unchanged`, `changed`, `unverifiable` | SHA-256 of the control-workspace files the verifier bound (assignment, card, PRD, gates) against the hashes it recorded. Each comparison is listed in `checks`. |
+| `recency` | `latest_for_card`, `superseded` | Whether a later `verification.json` exists for the same card. |
+| `candidate` | always `not_checked` | Nothing. The product worktree is never inspected, because that would require running `git`. `recorded_fingerprint` is what the verifier recorded, not a fresh measurement. |
+
+So `control_bindings: unchanged` plus `recency: latest_for_card` means "the
+latest recorded evidence still binds to today's control files". It does not
+mean the candidate still matches.
+
+`changed` does not mean the historical result was wrong; it means it no longer
+describes the current files. Evaluator+ `candidate_binding` likewise compares
+recorded fingerprints only (`same_as_latest_pass_record` or
+`differs_from_latest_pass_record`).
+
+## Reading `work-queue.yaml`
+
+`work-queue.yaml` is agent-written, and its card states are declarations. The
+reader in `server/work-queue.mjs` is **fail-closed**: it returns a value
+exactly as the author wrote it, or it does not return it and says so. It never
+returns a truncated, unescaped, type-coerced, or defaulted value.
+
+| Input | Outcome |
 |---|---|
-| `current` | The assignment, card, PRD, and gates hashes all match, and this is the newest verification for the card. |
-| `stale` | At least one bound file changed after verification. The historical result is not wrong; it no longer describes the current files. |
-| `superseded` | The bindings match, but a newer verification exists for the card. |
-| `unknown` | A binding was not recorded, is missing, or lies outside the allowlist. |
+| The template shape: plain or quoted single-line scalars, single-line flow lists of plain scalars, block lists of scalars, null forms, comments | Read. |
+| Valid YAML outside that shape: anchors, aliases, tags, block or multi-line scalars, escapes, nested mappings or lists, duplicate keys | The **key** is not returned. It is listed in `unsupported_keys` and warned about. |
+| Item structure that cannot be read safely: merge keys, quoted or complex keys, missing or non-scalar `id`, duplicate `id` | The **item** is not returned. It is warned about. |
+| Text that is not valid YAML (unclosed quotes or brackets, `a: b` in a value, reserved indicators), tabs, multiple documents, a non-block `items` | **Nothing** is returned and the queue is `unreadable`. A real parser rejects these documents, and a line-local reading could attribute later lines to the wrong key. |
 
-The product worktree is never inspected (that would require running `git`), so
-a candidate that changed after verification is not detectable here.
+Downstream, the model keeps uncertainty visible:
+- an unread or absent list is `null`, never `[]`;
+- a card missing from a queue that was only partly read is `not_determinable`,
+  not `not_declared`;
+- the queue `status` is `ok`, `partial`, `unreadable`, or `missing`.
+
+### Why not a YAML library
+
+- **Faithfulness.** A YAML 1.1/1.2 core-schema parser resolves `id: 1.10` to
+  the float `1.1`, `on`/`yes` to booleans, and so on. Triad card IDs such as
+  BMAD-style `1.10` would be corrupted. This reader keeps the author's text.
+- **No runtime dependency.** `triad-plus` has zero dependencies. The Core
+  already uses purpose-built readers for the same reason (`parseQualityGates`
+  in `runtime/lib/gates.mjs`, and the `project.yaml` repository reader).
+- **Narrow scope.** Only `items[]` is needed. `run-state.yaml` is not
+  interpreted at all; it can only be fetched raw.
+- **Drift needs failing closed anyway.** A full parser would accept every
+  construct an agent invents, and the Cockpit would still have to decide what
+  it means. Refusing unknown shapes is the safer contract for declarations.
+
+### Evidence
+
+`tests/cockpit-work-queue-test.mjs` covers each row of the table above,
+asserting both that the value is absent and that a warning is emitted.
+
+A differential check against Ruby Psych 3.1 compared this reader with that
+parser's node values. The script is not part of the repository because Ruby is
+not a project dependency. The corpus was every test snippet plus the 36
+`work-queue.yaml` files found in local control workspaces, worktrees, and
+templates: 87 documents in total.
+
+| Measure | Result |
+|---|---|
+| Returned values compared | 1,053, across 128 items |
+| Mismatches | 0 |
+| Documents Psych rejects but this reader returned data from | 0 |
+| Valid documents refused conservatively | 5 (multi-document markers, inline, anchored, or duplicate `items`, `items` as a mapping) |
 
 ## Endpoints
 
@@ -88,7 +147,8 @@ require the session.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/session?token=…` | Sets the session cookie. |
+| `GET /api/session?code=…` | Exchanges the one-time login code for the session cookie. Returns `303 Location: /` with no body; a second use returns `401`. |
+| `GET /` | A small JSON landing object (requires the session). |
 | `GET /api/workspace` | Installation manifest status, team roles, discovered projects. |
 | `GET /api/projects/:project/cards` | Card list: declared queue data next to observed evidence, plus `unmatched_evaluations` and `diagnostics`. |
 | `GET /api/projects/:project/cards/:card` | Attempts (assignments, packets, verifications with gates, freshness, and documents), Evaluator+ results, Reviewer documents, deterministic-driver output. |
@@ -151,15 +211,22 @@ are abbreviated.
       "stdout_log": ".loop/evidence/1.2/attempt-002/logs/npm-test.stdout.log" }
   ],
   "freshness": {
-    "status": "stale",
     "provenance": "cockpit-derived",
-    "checks": [
-      { "check": "assignment_sha256", "result": "match" },
-      { "check": "card_sha256", "result": "mismatch" },
-      { "check": "prd_sha256", "result": "match" },
-      { "check": "gates_sha256", "result": "match" }
-    ],
-    "limit": "product worktree and candidate fingerprint are not re-inspected"
+    "control_bindings": {
+      "status": "changed",
+      "checks": [
+        { "check": "assignment_sha256", "result": "match" },
+        { "check": "card_sha256", "result": "mismatch" },
+        { "check": "prd_sha256", "result": "match" },
+        { "check": "gates_sha256", "result": "match" }
+      ]
+    },
+    "recency": { "status": "latest_for_card" },
+    "candidate": {
+      "status": "not_checked",
+      "recorded_fingerprint": "fp-122",
+      "reason": "the product worktree is not inspected; whether the current candidate still matches this evidence is unknown"
+    }
   }
 }
 ```
@@ -181,8 +248,20 @@ POST /api/workspace
   - the `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`, which
     blocks DNS rebinding;
   - no CORS headers are sent.
-- **Session:** a 256-bit random token per process, compared in constant time.
-  It is printed once to the launching terminal and never logged.
+- **Session:** two independent 256-bit random secrets per process, compared in
+  constant time.
+  - The **login code** is the only secret that appears in a URL. It is printed
+    once to the launching terminal and is valid for a single exchange.
+  - The exchange answers `303 Location: /` (a fixed, query-free path) with no
+    body, so the code leaves the address bar. A replay from history,
+    scrollback, or a screenshot gets `401`.
+  - The **session secret** travels only in the `HttpOnly`, `SameSite=Strict`
+    cookie, or in an `Authorization: Bearer` header for in-process callers.
+    It is never put in a URL.
+  - Referer leakage is blocked twice. Every response, including the redirect
+    and errors, carries `Referrer-Policy: no-referrer`. JSON responses and
+    `default-src 'none'` mean no page loads a third-party resource.
+  - Neither secret is logged: the request log has no query strings.
 - **Path policy** (paths are relative to the project base):
   - allowlist: `.loop/**`, `artifacts/**`, `features/**`, `card-reports/**`,
     `handoff.md`, `feature-plan.md`, `project.yaml`;
@@ -207,9 +286,14 @@ POST /api/workspace
 
 - Run liveness is not recorded by Triad+, so nothing here can say that a role
   is running or was interrupted.
-- `work-queue.yaml` is read by a tolerant subset reader. Nested mappings and
-  YAML features outside the template are reported as warnings, not guessed.
-  `run-state.yaml` is not interpreted; it can only be fetched raw.
+- `work-queue.yaml` is read by a fail-closed reader of the template shape (see
+  above). Constructs outside it are not read. `run-state.yaml` is not
+  interpreted; it can only be fetched raw.
+- The candidate is never re-checked (`freshness.candidate` is always
+  `not_checked`).
+- The login code is printed to the launching terminal. Anyone who can read
+  that terminal before first use can open the session; after first use the
+  printed URL is dead.
 - Assignment `status` is never updated by runtime code, so `declared_status:
   "active"` does not mean the attempt is in progress.
 - Re-verifying the same attempt directory overwrites its `verification.json`.
@@ -223,12 +307,19 @@ POST /api/workspace
 
 ```bash
 node tests/cockpit-server-test.mjs
+node tests/cockpit-work-queue-test.mjs
 ```
 
-The suite builds a synthetic workspace in a temporary directory and verifies:
-- correct reads, including missing, invalid, stale, and superseded artifacts;
-- refusal of traversal, symlink escape, non-allowlisted files, bad sessions,
-  foreign Host headers, and every mutation method;
+The server suite builds a synthetic workspace in a temporary directory and
+verifies:
+- correct reads, including missing, invalid, changed-binding, and superseded
+  artifacts;
+- refusal of traversal, symlink escape, non-allowlisted files, bad or replayed
+  sessions, foreign Host headers, and every mutation method;
+- the session flow: one-time code, `303` to `/`, `no-referrer` everywhere,
+  secret never in a URL;
 - an unchanged filesystem, by byte-level snapshot;
 - no child process, by runtime interception plus a static check;
-- logs free of tokens and paths.
+- logs free of secrets and paths.
+
+The work-queue suite covers every row of the fail-closed table.

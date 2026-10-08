@@ -212,7 +212,8 @@ async function readWorkQueue(reader, project) {
   if (!text) return { status: "missing", source: projectFile(project, relative), items: [], warnings: [] };
   if (text.truncated) return { status: "invalid", source: projectFile(project, relative), items: [], warnings: ["work queue exceeds the size bound"] };
   const parsed = parseWorkQueueItems(text.text);
-  return { status: parsed.items.length || !parsed.warnings.length ? "ok" : "partial", source: projectFile(project, relative), sha256: text.sha256, ...parsed };
+  const status = parsed.unreadable ? "unreadable" : parsed.warnings.length ? "partial" : "ok";
+  return { status, source: projectFile(project, relative), sha256: text.sha256, items: parsed.items, warnings: parsed.warnings };
 }
 
 async function collectProject(reader, project) {
@@ -242,9 +243,12 @@ async function fileHash(reader, project, declared) {
 }
 
 /**
- * Decide whether one verification still binds to the files it verified.
- * Only control-workspace hashes are compared; the product worktree is never
- * inspected, so a candidate changed after verification is not detectable here.
+ * Describe one verification along three independent axes so no single word
+ * can be read as "the candidate was re-verified":
+ * - control_bindings: do the control-workspace files the verifier hashed
+ *   (assignment, card, PRD, gates) still have those hashes?
+ * - recency: is this the newest verification recorded for the card?
+ * - candidate: never checked; the product worktree is not inspected.
  */
 async function freshness(reader, project, verification, assignment, newerExists) {
   const checks = [];
@@ -262,17 +266,19 @@ async function freshness(reader, project, verification, assignment, newerExists)
   await compare("card_sha256", assignment?.value.card_path, evidence.baseline?.card_sha256);
   await compare("prd_sha256", assignment?.value.prd_path, evidence.baseline?.prd_sha256);
   await compare("gates_sha256", assignment?.value.gates_path, evidence.baseline?.gates_sha256);
-  if (newerExists) checks.push({ check: "newer_verification_for_card", result: "present" });
 
-  let status = "current";
-  if (checks.some((check) => check.result === "mismatch")) status = "stale";
-  else if (newerExists) status = "superseded";
-  else if (checks.some((check) => check.result !== "match")) status = "unknown";
+  let bindings = "unchanged";
+  if (checks.some((check) => check.result === "mismatch")) bindings = "changed";
+  else if (checks.some((check) => check.result !== "match")) bindings = "unverifiable";
   return {
-    status,
     provenance: PROVENANCE.derived,
-    checks,
-    limit: "product worktree and candidate fingerprint are not re-inspected",
+    control_bindings: { status: bindings, checks },
+    recency: { status: newerExists ? "superseded" : "latest_for_card" },
+    candidate: {
+      status: "not_checked",
+      recorded_fingerprint: evidence.baseline?.candidate_fingerprint ?? null,
+      reason: "the product worktree is not inspected; whether the current candidate still matches this evidence is unknown",
+    },
   };
 }
 
@@ -378,7 +384,16 @@ function declaredCount(value) {
 
 function declaredCard(collected, id) {
   const item = collected.workQueue.items.find((entry) => entry.id === id);
-  if (!item) return { status: "not_declared", provenance: PROVENANCE.declared, source: collected.workQueue.source };
+  if (!item) {
+    // Absence is only meaningful when the whole queue was read.
+    const complete = collected.workQueue.status === "ok";
+    return {
+      status: complete ? "not_declared" : "not_determinable",
+      provenance: PROVENANCE.declared,
+      source: collected.workQueue.source,
+      ...(complete ? {} : { reason: `work queue is ${collected.workQueue.status}` }),
+    };
+  }
   return {
     status: "declared",
     provenance: PROVENANCE.declared,
@@ -386,9 +401,14 @@ function declaredCard(collected, id) {
     title: item.title ?? null,
     state: item.state ?? null,
     attempts: declaredCount(item.attempts),
-    depends_on: Array.isArray(item.depends_on) ? item.depends_on : [],
-    required_gates: Array.isArray(item.required_gates) ? item.required_gates : [],
+    // Returned as written (list, scalar, or null); a missing or unread key is
+    // null, never an invented empty list.
+    depends_on: item.depends_on ?? null,
+    required_gates: item.required_gates ?? null,
     card_path: item.card ?? null,
+    // Keys present in the YAML but deliberately not read; their absence above
+    // means "not interpreted", never "empty".
+    unsupported_keys: item.unsupported_keys,
   };
 }
 
@@ -469,7 +489,8 @@ async function evaluatorViews(reader, project, collected, id, latestPass) {
     const expected = latestPass?.value.baseline?.candidate_fingerprint;
     view.candidate_binding = {
       provenance: PROVENANCE.derived,
-      result: !expected ? "no_passing_verification" : fingerprint === expected ? "matches_latest_pass" : "differs_from_latest_pass",
+      result: !expected ? "no_passing_verification" : fingerprint === expected ? "same_as_latest_pass_record" : "differs_from_latest_pass_record",
+      note: "compares recorded fingerprints only; the product worktree is not inspected",
     };
     views.push(view);
   }
@@ -587,7 +608,7 @@ export async function readCard(reader, project, cardId) {
     control_run: await controlRunView(reader, project, cardId),
     limits: [
       "`assignments[].declared_status` is never updated by runtime code and does not indicate completion.",
-      "Freshness compares control-workspace hashes only; the product worktree is not inspected.",
+      "`freshness.control_bindings` compares control-workspace hashes only; `freshness.candidate` is always `not_checked`.",
       "Re-verifying the same attempt overwrites its verification.json; earlier results for that directory are not recoverable.",
     ],
   };
