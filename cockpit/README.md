@@ -12,10 +12,12 @@ and does not change how Triad+ runs:
 - Stateless: every request re-reads the artifacts. No database, cache, daemon,
   or new persistence.
 - Read-only: only `GET`/`HEAD`; no file is written; no process is started.
-- Reuses existing Core validators instead of re-implementing contracts:
-  `validateInstallationManifest`, `validateTeamConfiguration`,
-  `validateAssignmentPacket`, `validateReviewerResult`, and
-  `validateEvaluatorResult`.
+- Reuses existing Core contracts instead of re-implementing them:
+  - the validators `validateInstallationManifest`, `validateTeamConfiguration`,
+    `validateAssignmentPacket`, `validateReviewerResult`, and
+    `validateEvaluatorResult`;
+  - the loader `loadQualityBaseline`;
+  - the shipped verification-evidence schema.
 
 ## Run the prototype
 
@@ -66,6 +68,68 @@ Every object carries `provenance`, so a client can tell fact from declaration.
   `done` or one of the `stopped_*` states. Its Reviewer contract was parsed and
   validated by the driver, and the Cockpit re-validates it with
   `validateReviewerResult`. Only the default output path is discovered.
+
+## Verifier evidence contract
+
+A `verification.json` is attributed to a card only if it satisfies the
+contract Triad+ ships, `schemas/verification-evidence.schema.json`. The schema
+is loaded from the package as-is and checked by
+`server/evidence-contract.mjs`.
+
+- The checker implements exactly the keywords that schema uses. An unknown
+  keyword makes the contract unavailable, so a future schema change cannot
+  silently widen what is accepted.
+- On top of the schema it enforces the two invariants `triad-verify.mjs`
+  establishes when it writes `status`:
+  - `status: "pass"` requires `required_gates_passed: true`;
+  - `required_gates_passed: true` requires every required gate to be `pass`.
+- It is not a second verifier: nothing is re-executed or re-hashed.
+- Rejected files appear only in project `diagnostics` (field names, never
+  values) and never create or populate a card. A file holding only
+  `{ "feature_id": "1.5", "status": "pass" }` is rejected.
+
+## Evaluator+ validation
+
+Results are validated with the Core `validateEvaluatorResult`, under the
+contract the card actually binds. The binding follows the Core rule
+(`resolveQualityContract`): an assignment declares `quality_baseline_path`
+and `expected_quality_baseline_fingerprint` together.
+
+| Situation | `status` | `validation` |
+|---|---|---|
+| No assignment, evidence, or result mentions a quality baseline | `valid` or `invalid` | `contract: "legacy"` |
+| Contract bound and loadable | `valid` or `invalid` | `contract: "quality_contract"`, with the baseline fingerprint and the expected candidate fingerprint passed to the Core validator |
+| Contract expected but not confirmable | `not_validated` | `reason` is one of the values below; **no legacy fallback** |
+
+The possible `reason` values for `not_validated`:
+- `quality_contract_binding_missing`: evidence or the result names a baseline,
+  but no assignment binds one;
+- `quality_contract_binding_incomplete`: the assignment has only one of path
+  and fingerprint;
+- `quality_baseline_missing`, `quality_baseline_unreadable`,
+  `quality_baseline_outside_allowlist`, `quality_baseline_source_outside_allowlist`;
+- the Core loader's own code, for example `quality_baseline_drift` when the
+  manifest no longer matches the bound fingerprint, or `quality_baseline_invalid`;
+- `no_passing_verification`: a contract is bound but there is no candidate
+  fingerprint to bind it to.
+
+The expected candidate fingerprint is the `candidate_fingerprint` recorded by
+the latest passing `verification.json` for the card (code-written), and its
+source is returned. The baseline manifest and every source it names are
+confined to the allowlist before the Core loader, `loadQualityBaseline`, reads
+them.
+
+## Document attribution
+
+Review documents (`.loop/reviews/*`, `card-reports/*`) carry no card ID
+field, so they are matched by file name.
+- A document belongs to a card only if exactly one known card ID appears in
+  the name as a whole token.
+- Token boundaries account for IDs containing `.` and `-`. Thus `1.1` matches
+  `1.1-review.md` and `1.1.md`, but not `11.1-review.md`, `1.10-notes.md`, or
+  `1.1.2-draft.md`.
+- A name that matches several known cards is assigned to none of them. It is
+  listed under `reviewer.ambiguous_documents` of each card involved.
 
 ## Freshness of verifier evidence
 
@@ -286,6 +350,11 @@ POST /api/workspace
 
 - Run liveness is not recorded by Triad+, so nothing here can say that a role
   is running or was interrupted.
+- Under a Quality Contract, the expected candidate is the latest passing
+  verification's recorded fingerprint. That is the code-written proxy for the
+  Reviewer-approved candidate, which Triad+ does not persist in code.
+- Review documents with no card ID in their name are not attributed to any
+  card.
 - `work-queue.yaml` is read by a fail-closed reader of the template shape (see
   above). Constructs outside it are not read. `run-state.yaml` is not
   interpreted; it can only be fetched raw.
@@ -318,6 +387,14 @@ verifies:
   sessions, foreign Host headers, and every mutation method;
 - the session flow: one-time code, `303` to `/`, `no-referrer` everywhere,
   secret never in a URL;
+- rejection of contract-violating evidence, including `{feature_id, status:
+  "pass"}` and a `pass` without `required_gates_passed`;
+- Evaluator+ under a Quality Contract:
+  - a correct result is `valid`;
+  - a wrong candidate is `invalid`;
+  - a missing, unreadable, unbound, or drifted baseline is `not_validated`,
+    never legacy;
+- document attribution between `1.1` and `11.1`, including an ambiguous name;
 - an unchanged filesystem, by byte-level snapshot;
 - no child process, by runtime interception plus a static check;
 - logs free of secrets and paths.

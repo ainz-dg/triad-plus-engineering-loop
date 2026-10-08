@@ -7,6 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildInstallationManifest } from "../runtime/lib/installation-manifest.mjs";
+import { qualityBaselineFingerprint } from "../runtime/lib/quality-baseline.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
@@ -85,6 +86,9 @@ items:
     state: draft
     owner:
       name: nested-mapping-not-supported
+  - id: 11.1
+    title: Sibling ID that contains "1.1" as a substring
+    state: draft
 `);
 await put(path.join(control, ".loop", "run-state.yaml"), "version: 1\nproject_decision: running\n");
 const prd = await put(path.join(control, "artifacts", "prd.md"), "# PRD\n");
@@ -135,7 +139,7 @@ const a121 = await putJson(path.join(control, ".loop/runtime/assignments/1.2-att
 const a122 = await putJson(path.join(control, ".loop/runtime/assignments/1.2-attempt-2.json"), assignment("1.2", 2));
 await put(path.join(control, ".loop/runtime/assignments/broken.json"), "{ not json");
 
-function verification(feature, attempt, assignmentText, status, createdAt, cardText, fingerprint) {
+function verification(feature, attempt, assignmentText, status, createdAt, cardText, fingerprint, extraBaseline = {}) {
   return {
     schema_version: 1,
     run_id: `run-${feature}-${attempt}`,
@@ -144,7 +148,8 @@ function verification(feature, attempt, assignmentText, status, createdAt, cardT
     assignment_id: `${feature}-a${attempt}`,
     assignment_sha256: sha256(assignmentText),
     assignment_ref: `.loop/runtime/assignments/${feature}-attempt-${attempt}.json`,
-    baseline: { prd_sha256: sha256(prd), card_sha256: sha256(cardText), gates_sha256: sha256(gates), git_head: "abc", candidate_fingerprint: fingerprint, branch: "feature" },
+    trigger: { event: "SubagentStop", agent_id: "triad-developer", agent_type: "triad_developer" },
+    baseline: { prd_sha256: sha256(prd), card_sha256: sha256(cardText), gates_sha256: sha256(gates), git_head: "abc", candidate_fingerprint: fingerprint, branch: "feature", ...extraBaseline },
     scope: { status: "not_configured" },
     gates: [{ id: "npm-test", required: true, status: status === "pass" ? "pass" : "fail", exit_code: status === "pass" ? 0 : 1, duration_ms: 12, stdout_ref: "logs/npm-test.stdout.log", stderr_ref: "logs/npm-test.stderr.log", output_truncated: false }],
     required_gates_passed: status === "pass",
@@ -166,6 +171,62 @@ await putJson(path.join(control, ".loop/evidence/1.2/attempt-002/verification.js
 await put(path.join(control, ".loop/evidence/1.2/attempt-002/review-report.md"), "# Review\n");
 await put(path.join(control, ".loop/evidence/1.4/attempt-001/verification.json"), "{ truncated");
 await put(path.join(control, ".loop/reviews/1.2-review.md"), "# Reviewer notes\n");
+
+// F2 regression: evidence that does not satisfy the shipped contract.
+await putJson(path.join(control, ".loop/evidence/1.5/attempt-001/verification.json"), { feature_id: "1.5", status: "pass" });
+await putJson(path.join(control, ".loop/evidence/1.6/attempt-001/verification.json"), {
+  ...verification("1.6", 1, "{}", "pass", "2026-10-02T10:00:00.000Z", card11, "fp-16"),
+  required_gates_passed: false,
+});
+
+// F3: review documents for 1.1 and its substring sibling 11.1.
+for (const name of ["1.1-review.md", "11.1-review.md", "1.10-notes.md", "1.1.2-draft.md", "1.1-vs-11.1.md"]) {
+  await put(path.join(control, ".loop/reviews", name), `# ${name}\n`);
+}
+await put(path.join(control, "card-reports/1.1.md"), "# Card report 1.1\n");
+
+// F1: Evaluator+ under a Quality Contract.
+const qualityManifest = {
+  schema_version: 1,
+  id: "QB-1",
+  revision: 1,
+  sources: [{ id: "prd", role: "intent", path: "artifacts/prd.md", sha256: sha256(prd) }],
+  criteria: [
+    { id: "PQ-1", scope: "product_quality", requirement: "greets correctly" },
+    { id: "DC-1", scope: "delivery_closure", requirement: "demo recorded" },
+  ],
+};
+qualityManifest.fingerprint = qualityBaselineFingerprint(qualityManifest);
+await putJson(path.join(control, ".loop/quality-baseline.json"), qualityManifest);
+await put(path.join(control, ".loop/quality-baseline-broken.json"), "{ not json");
+const qbf = qualityManifest.fingerprint;
+const contractBinding = (manifestPath, expected = qbf) => ({ quality_baseline_path: manifestPath, expected_quality_baseline_fingerprint: expected });
+const legacyEvaluation = (feature, fingerprint) => ({ schema_version: 1, feature_id: feature, candidate_fingerprint: fingerprint, verdict: "PASS", summary: "checked", evidence_refs: [], created_at: "2026-10-06T10:00:00.000Z" });
+const contractEvaluation = (feature, fingerprint) => ({
+  schema_version: 1,
+  feature_id: feature,
+  candidate_fingerprint: fingerprint,
+  quality_baseline_fingerprint: qbf,
+  verdict: "PASS",
+  summary: "product quality met",
+  evidence_refs: [],
+  criteria: [{ id: "PQ-1", scope: "product_quality", verdict: "PASS", summary: "ok", evidence_refs: [] }],
+  created_at: "2026-10-06T10:00:00.000Z",
+});
+for (const card of ["2.1", "2.2", "2.3", "2.4", "2.5"]) await put(path.join(control, "features", `${card}.md`), `# ${card}\n`);
+const a21 = await putJson(path.join(control, ".loop/runtime/assignments/2.1-attempt-1.json"), assignment("2.1", 1, contractBinding(".loop/quality-baseline.json")));
+await putJson(path.join(control, ".loop/evidence/2.1/attempt-001/verification.json"), verification("2.1", 1, a21, "pass", "2026-10-06T09:00:00.000Z", "# 2.1\n", "fp-21", { quality_baseline_fingerprint: qbf }));
+await putJson(path.join(control, "artifacts/evaluator-plus/2.1-good.json"), contractEvaluation("2.1", "fp-21"));
+await putJson(path.join(control, "artifacts/evaluator-plus/2.1-wrong-candidate.json"), contractEvaluation("2.1", "fp-other"));
+await putJson(path.join(control, ".loop/runtime/assignments/2.2-attempt-1.json"), assignment("2.2", 1, contractBinding(".loop/quality-baseline-absent.json")));
+await putJson(path.join(control, "artifacts/evaluator-plus/2.2.json"), legacyEvaluation("2.2", "fp-22"));
+await putJson(path.join(control, ".loop/runtime/assignments/2.3-attempt-1.json"), assignment("2.3", 1, contractBinding(".loop/quality-baseline-broken.json")));
+await putJson(path.join(control, "artifacts/evaluator-plus/2.3.json"), legacyEvaluation("2.3", "fp-23"));
+const a24 = await putJson(path.join(control, ".loop/runtime/assignments/2.4-attempt-1.json"), assignment("2.4", 1));
+await putJson(path.join(control, ".loop/evidence/2.4/attempt-001/verification.json"), verification("2.4", 1, a24, "pass", "2026-10-06T09:00:00.000Z", "# 2.4\n", "fp-24", { quality_baseline_fingerprint: qbf }));
+await putJson(path.join(control, "artifacts/evaluator-plus/2.4.json"), legacyEvaluation("2.4", "fp-24"));
+await putJson(path.join(control, ".loop/runtime/assignments/2.5-attempt-1.json"), assignment("2.5", 1, contractBinding(".loop/quality-baseline.json", "f".repeat(64))));
+await putJson(path.join(control, "artifacts/evaluator-plus/2.5.json"), contractEvaluation("2.5", "fp-25"));
 
 const evaluation = (feature, fingerprint, verdict = "PASS") => ({ schema_version: 1, feature_id: feature, candidate_fingerprint: fingerprint, verdict, summary: "checked", evidence_refs: [], created_at: "2026-10-05T10:00:00.000Z" });
 await putJson(path.join(control, "artifacts/evaluator-plus/1.1.json"), evaluation("1.1", "fp-11"));
@@ -252,7 +313,7 @@ try {
   // Card list: queue declarations plus code-written evidence, kept separate.
   const cards = await request("/api/projects/root/cards");
   assert.equal(cards.status, 200);
-  assert.deepEqual(cards.body.cards.map((card) => card.id), ["1.1", "1.2", "1.3"]);
+  assert.deepEqual(cards.body.cards.map((card) => card.id), ["1.1", "1.2", "1.3", "2.1", "2.2", "2.3", "2.4", "2.5", "11.1"]);
   const listed = Object.fromEntries(cards.body.cards.map((card) => [card.id, card]));
   assert.equal(listed["1.1"].declared.state, "approved");
   assert.equal(listed["1.1"].declared.provenance, "agent-declared");
@@ -273,6 +334,16 @@ try {
   const diagnosticSources = cards.body.diagnostics.map((entry) => entry.source);
   assert.ok(diagnosticSources.includes(".loop/runtime/assignments/broken.json"), "invalid assignment is reported");
   assert.ok(diagnosticSources.includes(".loop/evidence/1.4/attempt-001/verification.json"), "invalid evidence is reported");
+
+  // F2: evidence violating the shipped contract never counts as evidence.
+  for (const [card, why] of [["1.5", /evidence\.schema_version is required/], ["1.6", /status is pass but required_gates_passed is not true/]]) {
+    assert.ok(!cards.body.cards.some((entry) => entry.id === card), `${card} must not become a card from invalid evidence`);
+    const diagnostic = cards.body.diagnostics.find((entry) => entry.source === `.loop/evidence/${card}/attempt-001/verification.json`);
+    assert.ok(diagnostic, `${card} evidence must be reported`);
+    assert.match(diagnostic.problem, /violates the Triad\+ contract/);
+    assert.match(diagnostic.problem, why);
+  }
+  assert.equal((await request("/api/projects/root/cards/1.5")).status, 404);
 
   // Card 1.1: valid packet, current evidence, validated evaluator and reviewer.
   const card11View = (await request("/api/projects/root/cards/1.1")).body;
@@ -313,6 +384,42 @@ try {
   assert.equal(card12View.evaluations[0].status, "invalid");
   assert.equal(card12View.evaluations[0].provenance, "agent-declared");
   assert.deepEqual(card12View.reviewer.documents.map((document) => document.source), [".loop/reviews/1.2-review.md"]);
+
+  // F3: documents are attributed by whole-token ID match to exactly one card.
+  assert.deepEqual(card11View.reviewer.documents.map((document) => document.source), [".loop/reviews/1.1-review.md", "card-reports/1.1.md"]);
+  const card111View = (await request("/api/projects/root/cards/11.1")).body;
+  assert.deepEqual(card111View.reviewer.documents.map((document) => document.source), [".loop/reviews/11.1-review.md"]);
+  for (const view of [card11View, card111View]) {
+    assert.deepEqual(view.reviewer.ambiguous_documents.map((document) => [document.source, document.matches]), [[".loop/reviews/1.1-vs-11.1.md", ["1.1", "11.1"]]]);
+  }
+  const attributed = [card11View, card111View, card12View].flatMap((view) => view.reviewer.documents.map((document) => document.source));
+  assert.ok(!attributed.some((source) => /1\.10-notes|1\.1\.2-draft/.test(source)), "1.10 and 1.1.2 documents belong to no known card");
+
+  // F1: Evaluator+ under a Quality Contract.
+  const card21View = (await request("/api/projects/root/cards/2.1")).body;
+  const [good, wrong] = card21View.evaluations;
+  assert.equal(good.source, "artifacts/evaluator-plus/2.1-good.json");
+  assert.equal(good.status, "valid", "a correct contract result must validate once the candidate binding is supplied");
+  assert.equal(good.provenance, "code-validated");
+  assert.equal(good.validation.contract, "quality_contract");
+  assert.equal(good.validation.quality_baseline.fingerprint, qbf);
+  assert.deepEqual(good.validation.expected_candidate_fingerprint, { value: "fp-21", source: ".loop/evidence/2.1/attempt-001/verification.json", provenance: "code-written" });
+  assert.equal(wrong.status, "invalid");
+  assert.equal(wrong.error_code, "evaluator_candidate_fingerprint_mismatch");
+  for (const [card, reason] of [
+    ["2.2", "quality_baseline_missing"],
+    ["2.3", "quality_baseline_unreadable"],
+    ["2.4", "quality_contract_binding_missing"],
+    ["2.5", "quality_baseline_drift"],
+  ]) {
+    const [view] = (await request(`/api/projects/root/cards/${card}`)).body.evaluations;
+    assert.equal(view.status, "not_validated", `${card}: must not validate (and must not fall back to legacy)`);
+    assert.equal(view.provenance, "agent-declared");
+    assert.equal(view.validation.contract, "quality_contract");
+    assert.equal(view.validation.reason, reason, card);
+  }
+  // Without any contract signal, the legacy contract still applies explicitly.
+  assert.equal(card11View.evaluations[0].validation.contract, "legacy");
   assert.equal(card12View.control_run, null);
 
   // Missing resources.

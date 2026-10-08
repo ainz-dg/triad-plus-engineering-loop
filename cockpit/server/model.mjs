@@ -1,8 +1,11 @@
+import path from "node:path";
 import { validateAssignmentPacket } from "../../runtime/lib/assignment-packet.mjs";
 import { validateInstallationManifest } from "../../runtime/lib/installation-manifest.mjs";
 import { validateTeamConfiguration } from "../../runtime/lib/model-config.mjs";
 import { validateReviewerResult } from "../../runtime/lib/reviewer-result.mjs";
+import { loadQualityBaseline } from "../../runtime/lib/quality-baseline.mjs";
 import { validateEvaluatorResult } from "../../runtime/triad-evaluator-validate.mjs";
+import { validateVerificationEvidence } from "./evidence-contract.mjs";
 import { AccessError, normalizeRelative } from "./safe-fs.mjs";
 import { parseWorkQueueItems } from "./work-queue.mjs";
 
@@ -19,7 +22,6 @@ export const PROVENANCE = Object.freeze({
   derived: "cockpit-derived",
 });
 
-const VERIFICATION_STATUSES = new Set(["pass", "fail", "invalid_context", "infrastructure_error", "invalidated"]);
 const CONTROL_RUN_PATH = ".loop/runtime/deterministic-control-run.json";
 
 function sanitizeError(error) {
@@ -182,12 +184,14 @@ async function collectVerifications(reader, project, assignments, diagnostics) {
       verifications.push({ relative, directory, status: "unreadable", error: loaded.error ?? loaded.status });
       continue;
     }
-    const value = loaded.value;
-    if (!value || typeof value !== "object" || typeof value.feature_id !== "string" || !VERIFICATION_STATUSES.has(value.status)) {
-      verifications.push({ relative, directory, status: "unreadable", error: "verification evidence does not match the verifier contract" });
+    // Only evidence that satisfies the shipped contract is attributed to a card;
+    // anything else is reported as a project diagnostic and never trusted.
+    const contract = validateVerificationEvidence(loaded.value);
+    if (!contract.valid) {
+      verifications.push({ relative, directory, status: "unreadable", error: `verification evidence violates the Triad+ contract: ${contract.errors.join("; ")}` });
       continue;
     }
-    verifications.push({ relative, directory, status: "ok", value });
+    verifications.push({ relative, directory, status: "ok", value: loaded.value });
   }
   for (const verification of verifications) {
     if (verification.status === "unreadable") diagnostics.push({ source: projectFile(project, verification.relative), problem: verification.error });
@@ -458,32 +462,114 @@ export async function listCards(reader, project) {
   };
 }
 
-async function evaluatorViews(reader, project, collected, id, latestPass) {
-  const views = [];
-  let qualityBaseline = null;
-  const baselinePath = collected.assignments.find((a) => a.value.feature_id === id && a.value.quality_baseline_path)?.value.quality_baseline_path;
-  if (baselinePath) {
-    const loaded = await safeJson(reader, project.base, baselinePath);
-    if (loaded.status === "ok") qualityBaseline = loaded.value;
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/**
+ * Resolve the Quality Contract Evaluator+ must be validated against, the way
+ * the Core does (runtime/lib/quality-baseline.mjs resolveQualityContract):
+ * an assignment binds `quality_baseline_path` and
+ * `expected_quality_baseline_fingerprint` together. If any artifact for the
+ * card shows a contract is expected but it cannot be loaded and confirmed, the
+ * result is `unavailable` with a reason — never a silent fall back to legacy.
+ */
+async function qualityContractFor(reader, project, collected, id, verifications) {
+  const assignments = collected.assignments
+    .filter((assignment) => assignment.value.feature_id === id)
+    .sort((a, b) => a.value.attempt - b.value.attempt);
+  const binding = [...assignments].reverse().find((assignment) => nonEmpty(assignment.value.quality_baseline_path) || nonEmpty(assignment.value.expected_quality_baseline_fingerprint));
+  const evidenceSignals = verifications.filter((verification) => nonEmpty(verification.value.baseline?.quality_baseline_fingerprint));
+  if (!binding && evidenceSignals.length === 0) return { mode: "none" };
+
+  const unavailable = (reason, extra = {}) => ({ mode: "unavailable", reason, ...extra });
+  if (!binding) return unavailable("quality_contract_binding_missing", { note: "verifier evidence records a quality baseline but no assignment binds one" });
+  const manifestPath = binding.value.quality_baseline_path;
+  const expectedFingerprint = binding.value.expected_quality_baseline_fingerprint;
+  const bindingSource = projectFile(project, binding.relative);
+  if (!nonEmpty(manifestPath) || !nonEmpty(expectedFingerprint)) return unavailable("quality_contract_binding_incomplete", { binding: bindingSource });
+
+  // Confine the manifest and every source it names before the Core loader reads them.
+  const manifest = await safeJson(reader, project.base, manifestPath);
+  if (manifest.status === "refused") return unavailable("quality_baseline_outside_allowlist", { binding: bindingSource });
+  if (manifest.status !== "ok") return unavailable(manifest.status === "missing" ? "quality_baseline_missing" : "quality_baseline_unreadable", { binding: bindingSource });
+  for (const source of Array.isArray(manifest.value?.sources) ? manifest.value.sources : []) {
+    try { if (typeof source?.path === "string") await reader.readBytes(project.base, source.path, { maxBytes: 1 }); }
+    catch (error) {
+      if (error instanceof AccessError) return unavailable("quality_baseline_source_outside_allowlist", { binding: bindingSource });
+      throw error;
+    }
   }
+  let loaded;
+  try {
+    loaded = await loadQualityBaseline(manifestPath, { projectRoot: path.join(reader.root, project.base), expectedFingerprint });
+  } catch (error) {
+    return unavailable(error?.code ?? "quality_baseline_invalid", { binding: bindingSource, detail: sanitizeError(error) });
+  }
+  return { mode: "contract", loaded, binding: bindingSource, source: projectFile(project, manifest.path) };
+}
+
+async function evaluatorViews(reader, project, collected, id, verifications, latestPass, ids) {
+  const views = [];
+  const contract = await qualityContractFor(reader, project, collected, id, verifications);
   for (const evaluation of collected.evaluations) {
     const { loaded } = evaluation;
     if (loaded.status !== "ok" || loaded.value?.feature_id !== id) {
-      if (loaded.status !== "ok" && evaluation.relative.includes(id)) {
+      if (loaded.status !== "ok" && attributedCard(path.posix.basename(evaluation.relative), ids).card === id) {
         views.push({ source: projectFile(project, evaluation.relative), provenance: PROVENANCE.declared, status: "unreadable", error: loaded.error });
       }
       continue;
     }
     const view = { source: projectFile(project, evaluation.relative), verdict: loaded.value.verdict ?? null, created_at: loaded.value.created_at ?? null };
-    try {
-      const validated = validateEvaluatorResult(loaded.value, { qualityBaseline });
-      view.status = "valid";
-      view.provenance = PROVENANCE.validated;
-      view.validation = validated.legacy ? "legacy contract (no quality baseline bound)" : "quality baseline contract";
-    } catch (error) {
-      view.status = "invalid";
+    const claimsContract = loaded.value.quality_baseline_fingerprint !== undefined;
+    if (contract.mode === "unavailable" || (contract.mode === "none" && claimsContract)) {
+      // A contract is expected but cannot be confirmed: do not validate at all.
+      view.status = "not_validated";
       view.provenance = PROVENANCE.declared;
-      view.error = sanitizeError(error);
+      view.validation = {
+        contract: "quality_contract",
+        reason: contract.mode === "none" ? "quality_contract_binding_missing" : contract.reason,
+        ...(contract.binding ? { binding: contract.binding } : {}),
+        ...(contract.detail ? { detail: contract.detail } : {}),
+        note: "a Quality Contract is expected; the legacy contract is not used as a fallback",
+      };
+    } else if (contract.mode === "contract") {
+      const expectedCandidate = latestPass?.value.baseline?.candidate_fingerprint ?? null;
+      view.validation = {
+        contract: "quality_contract",
+        quality_baseline: { source: contract.source, fingerprint: contract.loaded.fingerprint, binding: contract.binding },
+        expected_candidate_fingerprint: expectedCandidate
+          ? { value: expectedCandidate, source: projectFile(project, latestPass.relative), provenance: PROVENANCE.code }
+          : null,
+      };
+      if (!expectedCandidate) {
+        view.status = "not_validated";
+        view.provenance = PROVENANCE.declared;
+        view.validation.reason = "no_passing_verification";
+      } else {
+        try {
+          validateEvaluatorResult(loaded.value, { qualityBaseline: contract.loaded, expectedCandidateFingerprint: expectedCandidate });
+          view.status = "valid";
+          view.provenance = PROVENANCE.validated;
+        } catch (error) {
+          view.status = "invalid";
+          view.provenance = PROVENANCE.declared;
+          view.error = sanitizeError(error);
+          view.error_code = error?.code ?? null;
+        }
+      }
+    } else {
+      view.validation = { contract: "legacy", reason: "no Quality Contract is bound to this card" };
+      try {
+        validateEvaluatorResult(loaded.value);
+        view.status = "valid";
+        view.provenance = PROVENANCE.validated;
+      } catch (error) {
+        view.status = "invalid";
+        view.provenance = PROVENANCE.declared;
+        view.error = sanitizeError(error);
+        view.error_code = error?.code ?? null;
+      }
     }
     const fingerprint = loaded.value.candidate_fingerprint;
     const expected = latestPass?.value.baseline?.candidate_fingerprint;
@@ -541,22 +627,54 @@ async function controlRunView(reader, project, cardId) {
   };
 }
 
-async function reviewDocuments(reader, project, cardId) {
+/**
+ * True when `id` occurs in a file name as a whole token. Card IDs may contain
+ * `.` and `-`, so a token boundary is: start, or a character that is not a
+ * letter, digit, or dot before it; and end, a character that is not a letter,
+ * digit, or dot after it, or the dot of the final extension. Thus `1.1`
+ * matches `1.1-review.md` and `1.1.md` but not `11.1-…`, `1.10-…`, or `1.1.2-…`.
+ */
+function containsIdToken(name, id) {
+  const text = name.toLowerCase();
+  const needle = id.toLowerCase();
+  const extensionDot = text.lastIndexOf(".");
+  for (let index = text.indexOf(needle); index >= 0; index = text.indexOf(needle, index + 1)) {
+    const end = index + needle.length;
+    const before = index === 0 ? "" : text[index - 1];
+    const after = end === text.length ? "" : text[end];
+    const boundaryBefore = before === "" || !/[a-z0-9.]/.test(before);
+    const boundaryAfter = after === "" || !/[a-z0-9.]/.test(after) || (after === "." && end === extensionDot);
+    if (boundaryBefore && boundaryAfter) return true;
+  }
+  return false;
+}
+
+/** Attribute a file name to exactly one known card, or report it ambiguous. */
+function attributedCard(name, ids) {
+  const matches = ids.filter((id) => containsIdToken(name, id));
+  if (matches.length === 1) return { card: matches[0] };
+  return matches.length ? { ambiguous: matches } : {};
+}
+
+async function reviewDocuments(reader, project, cardId, ids) {
   const documents = [];
-  const lower = cardId.toLowerCase();
+  const ambiguous = [];
   for (const directory of [".loop/reviews", "card-reports"]) {
     for (const entry of await reader.list(project.base, directory)) {
-      if (entry.file && entry.name.toLowerCase().includes(lower)) {
-        documents.push({ source: projectFile(project, `${directory}/${entry.name}`), provenance: directory === "card-reports" ? PROVENANCE.code : PROVENANCE.declared });
-      }
+      if (!entry.file) continue;
+      const attribution = attributedCard(entry.name, ids);
+      const document = { source: projectFile(project, `${directory}/${entry.name}`), provenance: directory === "card-reports" ? PROVENANCE.code : PROVENANCE.declared };
+      if (attribution.card === cardId) documents.push(document);
+      else if (attribution.ambiguous?.includes(cardId)) ambiguous.push({ ...document, matches: attribution.ambiguous });
     }
   }
-  return documents;
+  return { documents, ambiguous };
 }
 
 export async function readCard(reader, project, cardId) {
   const collected = await collectProject(reader, project);
-  if (!cardIds(collected).includes(cardId)) return null;
+  const ids = cardIds(collected);
+  if (!ids.includes(cardId)) return null;
   const verifications = collected.verifications.filter((verification) => verification.status === "ok" && verification.value.feature_id === cardId);
   const assignments = collected.assignments.filter((assignment) => assignment.value.feature_id === cardId);
   const latest = latestVerification(verifications);
@@ -594,16 +712,20 @@ export async function readCard(reader, project, cardId) {
     attempts.push({ attempt: number, assignments: assignmentViews, verifications: views, documents });
   }
 
+  const review = await reviewDocuments(reader, project, cardId, ids);
   return {
     project: project.id,
     id: cardId,
     declared: declaredCard(collected, cardId),
     attempts,
-    evaluations: await evaluatorViews(reader, project, collected, cardId, latestPass),
+    evaluations: await evaluatorViews(reader, project, collected, cardId, verifications, latestPass, ids),
     reviewer: {
       provenance: PROVENANCE.derived,
       note: "Host-governed runs record Reviewer outcomes in agent-written files; only the deterministic driver persists a validated Reviewer contract.",
-      documents: await reviewDocuments(reader, project, cardId),
+      // Attributed only when exactly one known card ID appears as a whole token
+      // in the file name; names matching several cards are listed, not assigned.
+      documents: review.documents,
+      ambiguous_documents: review.ambiguous,
     },
     control_run: await controlRunView(reader, project, cardId),
     limits: [
