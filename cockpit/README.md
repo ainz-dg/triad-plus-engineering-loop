@@ -1,34 +1,143 @@
-# Triad Cockpit — read-only backend (prototype)
+# Triad Cockpit
 
-Status: **prototype, not packaged**. This directory is not listed in
-`package.json#files` and is not reachable from `bin/triad-plus.js`. The final
-command name, packaging, and UI are open decisions.
+A local, **read-only** web view of a Triad+ control workspace. It shows what
+Triad+ actually persisted and keeps three kinds of information apart: what an
+agent declared, what Triad+ code wrote or validated, and what the Cockpit
+cannot know.
 
-The backend lets a future web UI consult what Triad+ has actually persisted in
-one control workspace. It does not orchestrate, does not record transitions,
-and does not change how Triad+ runs:
+```bash
+npx triad-plus cockpit --control <project-control-path> [--port <n>]
+```
 
-- `node:http` only; no runtime dependencies, no CopilotKit or AG-UI.
-- Stateless: every request re-reads the artifacts. No database, cache, daemon,
-  or new persistence.
-- Read-only: only `GET`/`HEAD`; no file is written; no process is started.
-- Reuses existing Core contracts instead of re-implementing them:
+The command validates the workspace and starts a server on `127.0.0.1` (port
+`0` picks a free port). It prints a launch URL carrying a **one-time login
+code**. Opening it sets an `HttpOnly`, `SameSite=Strict` session cookie and
+redirects (`303`) to the UI, so the code leaves the address bar and cannot be
+replayed. Ctrl+C stops the server.
+
+`npx triad-plus` with no arguments is still the setup wizard.
+
+What it is not:
+- It does not orchestrate, approve, start or stop agents, or record
+  transitions.
+- It adds no database, cache, daemon, or new persistence.
+- It has no CopilotKit, AG-UI, or chat.
+
+How it is built:
+- **Backend** (`server/`): `node:http`, zero runtime dependencies, stateless.
+  Every request re-reads the artifacts. Only `GET` and `HEAD` are served; no
+  file is written and no process is started.
+- **Reuse of Core contracts** instead of re-implementing them:
   - the validators `validateInstallationManifest`, `validateTeamConfiguration`,
     `validateAssignmentPacket`, `validateReviewerResult`, and
     `validateEvaluatorResult`;
   - the loader `loadQualityBaseline`;
   - the shipped verification-evidence schema.
+- **UI** (`web/` sources, `dist/` compiled): React and TypeScript built with
+  Vite. It renders what the backend returns and never re-validates artifacts.
 
-## Run the prototype
+## UI
+
+The UI follows Workspace → Project → Card → Attempt → Evidence. Navigation
+uses URL hashes (`#/p/<project>/c/<card>?file=<path>`), so refresh, deep links,
+and the Back button work and the server needs no fallback routes.
+
+- **Shell:**
+  - workspace facts (Triad+ version, adapter, team roles as declared in
+    `team.json`);
+  - project navigation;
+  - an always-visible **Read-only** badge;
+  - a manual **Refresh** with the time of the last load;
+  - a System / Light / Dark theme switch.
+- **Project:**
+  - cards with their *declared* state, observed attempt count, and latest
+    recorded verifier result;
+  - search and a declared-state filter;
+  - workspace notices: work-queue warnings, ignored evidence, unmatched
+    Evaluator+ results.
+- **Card:**
+  - three separate signals: Verifier, Reviewer, and Evaluator+, each with its
+    meaning and provenance;
+  - "Worth a look": observations derived from the artifacts, never a verdict;
+  - attempts, with assignments, packet status, verifications, a gate table,
+    the three freshness axes, and documents;
+  - review documents, Evaluator+ results, and the deterministic driver run;
+  - "What this view cannot know".
+- **Artifact viewer:**
+  - Markdown, JSON, and text or logs;
+  - copy, wrap, size, sha256, and a truncation notice.
+  - Everything is rendered as text nodes. HTML in an artifact is shown, never
+    executed; links and images are shown as inert text and are never fetched
+    or followed.
+- **Reading guide** ("How to read this view"): explains provenance, the
+  difference between verifier, reviewer, and Evaluator+, freshness, and
+  declared states.
+
+### UX decisions
+
+- **Workflow-first, not KPI-first.** The card detail is the product. No charts
+  or counters that would invite a "health score" Triad+ cannot back.
+- **No combined green.**
+  - Verifier, Reviewer, and Evaluator+ answer different questions and are
+    shown side by side, never merged.
+  - Declared states are neutral, **dashed** chips: "approved" in YAML is a
+    declaration, not a fact.
+  - "In progress" carries an explicit note that it is not liveness.
+- **Freshness as three independent axes:** Bindings, Recency, and Candidate.
+  The candidate is always shown as "Not re-checked", so an unchanged control
+  file can never read as a re-verified candidate.
+- **Provenance everywhere it matters.** Every claim carries a badge with an
+  icon, a short label, and an explanation: Triad+ code, Validated, Declared,
+  or Derived.
+- **No invented timeline.** Attempts are ordered by number. The only trace
+  shown is the one the optional deterministic driver actually recorded.
+- **Meaning never depends on colour alone.** Every state has text plus a
+  distinct icon or border style. Contrast is WCAG AA (≥ 4.5:1) for text and
+  chips in both themes.
+- **Responsive by level, not by shrinking:**
+  - ≥ 1180 px: three panes (workspace, cards, detail);
+  - 820–1179 px: two panes, with the workspace in a drawer;
+  - < 820 px: one level at a time with a back button, and gate tables turned
+    into labelled rows.
+- **Accessibility:**
+  - landmarks, a skip link, and visible focus;
+  - modal dialogs that trap Tab, close on Escape, and restore focus;
+  - `prefers-reduced-motion` and `forced-colors` support.
+
+## Build and packaging
+
+The npm package ships `cockpit/server/` and the **compiled** `cockpit/dist/`.
+It does not ship `cockpit/web/` (sources, `node_modules`, toolchain). Users
+need neither React, Vite, nor TypeScript, and `triad-plus` keeps **zero
+runtime dependencies**. React is compiled into the bundle.
 
 ```bash
-node cockpit/server/cli.mjs --control <project-control-path> [--port <n>]
+npm run cockpit:build   # npm ci + tsc --noEmit + vite build -> cockpit/dist
+npm run cockpit:test    # UI tests (vitest + jsdom against the real backend)
 ```
 
-The server binds to `127.0.0.1` (port `0` = ephemeral) and prints a launch
-URL carrying a **one-time login code**. Opening it sets an `HttpOnly`,
-`SameSite=Strict` session cookie and redirects (`303`) to `/`, so the code
-leaves the address bar and cannot be replayed. Stop the server with Ctrl+C.
+- **Committed assets.** `cockpit/dist` is versioned, so publishing can never
+  ship a package without the UI. CI rebuilds it and fails if the result
+  differs from the committed files (`git diff --exit-code -- cockpit/dist`).
+  This catches stale assets.
+- **Reproducible build.** The toolchain is pinned to exact versions with a
+  lockfile in `cockpit/web/`. A rebuild on Linux with Node 20 produced files
+  identical to the committed ones.
+- **Toolchain requirements.** The build tooling needs Node ≥ 20.19 (Vite 8).
+  The runtime needs Node ≥ 20.
+- **Guard.** `prepublishOnly` runs `tests/cockpit-package-test.mjs`, which
+  checks the tarball contents and starts the Cockpit from a clean install.
+
+Distribution cost, measured with `npm pack` on the branch:
+
+| Tarball | Before | With Cockpit | Delta |
+|---|---|---|---|
+| Packed | 171,938 B | 294,147 B | +122,209 B (+71%) |
+| Unpacked | 668,747 B | 1,076,499 B | +407,752 B |
+| Files | 138 | 151 | +13 |
+
+The compiled UI is about 300 KB: JS about 272 KB (83 KB gzip, mostly React),
+CSS about 25 KB. A test enforces a 400 KB budget for `cockpit/dist`.
 
 ## Data model
 
@@ -206,13 +315,14 @@ templates: 87 documents in total.
 
 ## Endpoints
 
-All responses are `application/json`. All endpoints except `/api/session`
-require the session.
+API responses are `application/json`. Every `/api/*` endpoint except
+`/api/session` requires the session. Non-API paths serve only the compiled UI
+(see Security model).
 
 | Endpoint | Returns |
 |---|---|
 | `GET /api/session?code=…` | Exchanges the one-time login code for the session cookie. Returns `303 Location: /` with no body; a second use returns `401`. |
-| `GET /` | A small JSON landing object (requires the session). |
+| `GET /`, `/index.html`, `/assets/*`, `/theme-init.js`, `/favicon.svg` | The compiled UI shell (no workspace data), or `503 ui_not_built` for `/` when `dist/` is absent. |
 | `GET /api/workspace` | Installation manifest status, team roles, discovered projects. |
 | `GET /api/projects/:project/cards` | Card list: declared queue data next to observed evidence, plus `unmatched_evaluations` and `diagnostics`. |
 | `GET /api/projects/:project/cards/:card` | Attempts (assignments, packets, verifications with gates, freshness, and documents), Evaluator+ results, Reviewer documents, deterministic-driver output. |
@@ -339,12 +449,30 @@ POST /api/workspace
 - **Identifiers:** project and card IDs are matched against discovered values
   and are never joined into paths.
 - **Responses:**
-  - `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'`,
+  - API: `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'`,
     `nosniff`, and `X-Frame-Options: DENY`;
   - file content is always wrapped in JSON, never served as HTML;
   - filesystem error messages are reduced to codes, so absolute paths do not leak.
-- **Logs:** only `method route-template status`; no query strings, paths, or
-  content.
+- **Static UI** (`server/static.mjs`):
+  - **Fixed table.** The compiled files are read once at startup into an
+    in-memory table keyed by URL path. Requests are looked up in it and never
+    joined into a filesystem path, so traversal, encoded `..`, and symlinks
+    have nothing to reach. Unknown paths return `404`. Hidden files, source
+    maps, unknown types, and symlinked files are never loaded.
+  - **Public shell.** The shell is public by design: it is the same bytes as
+    the npm package and holds no workspace data. Host check and read-only
+    methods still apply. All data stays behind the session.
+  - **Strict CSP for the HTML:**
+
+    `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
+
+    No inline script or style, no `unsafe-eval`, and no external origin. The
+    build keeps the HTML free of inline code (the theme pre-paint script is an
+    external file), and a test checks it.
+  - **Caching.** Hashed bundles are cached as immutable; everything else is
+    revalidated.
+- **Logs:** only `method route-template status`, with `static` for UI files;
+  no query strings, paths, or content.
 
 ## Known limits
 
@@ -375,9 +503,17 @@ POST /api/workspace
 ## Tests
 
 ```bash
-node tests/cockpit-server-test.mjs
-node tests/cockpit-work-queue-test.mjs
+npm test                 # all Triad+ tests, including the four Cockpit suites below
+npm run cockpit:test     # UI tests (requires npm run cockpit:build or npm ci in cockpit/web)
 ```
+
+| Suite | Covers |
+|---|---|
+| `tests/cockpit-server-test.mjs` | API, security, static assets, CSP, no mutation, no processes |
+| `tests/cockpit-work-queue-test.mjs` | Fail-closed YAML reader |
+| `tests/cockpit-cli-test.mjs` | `triad-plus cockpit` validation, start, session, and Ctrl+C; existing commands unchanged; workspace unmodified |
+| `tests/cockpit-package-test.mjs` | Tarball contents, zero dependencies, size budget, and starting the Cockpit from a clean `npm install` of the packed tarball |
+| `cockpit/web/src/test/*.test.ts(x)` | The UI against the real backend on the synthetic workspace in `tests/fixtures/cockpit-demo-workspace.mjs`: navigation, signals, provenance, freshness, viewer safety, errors, empty states, theme, keyboard |
 
 The server suite builds a synthetic workspace in a temporary directory and
 verifies:
@@ -397,6 +533,21 @@ verifies:
 - document attribution between `1.1` and `11.1`, including an ambiguous name;
 - an unchanged filesystem, by byte-level snapshot;
 - no child process, by runtime interception plus a static check;
-- logs free of secrets and paths.
+- logs free of secrets and paths;
+- static UI serving: fixed-table lookup, a `404` for every traversal or
+  out-of-build path, the exact CSP, caching, `HEAD`, Host check, and `405` for
+  mutations;
+- a missing build returns `503` while the API keeps working;
+- the real build has no inline code and references only shipped files.
 
 The work-queue suite covers every row of the fail-closed table.
+
+Responsive layout and contrast are verified visually and numerically rather
+than in jsdom, which has no layout engine.
+
+## OpenDots
+
+The UI takes visual and interaction cues from
+[OpenDots](https://github.com/CopilotKit/OpenDots): panel organisation,
+density, and a System / Light / Dark switch with no flash on load. **No OpenDots
+code is included**, so no third-party attribution applies.

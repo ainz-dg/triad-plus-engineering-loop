@@ -23,6 +23,7 @@ for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execF
 }
 syncBuiltinESMExports();
 const { startCockpitServer } = await import("../cockpit/server/server.mjs");
+const { APP_CSP, loadStaticAssets } = await import("../cockpit/server/static.mjs");
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -265,9 +266,21 @@ const before = await snapshot(root);
 // ---------------------------------------------------------------------------
 // Server
 
+// A synthetic UI build, so static serving is tested independently of Vite.
+const uiDist = await mkdtemp(path.join(tmpdir(), "triad-cockpit-dist-"));
+const indexHtml = '<!doctype html><html><head><script src="/theme-init.js"></script></head><body><div id="root"></div><script type="module" src="/assets/index-AbCdEf12.js"></script></body></html>\n';
+await put(path.join(uiDist, "index.html"), indexHtml);
+const appJs = await put(path.join(uiDist, "assets/index-AbCdEf12.js"), "console.log('cockpit');\n");
+await put(path.join(uiDist, "assets/style-AbCdEf12.css"), "body{}\n");
+await put(path.join(uiDist, "theme-init.js"), "/* theme */\n");
+await put(path.join(uiDist, "assets/index-AbCdEf12.js.map"), "{}\n");
+await put(path.join(uiDist, ".hidden.js"), "hidden\n");
+await symlink(path.join(outside, "secret.txt"), path.join(uiDist, "assets/linked-AbCdEf12.js"));
+const staticAssets = loadStaticAssets(uiDist);
+
 const logs = [];
 await assert.rejects(startCockpitServer({ controlRoot: control, host: "0.0.0.0" }), /binds only to 127\.0\.0\.1/);
-const cockpit = await startCockpitServer({ controlRoot: control, log: (entry) => logs.push(entry) });
+const cockpit = await startCockpitServer({ controlRoot: control, log: (entry) => logs.push(entry), staticAssets });
 assert.equal(cockpit.address, "127.0.0.1");
 const bodies = [];
 
@@ -495,7 +508,12 @@ try {
   assert.equal((await request("/api/workspace", { auth: false, headers: { cookie: sessionCookie } })).status, 200);
   // Single use: a replayed launch URL (history, scrollback, screenshot) fails.
   assert.equal((await request(`/api/session?code=${loginCode}`, { auth: false })).status, 401);
-  assert.equal((await request("/", { auth: false })).status, 401, "the landing page still requires the session");
+  // The UI shell is public (it ships in the package and holds no workspace
+  // data); every data route still requires the session.
+  assert.equal((await request("/", { auth: false })).status, 200);
+  for (const route of ["/api/workspace", "/api/projects/root/cards", "/api/projects/root/cards/1.1", "/api/projects/root/control-run", "/api/projects/root/files?path=.loop/run-state.yaml"]) {
+    assert.equal((await request(route, { auth: false })).status, 401, `${route} must require the session`);
+  }
   // Every response, including errors, forbids Referer leakage.
   assert.equal((await request("/api/projects/root/cards/9.9")).headers["referrer-policy"], "no-referrer");
 
@@ -510,8 +528,84 @@ try {
     assert.equal(response.headers.allow, "GET, HEAD");
   }
   assert.equal((await request("/api/projects/root/files?path=.loop/run-state.yaml", { method: "DELETE" })).status, 405);
+
+  // Static UI: served from the in-memory table only, under the app CSP.
+  const shell = await request("/", { auth: false });
+  assert.equal(shell.headers["content-type"], "text/html; charset=utf-8");
+  assert.equal(shell.headers["content-security-policy"], APP_CSP);
+  assert.equal(shell.headers["cache-control"], "no-cache");
+  assert.equal(shell.headers["x-frame-options"], "DENY");
+  assert.equal(bodies.at(-1), indexHtml);
+  for (const directive of ["default-src 'none'", "script-src 'self'", "style-src 'self'", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'"]) {
+    assert.ok(APP_CSP.split("; ").includes(directive), `CSP must include ${directive}`);
+  }
+  assert.ok(!/unsafe-inline|unsafe-eval|https?:|\*|data:|blob:/.test(APP_CSP), "CSP must not allow inline code, eval, or external origins");
+  const script = await request("/assets/index-AbCdEf12.js", { auth: false });
+  assert.equal(script.status, 200);
+  assert.equal(script.headers["content-type"], "text/javascript; charset=utf-8");
+  assert.equal(script.headers["cache-control"], "public, max-age=31536000, immutable");
+  assert.equal(bodies.at(-1), appJs);
+  assert.equal((await request("/assets/style-AbCdEf12.css", { auth: false })).headers["content-type"], "text/css; charset=utf-8");
+  assert.equal((await request("/theme-init.js", { auth: false })).headers["cache-control"], "no-cache");
+  assert.equal((await request("/index.html", { auth: false })).status, 200);
+  assert.equal((await request("/", { auth: false, method: "HEAD" })).status, 200);
+  assert.equal(bodies.at(-1), "", "HEAD has no body");
+  // Unknown types, hidden files, symlinks, and anything outside the build are not served.
+  for (const target of [
+    "/assets/index-AbCdEf12.js.map",
+    "/.hidden.js",
+    "/assets/linked-AbCdEf12.js",
+    "/assets/missing.js",
+    "/package.json",
+    "/%2e%2e/package.json",
+    "/assets/..%2f..%2fpackage.json",
+    "/../../../etc/passwd",
+    "/assets/%2e%2e/%2e%2e/server/server.mjs",
+    "/cockpit/server/server.mjs",
+    "/control/.loop/run-state.yaml",
+  ]) {
+    const response = await request(target, { auth: false });
+    assert.equal(response.status, 404, `${target} must not be served`);
+    assert.equal(response.headers["content-type"], "application/json; charset=utf-8");
+  }
+  assert.equal((await request("/", { auth: false, method: "POST" })).status, 405, "static routes are read-only too");
+  assert.equal((await request("/", { auth: false, headers: { host: "evil.example" } })).status, 403, "Host is checked for static routes too");
+
+  // Non-root projects accept the control-relative `source` paths the API returns.
+  assert.equal((await request(`/api/projects/alpha/files?path=${encodeURIComponent("projects/alpha/.loop/work-queue.yaml")}`)).status, 200);
+  assert.equal((await request("/api/projects/alpha/files?path=.loop/work-queue.yaml")).status, 200);
+  assert.equal((await request(`/api/projects/alpha/files?path=${encodeURIComponent("projects/alpha/../../control/.env")}`)).status, 403);
 } finally {
   await cockpit.close();
+}
+
+// Without a UI build the API keeps working and the shell reports it plainly.
+{
+  const bare = await startCockpitServer({ controlRoot: control, staticAssets: { available: false, assets: new Map() } });
+  try {
+    assert.equal(bare.uiAvailable, false);
+    const shell = await fetch(`http://127.0.0.1:${bare.port}/`);
+    assert.equal(shell.status, 503);
+    assert.equal((await shell.json()).error.code, "ui_not_built");
+    const api = await fetch(`http://127.0.0.1:${bare.port}/api/workspace`, { headers: { authorization: `Bearer ${bare.token}` } });
+    assert.equal(api.status, 200);
+  } finally {
+    await bare.close();
+  }
+}
+
+// The real build, when present, contains no inline script or style and only
+// references files that exist in it.
+{
+  const real = loadStaticAssets();
+  if (real.available) {
+    const html = real.assets.get("/").body.toString("utf8");
+    assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), "index.html must not contain inline scripts");
+    assert.ok(!/<style|\sstyle=/i.test(html), "index.html must not contain inline styles");
+    for (const [, reference] of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
+      assert.ok(real.assets.has(reference), `index.html references a missing asset: ${reference}`);
+    }
+  }
 }
 
 // No secret reached any response, no sensitive data reached the server log.
@@ -522,6 +616,7 @@ assert.ok(!logText.includes(new URL(cockpit.sessionUrl).searchParams.get("code")
 assert.ok(logs.some((entry) => entry.route === "/api/session" && entry.status === 303), "the exchange itself is logged by route only");
 assert.ok(!logText.includes("secret") && !logText.includes("?"), "paths and queries must not be logged");
 assert.ok(logs.every((entry) => Object.keys(entry).sort().join() === "method,route,status"));
+assert.ok(logs.every((entry) => entry.route === "static" || entry.route === "unmatched" || entry.route.startsWith("/api/")), "static requests are logged without their path");
 
 // The control workspace (and its surroundings) is byte-for-byte unchanged.
 assert.equal(await snapshot(root), before, "the Cockpit must not modify the filesystem");

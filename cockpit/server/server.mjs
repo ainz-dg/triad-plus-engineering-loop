@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverProjects, readArtifact, readCard, readControlRun, readWorkspace, listCards } from "./model.mjs";
 import { AccessError, createWorkspaceReader } from "./safe-fs.mjs";
+import { APP_CSP, loadStaticAssets } from "./static.mjs";
 
 // Read-only HTTP surface for one control workspace. Stateless: every request
 // re-reads the artifacts, nothing is cached or written, no process is spawned.
@@ -68,7 +69,7 @@ function bearerToken(header) {
  * to a token-free location. `log` receives only method, route template, and
  * status: never query strings, secrets, paths, or artifact content.
  */
-export async function createCockpitHandler({ controlRoot, token, loginCode = null, log = () => {} }) {
+export async function createCockpitHandler({ controlRoot, token, loginCode = null, log = () => {}, staticAssets = loadStaticAssets() }) {
   if (typeof token !== "string" || token.length < 32) throw new Error("a session token of at least 32 characters is required");
   if (loginCode !== null && (typeof loginCode !== "string" || loginCode.length < 32 || loginCode === token)) {
     throw new Error("a distinct one-time login code of at least 32 characters is required");
@@ -79,7 +80,6 @@ export async function createCockpitHandler({ controlRoot, token, loginCode = nul
 
   const routes = [
     { method: "GET", pattern: /^\/api\/session$/, name: "/api/session", handler: session, public: true },
-    { method: "GET", pattern: /^\/$/, name: "/", handler: async () => [200, { cockpit: "read-only", session: "active", api: "/api/workspace" }] },
     { method: "GET", pattern: /^\/api\/workspace$/, name: "/api/workspace", handler: async () => [200, await readWorkspace(reader, { cockpitVersion })] },
     { method: "GET", pattern: /^\/api\/projects\/([^/]+)\/cards$/, name: "/api/projects/:project/cards", handler: withProject(async (project) => [200, await listCards(reader, project)]) },
     {
@@ -135,6 +135,29 @@ export async function createCockpitHandler({ controlRoot, token, loginCode = nul
     return [303, null, { Location: "/" }];
   }
 
+  // The UI shell is public (it ships in the npm package and holds no workspace
+  // data); every data request goes through the session-protected /api routes.
+  function serveStatic(pathname, response) {
+    const asset = staticAssets.assets.get(pathname);
+    if (!asset) {
+      if (pathname === "/" && !staticAssets.available) {
+        error(response, 503, "ui_not_built", "the Cockpit UI assets are not built; the read-only API is still available");
+      } else {
+        error(response, 404, "not_found", "unknown resource");
+      }
+      return;
+    }
+    const html = asset.type.startsWith("text/html");
+    response.writeHead(200, {
+      ...SECURITY_HEADERS,
+      ...(html ? { "Content-Security-Policy": APP_CSP, "Cross-Origin-Opener-Policy": "same-origin" } : {}),
+      "Cache-Control": asset.immutable ? "public, max-age=31536000, immutable" : "no-cache",
+      "Content-Type": asset.type,
+      "Content-Length": asset.body.length,
+    });
+    response.end(response.req.method === "HEAD" ? undefined : asset.body);
+  }
+
   async function handle(request, response) {
     let route = "unmatched";
     try {
@@ -151,6 +174,11 @@ export async function createCockpitHandler({ controlRoot, token, loginCode = nul
       try { url = new URL(request.url, "http://cockpit.invalid"); }
       catch { error(response, 400, "bad_request", "malformed request target"); return; }
 
+      if (!url.pathname.startsWith("/api/")) {
+        route = "static";
+        serveStatic(url.pathname, response);
+        return;
+      }
       const matched = routes.find((candidate) => candidate.pattern.test(url.pathname));
       if (!matched) {
         error(response, 404, "not_found", "unknown endpoint");
@@ -189,11 +217,11 @@ export async function createCockpitHandler({ controlRoot, token, loginCode = nul
 }
 
 /** Start the server on 127.0.0.1 only. Resolves once listening. */
-export async function startCockpitServer({ controlRoot, port = 0, host = LOOPBACK, token = randomBytes(32).toString("hex"), log } = {}) {
+export async function startCockpitServer({ controlRoot, port = 0, host = LOOPBACK, token = randomBytes(32).toString("hex"), log, staticAssets = loadStaticAssets() } = {}) {
   if (host !== LOOPBACK) throw new Error(`the Cockpit binds only to ${LOOPBACK}`);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("port must be an integer between 0 and 65535");
   const loginCode = randomBytes(32).toString("hex");
-  const handler = await createCockpitHandler({ controlRoot, token, loginCode, log });
+  const handler = await createCockpitHandler({ controlRoot, token, loginCode, log, staticAssets });
   const server = http.createServer(handler);
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;
@@ -210,6 +238,7 @@ export async function startCockpitServer({ controlRoot, port = 0, host = LOOPBAC
     server,
     token,
     address: address.address,
+    uiAvailable: staticAssets.available,
     port: address.port,
     // Carries only the one-time code, never the session secret.
     sessionUrl: `http://${LOOPBACK}:${address.port}/api/session?code=${loginCode}`,

@@ -741,7 +741,11 @@ export async function readControlRun(reader, project) {
 }
 
 /** Bounded raw read of one allowlisted file, returned inside a JSON envelope. */
-export async function readArtifact(reader, project, relative) {
+export async function readArtifact(reader, project, requested) {
+  // Accept the `source` values the API returns (control-relative, so they carry
+  // `projects/<id>/` for non-root projects) as well as project-relative paths.
+  const prefix = project.base ? `${project.base}/` : "";
+  const relative = prefix && typeof requested === "string" && requested.startsWith(prefix) ? requested.slice(prefix.length) : requested;
   const text = await reader.readText(project.base, relative);
   if (!text) return null;
   const binary = text.bytes.includes(0);
