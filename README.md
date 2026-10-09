@@ -205,6 +205,21 @@ independent review, provenance, residual risks, and practical-test links. They
 never replace the JSON/YAML evidence or add an LLM reporting call. See the
 [human-readable reports guide](docs/human-readable-reports.md).
 
+## Triad Cockpit (read-only web view)
+
+```bash
+npx triad-plus cockpit --control /absolute/path/to/triad-control
+```
+
+The command starts a local web view on `127.0.0.1` and prints a one-time
+link. It shows cards, attempts, verifier evidence, review documents,
+Evaluator+ results, and artifacts. Every item says who wrote it: Triad+ code,
+a Triad+ validator, or an agent's declaration.
+
+It is read-only. It never starts agents, approves work, or writes to the
+workspace. The compiled UI ships in this package, so there is nothing more to
+install. See the [Cockpit guide](cockpit/README.md).
+
 ## Quick start for every runtime
 
 Requirements: Node.js 20+ and one supported coding-agent host.
@@ -267,9 +282,11 @@ loop; it never replaces the Orchestrator. See [verification](docs/verification.m
 
 ## Scope and limitations
 
-Triad+ is deliberately not a workflow engine, daemon, scheduler, dashboard,
-shared-memory system, automatic model router, multi-reviewer system, or
-evaluator-driven repair loop. See [architecture](docs/architecture.md).
+Triad+ is deliberately not a workflow engine, daemon, scheduler, dashboard-
+driven control plane, shared-memory system, automatic model router,
+multi-reviewer system, or evaluator-driven repair loop. The optional Triad
+Cockpit is a read-only viewer started on demand: it cannot start agents,
+approve work, or change state. See [architecture](docs/architecture.md).
 
 ## Contributing
 

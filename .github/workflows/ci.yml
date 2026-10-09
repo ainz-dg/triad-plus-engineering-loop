@@ -12,6 +12,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # Cockpit UI: the compiled assets in cockpit/dist are committed so the
+      # package never ships without them; rebuilding must reproduce them exactly.
+      - run: npm ci --prefix cockpit/web
+      - run: npm run build --prefix cockpit/web
+      - run: git diff --exit-code -- cockpit/dist
+      - run: npm test --prefix cockpit/web
       - run: npm test
       - run: npm run pack:check
       - run: git diff --check

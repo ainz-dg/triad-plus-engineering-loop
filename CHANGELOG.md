@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Add Triad Cockpit, a read-only local web view started with
+  `npx triad-plus cockpit --control <path>`. It is a React UI served by a
+  zero-dependency `node:http` backend on 127.0.0.1.
+  - Sessions use a one-time login link.
+  - Provenance is explicit, and verifier, Reviewer, and Evaluator+ results are
+    shown separately.
+  - Freshness is shown as three axes, and the candidate is never claimed
+    re-checked.
+- Ship the compiled UI in the package. The package keeps zero runtime
+  dependencies, and the default `npx triad-plus` wizard is unchanged.
+
 ## 1.15.0 — 2026-10-07
 
 - Add a minimal, generic evidence manifest and integrity seam with

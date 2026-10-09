@@ -50,11 +50,13 @@ Usage:
   npx triad-plus upgrade --host <adapter-id> --control <path> [--global] [--apply]
   npx triad-plus uninstall --host <adapter-id> --control <path> [--global] [--apply]
   npx triad-plus import-bmad-story --source <story.md> --output <card.md> [--target-repository <id>] [--provenance <record.json>] [--required-gate <id>] [--depends-on <card-id>]
+  npx triad-plus cockpit --control <path> [--port <n>]
 
 Adapters: ${listAdapters().map((adapter) => adapter.id).join(', ')}
 
 The control path is a project-control workspace, not a product repository.
 Installation refuses conflicting asset overwrites; identical global assets may be reused. Upgrade is a dry run unless --apply is supplied.
+cockpit serves a read-only web view of the control workspace on 127.0.0.1 only; it never starts agents.
 `);
   process.exit(exitCode);
 }
@@ -74,7 +76,8 @@ function parseArgs(args) {
       target.push(value);
       index += 1;
     }
-    else if (['--host', '--control', '--team-config', '--hook-config', '--source', '--output', '--target-repository', '--provenance'].includes(argument)) {
+    else if (['--host', '--control', '--team-config', '--hook-config', '--source', '--output', '--target-repository', '--provenance'].includes(argument)
+      || (argument === '--port' && command === 'cockpit')) {
       const value = rest[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value.`);
       options[argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
@@ -1174,6 +1177,12 @@ async function doctor(options) {
   }
 }
 
+async function cockpit(options) {
+  // Loaded on demand so installer commands never import the Cockpit server.
+  const { launchCockpit } = await import('../cockpit/server/launch.mjs');
+  await launchCockpit({ control: options.control, port: options.port });
+}
+
 async function interactiveInit() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The interactive wizard needs a terminal. Use init in a non-interactive shell.');
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
@@ -1210,6 +1219,7 @@ try {
   else if (options.command === 'upgrade') await upgrade(options);
   else if (options.command === 'uninstall') await uninstall(options);
   else if (options.command === 'import-bmad-story') await importBmadStory(options);
+  else if (options.command === 'cockpit') await cockpit(options);
   else if (!options.command) await interactiveInit();
   else if (options.command === '--help' || options.command === '-h') usage(0);
   else throw new Error(`Unknown command: ${options.command}`);
