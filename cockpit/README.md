@@ -42,12 +42,21 @@ The UI follows Workspace → Project → Card → Attempt → Evidence. Navigati
 uses URL hashes (`#/p/<project>/c/<card>?file=<path>`), so refresh, deep links,
 and the Back button work and the server needs no fallback routes.
 
+**Data identity.** Each request is keyed by what it is for: the workspace, a
+project's cards, one card, or one file.
+- When the key changes, nothing loaded for the previous key is ever shown,
+  even if the new project has a card with the same ID.
+- A refresh of the same key keeps the last good data on screen.
+- Responses for a superseded request are discarded, even if they arrive late.
+
 - **Shell:**
   - workspace facts (Triad+ version, adapter, team roles as declared in
     `team.json`);
   - project navigation;
   - an always-visible **Read-only** badge;
-  - a manual **Refresh** with the time of the last load;
+  - a manual **Refresh** whose status only states what is true: "Refreshing…"
+    while requests are in flight, "Update failed" if one failed, otherwise
+    "Updated" with the time the oldest data on screen actually arrived;
   - a System / Light / Dark theme switch.
 - **Project:**
   - cards with their *declared* state, observed attempt count, and latest
@@ -132,12 +141,13 @@ Distribution cost, measured with `npm pack` on the branch:
 
 | Tarball | Before | With Cockpit | Delta |
 |---|---|---|---|
-| Packed | 171,938 B | 294,147 B | +122,209 B (+71%) |
-| Unpacked | 668,747 B | 1,076,499 B | +407,752 B |
+| Packed | 171,938 B | ≈ 295 KB | ≈ +123 KB (+71%) |
+| Unpacked | 668,747 B | ≈ 1.08 MB | ≈ +410 KB |
 | Files | 138 | 151 | +13 |
 
-The compiled UI is about 300 KB: JS about 272 KB (83 KB gzip, mostly React),
-CSS about 25 KB. A test enforces a 400 KB budget for `cockpit/dist`.
+The packed size varies by a few hundred bytes between environments (gzip
+metadata). The compiled UI is about 300 KB: JS about 274 KB (83 KB gzip,
+mostly React), CSS about 25 KB. A test enforces a 400 KB budget for `cockpit/dist`.
 
 ## Data model
 
@@ -513,7 +523,7 @@ npm run cockpit:test     # UI tests (requires npm run cockpit:build or npm ci in
 | `tests/cockpit-work-queue-test.mjs` | Fail-closed YAML reader |
 | `tests/cockpit-cli-test.mjs` | `triad-plus cockpit` validation, start, session, and Ctrl+C; existing commands unchanged; workspace unmodified |
 | `tests/cockpit-package-test.mjs` | Tarball contents, zero dependencies, size budget, and starting the Cockpit from a clean `npm install` of the packed tarball |
-| `cockpit/web/src/test/*.test.ts(x)` | The UI against the real backend on the synthetic workspace in `tests/fixtures/cockpit-demo-workspace.mjs`: navigation, signals, provenance, freshness, viewer safety, errors, empty states, theme, keyboard |
+| `cockpit/web/src/test/*.test.ts(x)` | The UI against the real backend on the synthetic workspace in `tests/fixtures/cockpit-demo-workspace.mjs`: navigation, signals, provenance, freshness, viewer safety, errors, empty states, theme, keyboard. `isolation.test.tsx` uses two projects that share a card ID, rapid navigation, and delayed, out-of-order responses, and checks every DOM commit for data shown under the wrong project. It also checks the refresh status. |
 
 The server suite builds a synthetic workspace in a temporary directory and
 verifies:

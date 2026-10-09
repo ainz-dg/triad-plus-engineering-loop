@@ -10,12 +10,11 @@ import { EmptyState, ErrorState, Loading, SessionEnded } from "./components/Stat
 import { formatTime } from "./format";
 import { navigate, routeHref, useRoute } from "./route";
 import { readThemePreference, type ThemePreference } from "./theme";
-import { useResource } from "./useResource";
+import { refreshStatus, useResource } from "./useResource";
 
 export function App() {
   const route = useRoute();
   const [epoch, setEpoch] = useState(0);
-  const [loadedAt, setLoadedAt] = useState(() => new Date());
   const [sessionLost, setSessionLost] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(() => readThemePreference());
   const [legend, setLegend] = useState(false);
@@ -42,10 +41,7 @@ export function App() {
   const cards = useResource(project ? `cards:${project}` : null, (signal) => api.cards(project!, signal), epoch);
   const card = useResource(project && route.card ? `card:${project}:${route.card}` : null, (signal) => api.card(project!, route.card!, signal), epoch);
 
-  const refresh = useCallback(() => {
-    setEpoch((value) => value + 1);
-    setLoadedAt(new Date());
-  }, []);
+  const refresh = useCallback(() => setEpoch((value) => value + 1), []);
   // Opening a file is a history step, so Back closes the viewer. A viewer
   // reached by deep link is closed in place instead of leaving the Cockpit.
   const openedInApp = useRef(false);
@@ -65,6 +61,10 @@ export function App() {
   if (sessionLost) return <SessionEnded />;
 
   const unknownProject = workspace.state === "ready" && route.project && !project;
+  // The label states only what is true: in flight, failed, or the time the
+  // oldest data on screen actually arrived.
+  const status = refreshStatus([workspace, cards, card]);
+  const statusText = status.kind === "refreshing" ? "Refreshing…" : status.kind === "failed" ? "Update failed" : status.kind === "updated" && status.at ? `Updated ${formatTime(status.at)}` : "Not loaded yet";
   const view = route.card ? "detail" : "list";
 
   return (
@@ -89,9 +89,9 @@ export function App() {
           <span className="readonly" title="The Cockpit cannot change anything in the workspace or start agents.">
             <Icon name="lock" size={14} /> Read-only
           </span>
-          <button type="button" className="btn btn-ghost refresh" onClick={refresh} aria-label={`Refresh data, last loaded ${formatTime(loadedAt)}`}>
-            <Icon name="refresh" className={workspace.state === "loading" || cards.state === "loading" || card.state === "loading" ? "spin" : undefined} />
-            <span className="refresh-label">Updated {formatTime(loadedAt)}</span>
+          <button type="button" className="btn btn-ghost refresh" onClick={refresh} aria-label={`Refresh data (${status.kind === "failed" ? "last update failed" : statusText})`}>
+            <Icon name="refresh" className={status.kind === "refreshing" ? "spin" : undefined} />
+            <span className={`refresh-label status-${status.kind}`} aria-live="polite">{statusText}</span>
           </button>
         </div>
       </header>
