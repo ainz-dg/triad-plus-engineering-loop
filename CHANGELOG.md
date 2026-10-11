@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.16.0 — 2026-10-11
 
 - Add Triad Cockpit, a read-only local web view started with
   `npx triad-plus cockpit --control <path>`. It is a React UI served by a
@@ -12,6 +12,9 @@
     re-checked.
 - Ship the compiled UI in the package. The package keeps zero runtime
   dependencies, and the default `npx triad-plus` wizard is unchanged.
+- Document the owner-accepted, unfixed path-resolution TOCTOU limitation for
+  single-user, locally trusted workspaces; a concurrent replacement of an
+  intermediate symlink or directory can still cause an out-of-root read.
 
 ## 1.15.0 — 2026-10-07
 

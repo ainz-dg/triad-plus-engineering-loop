@@ -453,9 +453,13 @@ POST /api/workspace
     `.triad-plus/team.json`, `.triad-runtime/adapter.json`;
   - refused before any filesystem access: absolute paths, `..`, backslashes,
     NUL, hidden segments, and `.env*`;
-  - every target is resolved with `realpath` and must stay inside both the
-    workspace and the allowlist, so symlink escapes are refused; files are
-    opened with `O_NOFOLLOW`.
+  - each target is prechecked with `realpath` and must stay inside both the
+    workspace and the allowlist; resolved symlink escapes are refused. Files
+    are opened with `O_NOFOLLOW` on the final component. The check and open are
+    path-based and non-atomic: a concurrent local writer replacing an
+    intermediate symlink or directory in that window can cause an out-of-root
+    read. Cockpit is intended for a single-user, locally trusted workspace and
+    is not a filesystem sandbox.
 - **Identifiers:** project and card IDs are matched against discovered values
   and are never joined into paths.
 - **Responses:**
@@ -504,9 +508,9 @@ POST /api/workspace
 - Assignment `status` is never updated by runtime code, so `declared_status:
   "active"` does not mean the attempt is in progress.
 - Re-verifying the same attempt directory overwrites its `verification.json`.
-- The time-of-check/time-of-use window between `realpath` and `open` is
-  narrowed by `O_NOFOLLOW` but not eliminated. This is accepted for a
-  loopback-only, read-only tool.
+- The path-resolution TOCTOU described above remains unfixed and was
+  owner-accepted for the single-user, locally trusted workspace model; the
+  Cockpit is not a filesystem sandbox.
 - Allowlisted artifacts can contain prompts, paths, and gate output.
   Verifier logs are redacted heuristically by the verifier, not by the Cockpit.
 
