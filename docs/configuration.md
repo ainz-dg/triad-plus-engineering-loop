@@ -24,12 +24,15 @@ When enabled, Evaluator+ is automatically dispatched by the Orchestrator after
 Triad reaches Reviewer approval. It receives a fresh post-run packet and cannot
 change the closed Triad result. Set `enabled` to `false` to disable this default.
 
-The runtime adapter is selected once per installed control workspace (`--host`).
-All roles in that run use that adapter; Triad+ does not orchestrate roles across
-different hosts. The team file records role-level models and effort, but an
-adapter writes those into host-native profiles only where the selected host
-supports that facility. A blank model means the host default. Never put tokens,
-API keys, or private deployment data in this file.
+For a schema-v1 installation, the runtime adapter is selected once per
+installed control workspace (`--host`) and all roles use that adapter. A
+schema-v2 installation can record multiple project-local adapters, but this
+does not yet select a host per Attempt: no host is inferred from install order,
+and dispatch is explicitly unsupported until Attempt-bound liveness and
+selection are implemented. The team file records role-level models and effort,
+but an adapter writes those into host-native profiles only where the selected
+host supports that facility. A blank model means the host default. Never put
+tokens, API keys, or private deployment data in this file.
 
 ## Installation ownership and version
 
@@ -41,10 +44,12 @@ npx triad-plus version --control /path/to/project-control
 ```
 
 After successful materialization, `.triad-plus/installation.json` records the
-adapter, project/global scopes, exact managed files, SHA-256 hashes, timestamps,
-and a deterministic fingerprint. Project paths are control-workspace-relative;
-global paths identify the user-level managed asset. The manifest is generated
-from the same adapter registry and install plan used by `init` and `upgrade`.
+adapter (schema v1) or adapter membership plus per-adapter exact assets and
+shared-path owner sets (schema v2), scopes, SHA-256 hashes, timestamps, and a
+deterministic fingerprint. Project paths are control-workspace-relative; global
+paths identify the user-level managed asset. Read-only commands do not migrate
+v1. An explicit successful `adapter add ... --apply` is the v1-to-v2 migration
+boundary.
 
 The manifest deliberately does not own `.triad-plus/team.json`, `.loop/`,
 `project.yaml`, feature cards, artifacts, evidence, or product source. A failed
@@ -59,8 +64,17 @@ Global assets are shared-capable and therefore preserved by default by
 `uninstall --global`.
 
 `doctor` reports CLI version, installed version, manifest state, adapter, and
-project/global scope. It reports version skew explicitly and never queries npm
-for `latest`.
+project/global scope. `adapter list` and `adapter doctor` inspect v1/v2 state
+without writes; host executable availability is separate from recorded adapter
+membership. `adapter add`, `adapter upgrade`, and `adapter remove` operate on
+project-local assets only. Remove and upgrade are dry runs unless `--apply` is
+present, modified or conflicting bytes are preserved and block false success,
+and no command creates global Triad assets by default. The host-native
+`.triad-runtime/adapter.json` singleton remains unchanged when adding another
+adapter; additional metadata is stored per adapter and is not a dispatch seam.
+Codex/Hermes project-local native entries remain limited or unproven. The CLI
+reports these limitations instead of claiming parity. Version skew is explicit
+and npm `latest` is never queried.
 
 ## Configure models through the agent
 
