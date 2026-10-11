@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, lstat, realpath } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -183,9 +183,30 @@ async function loadVerifierEvidence({ control, worktree, assignment, assignmentP
   };
 }
 
-function reviewerBinding({ control, assignment, assignmentPath, assignmentSha256, packet, verifierEvidence, reviewerResultSha256 }) {
+async function reviewerResultPathFor(control, configuredRoot, configuredPath) {
+  if (typeof configuredPath !== 'string' || configuredPath.length === 0) fail('Reviewer result_file must be configured');
+  const configRoot = path.resolve(configuredRoot);
+  const configuredAbsolute = path.resolve(configRoot, configuredPath);
+  const relative = path.relative(configRoot, configuredAbsolute);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    fail('Reviewer result_file must stay inside the active Control Workspace');
+  }
+  const resultPath = path.resolve(control, relative);
+  if (!resultPath.startsWith(`${control}${path.sep}`)) fail('Reviewer result_file must stay inside the active Control Workspace');
+  await mkdir(path.dirname(resultPath), { recursive: true });
+  const parent = await realpath(path.dirname(resultPath));
+  if (parent !== control && !parent.startsWith(`${control}${path.sep}`)) fail('Reviewer result_file must stay inside the active Control Workspace');
+  try {
+    if ((await lstat(resultPath)).isSymbolicLink()) fail('Reviewer result_file must not be a symlink');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  return resultPath;
+}
+
+function reviewerBinding({ control, assignment, assignmentPath, assignmentSha256, packet, verifierEvidence, reviewerResultPath, reviewerResultSha256 }) {
   return {
-    schema_version: 1,
+    schema_version: 2,
     assignment_ref: relativeRef(control, assignmentPath),
     assignment_sha256: assignmentSha256,
     assignment_id: assignment.assignment_id,
@@ -194,7 +215,10 @@ function reviewerBinding({ control, assignment, assignmentPath, assignmentSha256
     assignment_packet: packet ? { path: packet.path, sha256: packet.sha256 } : null,
     verifier_evidence: verifierEvidence,
     candidate_fingerprint: verifierEvidence.candidate_fingerprint,
-    reviewer_result_sha256: reviewerResultSha256,
+    reviewer_result_ref: {
+      path: relativeRef(control, reviewerResultPath),
+      sha256: reviewerResultSha256,
+    },
   };
 }
 
@@ -390,8 +414,9 @@ async function main() {
   // Persist only after the result is bound to the unchanged assignment,
   // verifier evidence, and candidate. The result is never an input that can
   // override the streamed role output.
-  await writeOutput(config.reviewer.result_file, reviewerContract);
-  const reviewerResultSource = await readFile(config.reviewer.result_file, 'utf8');
+  const reviewerResultPath = await reviewerResultPathFor(control, config.project_root, config.reviewer.result_file);
+  await writeOutput(reviewerResultPath, reviewerContract);
+  const reviewerResultSource = await readFile(reviewerResultPath);
   const reviewerBindingRecord = reviewerBinding({
     control,
     assignment,
@@ -399,7 +424,7 @@ async function main() {
     assignmentSha256,
     packet,
     verifierEvidence,
-    reviewerContract,
+    reviewerResultPath,
     reviewerResultSha256: sha256(reviewerResultSource),
   });
 

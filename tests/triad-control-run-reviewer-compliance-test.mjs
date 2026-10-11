@@ -24,7 +24,7 @@ async function writeJson(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function fixture(root, reviewerPayload, { verifierMode = 'real', mutateCandidateInReviewer = false } = {}) {
+async function fixture(root, reviewerPayload, { verifierMode = 'real', mutateCandidateInReviewer = false, reviewerResultFile = null } = {}) {
   const control = path.join(root, 'control');
   const product = path.join(control, 'product');
   const assignmentDir = path.join(control, '.loop', 'runtime', 'assignments');
@@ -151,7 +151,7 @@ async function fixture(root, reviewerPayload, { verifierMode = 'real', mutateCan
     assignment: path.relative(controlRoot, assignmentPath),
     developer: { command: [process.execPath, developer] },
     verifier: { command: verifierCommand, input: verifierInput },
-    reviewer: { command: [process.execPath, reviewer], result_file: path.join(control, 'reviewer-result.json') },
+    reviewer: { command: [process.execPath, reviewer], result_file: reviewerResultFile ?? path.join(control, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json') },
     commit: { command: [process.execPath, commit] },
     output: path.join(control, 'control-run.json')
   });
@@ -214,7 +214,7 @@ try {
   const changedCandidateRun = runControl(changedCandidate);
   assert.notEqual(changedCandidateRun.status, 0);
   await assert.rejects(() => readFile(changedCandidate.marker, 'utf8'), { code: 'ENOENT' });
-  await assert.rejects(() => readFile(path.join(changedCandidate.control, 'reviewer-result.json'), 'utf8'), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(path.join(changedCandidate.control, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json'), 'utf8'), { code: 'ENOENT' });
   await readFile(changedCandidate.reviewerStarted, 'utf8');
   assert.match(changedCandidateRun.stdout, /candidate fingerprint/);
 
@@ -222,9 +222,21 @@ try {
   assert.equal(validOutput.verifier_evidence.status, 'pass');
   assert.equal(validOutput.reviewer_binding.assignment_id, 'compliance-assignment-001');
   assert.equal(validOutput.reviewer_binding.candidate_fingerprint, validOutput.verifier_evidence.candidate_fingerprint);
-  const reviewerResultSource = await readFile(path.join(valid.control, 'reviewer-result.json'));
-  assert.equal(validOutput.reviewer_binding.reviewer_result_sha256, digest(reviewerResultSource));
+  const reviewerResultSource = await readFile(path.join(valid.control, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json'));
+  assert.equal(validOutput.reviewer_binding.reviewer_result_ref.path, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json');
+  assert.equal(validOutput.reviewer_binding.reviewer_result_ref.sha256, digest(reviewerResultSource));
   assert.equal(JSON.parse(reviewerResultSource.toString('utf8')).decision, 'approved');
+
+  const escapedResultPath = path.join(root, 'escaped-result', 'reviewer-result.json');
+  const escapedResult = await fixture(path.join(root, 'escaped-result'), {
+    decision: 'approved',
+    skill_compliance: [{ path: '.agents/skills/router/SKILL.md', rule: 'shared behavior placement', status: 'compliant', evidence_refs: ['candidate.txt'] }],
+  }, { reviewerResultFile: escapedResultPath });
+  const escapedResultRun = runControl(escapedResult);
+  assert.notEqual(escapedResultRun.status, 0);
+  assert.match(escapedResultRun.stderr, /must stay inside the active Control Workspace/);
+  await assert.rejects(() => readFile(escapedResultPath, 'utf8'), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(escapedResult.marker, 'utf8'), { code: 'ENOENT' });
 
   const missing = await fixture(path.join(root, 'missing'), { decision: 'approved' });
   const missingRun = runControl(missing);

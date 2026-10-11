@@ -80,7 +80,7 @@ async function reviewerBindingView(reader, project, value, reviewerContract) {
   const verifier = value.verifier_evidence ?? {};
   const recordedVerifier = binding.verifier_evidence ?? {};
   const featureId = metadata.feature_id ?? value.assignment_context?.feature_id ?? null;
-  requireEqual("schema_version", binding.schema_version, 1);
+  requireEqual("schema_version", binding.schema_version, 2);
   requireEqual("assignment_id", binding.assignment_id, metadata.assignment_id);
   requireEqual("feature_id", binding.feature_id, featureId);
   requireEqual("attempt", binding.attempt, metadata.attempt);
@@ -94,11 +94,33 @@ async function reviewerBindingView(reader, project, value, reviewerContract) {
   }
   requireEqual("candidate_fingerprint", binding.candidate_fingerprint, verifier.candidate_fingerprint);
   if (!/^[a-f0-9]{64}$/i.test(binding.candidate_fingerprint ?? "")) issues.push("candidate_fingerprint");
-  if (!/^[a-f0-9]{64}$/i.test(binding.reviewer_result_sha256 ?? "")) issues.push("reviewer_result_sha256");
-  if (reviewerContract) {
-    requireEqual("reviewer_result_sha256", binding.reviewer_result_sha256, sha256(`${JSON.stringify(reviewerContract, null, 2)}\n`));
-  } else {
-    issues.push("reviewer_result_invalid");
+  const reviewerResultPath = normalizedOrNull(binding.reviewer_result_ref?.path);
+  if (!reviewerResultPath) issues.push("reviewer_result_path_invalid");
+  if (!/^[a-f0-9]{64}$/i.test(binding.reviewer_result_ref?.sha256 ?? "")) issues.push("reviewer_result_sha256_invalid");
+  if (reviewerResultPath) {
+    let reviewerResultSource;
+    try { reviewerResultSource = await reader.readText(project.base, reviewerResultPath, { maxBytes: 1024 * 1024 }); }
+    catch (error) {
+      if (error instanceof AccessError) issues.push("reviewer_result_unavailable");
+      else throw error;
+    }
+    if (!reviewerResultSource) {
+      issues.push("reviewer_result_missing");
+    } else if (reviewerResultSource.truncated || reviewerResultSource.sha256 !== binding.reviewer_result_ref?.sha256) {
+      issues.push("reviewer_result_hash_mismatch");
+    } else {
+      let persistedReviewer;
+      try { persistedReviewer = JSON.parse(reviewerResultSource.text); }
+      catch { issues.push("reviewer_result_invalid_json"); }
+      if (persistedReviewer) {
+        try {
+          const persistedContract = validateReviewerResult(persistedReviewer, {
+            boundSkillPaths: (value.packet?.metadata?.mandatory_skills ?? []).map((skill) => skill?.path).filter(Boolean),
+          });
+          requireEqual("reviewer_result_content_mismatch", JSON.stringify(persistedContract), JSON.stringify(reviewerContract));
+        } catch { issues.push("reviewer_result_invalid"); }
+      }
+    }
   }
   requireEqual("verifier status", verifier.status, "pass");
   requireEqual("required_gates_passed", verifier.required_gates_passed, true);
@@ -167,7 +189,7 @@ async function reviewerBindingView(reader, project, value, reviewerContract) {
       assignment_sha256: binding.assignment_sha256,
       candidate_fingerprint: binding.candidate_fingerprint,
       verifier_evidence: { path: evidenceRelative, sha256: verifier.sha256, run_id: verifier.run_id },
-      reviewer_result_sha256: binding.reviewer_result_sha256,
+      reviewer_result_ref: { path: reviewerResultPath, sha256: binding.reviewer_result_ref.sha256 },
     };
 }
 
