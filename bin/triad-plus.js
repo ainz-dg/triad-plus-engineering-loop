@@ -1047,8 +1047,7 @@ async function preflightAdapterAdd(controlRoot, pairs, planned, records) {
   return { create, reuse };
 }
 
-async function copyMissingAdapterPairs(controlRoot, pairs, planned) {
-  const created = [];
+async function copyMissingAdapterPairs(controlRoot, pairs, planned, created = []) {
   for (const [index, pair] of pairs.entries()) {
     const info = await safeProjectAssetInfo(controlRoot, pair.target);
     if (info) continue;
@@ -1184,9 +1183,10 @@ async function adapterAdd(options) {
     process.stdout.write('Dry run only. Re-run with --apply to add the adapter.\n');
     return;
   }
-  const created = await copyMissingAdapterPairs(controlRoot, pairs, planned);
+  const created = [];
   let finalAssets = [];
   try {
+    await copyMissingAdapterPairs(controlRoot, pairs, planned, created);
     const team = await currentTeam(controlRoot);
     if (team && adapter.modelBinding === 'project-frontmatter') await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
     finalAssets = await observedAdapterRecords(planned, pairs, controlRoot);

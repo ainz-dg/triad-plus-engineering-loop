@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, lstat, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, lstat, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -37,6 +37,22 @@ async function snapshot(directory) {
   }
   await walk(directory);
   return entries.join('\n');
+}
+
+async function filesUnder(directory) {
+  const files = [];
+  async function walk(current) {
+    let entries;
+    try { entries = await readdir(current, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    for (const entry of entries) {
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) await walk(target);
+      else files.push(path.relative(directory, target).split(path.sep).join('/'));
+    }
+  }
+  await walk(directory);
+  return files.sort();
 }
 
 function teamConfiguration() {
@@ -209,6 +225,48 @@ try {
   assert.notEqual(conflictAdd.status, 0);
   assert.match(conflictAdd.stderr, /collision; existing bytes differ/);
   assert.equal(await snapshot(conflictControl), conflictBefore, 'collision preflight has no partial writes');
+
+  // A copy failure after the first asset group is placed rolls back only the
+  // files created by that add attempt.
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    const failedCopyControl = path.join(root, 'failed-copy/control');
+    await mkdir(path.join(failedCopyControl, '.github/skills/triad'), { recursive: true });
+    const blockedSkillDirectory = path.join(failedCopyControl, '.github/skills/triad');
+    await chmod(blockedSkillDirectory, 0o555);
+    let failedCopyAdd;
+    try { failedCopyAdd = run(['adapter', 'add', 'copilot', '--control', failedCopyControl, '--apply'], { home }); }
+    finally { await chmod(blockedSkillDirectory, 0o755); }
+    assert.notEqual(failedCopyAdd.status, 0);
+    assert.match(failedCopyAdd.stderr, /EACCES|permission denied/i);
+    assert.match(failedCopyAdd.stderr, /rolled back; previous workspace state was preserved/);
+    assert.deepEqual(await filesUnder(path.join(failedCopyControl, '.github')), [], 'earlier copied adapter files were rolled back');
+    assert.equal(await readFile(path.join(failedCopyControl, '.triad-plus/installation.json')).then(() => true, () => false), false);
+  }
+
+  // A post-copy manifest-write failure rolls back only the new adapter files
+  // and preserves the v1 manifest and original adapter bytes.
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    const failedWriteControl = path.join(root, 'failed-write/control');
+    await mkdir(failedWriteControl, { recursive: true });
+    assert.equal(run(['init', '--host', 'claude-code', '--control', failedWriteControl], { home }).status, 0);
+    const failedWriteManifestPath = path.join(failedWriteControl, '.triad-plus/installation.json');
+    const failedWriteManifestBefore = await readFile(failedWriteManifestPath);
+    const failedWriteV1 = JSON.parse(failedWriteManifestBefore.toString('utf8'));
+    const failedWriteOriginalAssets = failedWriteV1.managed_assets.filter((asset) => asset.scope === 'project');
+    const manifestDirectory = path.dirname(failedWriteManifestPath);
+    const manifestDirectoryMode = (await lstat(manifestDirectory)).mode & 0o777;
+    await chmod(manifestDirectory, 0o555);
+    let failedWriteAdd;
+    try { failedWriteAdd = run(['adapter', 'add', 'copilot', '--control', failedWriteControl, '--apply'], { home }); }
+    finally { await chmod(manifestDirectory, manifestDirectoryMode); }
+    assert.notEqual(failedWriteAdd.status, 0);
+    assert.match(failedWriteAdd.stderr, /EACCES|permission denied/i);
+    assert.match(failedWriteAdd.stderr, /rolled back; previous workspace state was preserved/);
+    assert.deepEqual(await readFile(failedWriteManifestPath), failedWriteManifestBefore);
+    for (const asset of failedWriteOriginalAssets) assert.equal(digest(await readFile(path.join(failedWriteControl, asset.path))), asset.sha256);
+    assert.deepEqual(await filesUnder(path.join(failedWriteControl, '.github')), [], 'new Copilot files rolled back after manifest write failure');
+    assert.equal(await readFile(path.join(failedWriteControl, '.triad-runtime/adapters/copilot/adapter.json')).then(() => true, () => false), false);
+  }
 
   // A symlinked Control Workspace root cannot redirect project writes.
   const symlinkTarget = path.join(root, 'symlink-target/control');
