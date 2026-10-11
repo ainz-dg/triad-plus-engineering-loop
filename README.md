@@ -164,6 +164,16 @@ and [troubleshooting](docs/troubleshooting.md).
 
 ## Installation version and safe uninstall
 
+For interactive setup or day-to-day management, run `npx triad-plus` in a
+terminal. A valid Control Workspace manifest in the current directory defaults
+to the management menu; without one, the wizard defaults to new setup. To
+manage a workspace elsewhere, choose **Manage existing** and provide its path
+explicitly. The wizard does not search sibling directories. Its menu lists
+adapters and offers add, doctor/status, upgrade, remove, and exit. Every
+mutation runs the existing CLI preflight first and requires the exact `apply`
+confirmation; canceled or conflicting plans make no changes. Management is
+project-local and does not select a host for the next Attempt.
+
 The CLI version and the version materialized in a control workspace are
 reported independently:
 
@@ -201,7 +211,8 @@ ownership records and conservative hash checks. This is an installation
 foundation, not multi-host dispatch: an Attempt does not yet select an adapter,
 and the CLI reports dispatch as unsupported rather than choosing the last-added
 host. Codex and Hermes project-local native entries remain limited/unproven.
-See [multi-adapter details](docs/npx-installation.md#local-multi-adapter-inventory).
+The terminal menu is the normal path; direct `adapter` commands remain useful
+for scripts and advanced use. See [multi-adapter details](docs/npx-installation.md#local-multi-adapter-inventory).
 
 ## Optional immutable quality target
 

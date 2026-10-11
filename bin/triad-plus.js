@@ -36,6 +36,7 @@ import {
   sha256File,
   writeInstallationManifest
 } from '../runtime/lib/installation-manifest.mjs';
+import { interactiveAdapterManagement } from '../runtime/lib/interactive-adapter-menu.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageVersion = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
@@ -1024,27 +1025,30 @@ async function preflightAdapterAdd(controlRoot, pairs, planned, records) {
   for (const record of records) {
     for (const asset of record.managed_assets) {
       const list = owners.get(assetIdentity(asset)) ?? [];
-      list.push(asset);
+      list.push({ adapter: record.id, asset });
       owners.set(assetIdentity(asset), list);
     }
   }
   let create = 0;
   let reuse = 0;
+  const actions = [];
   for (const [index, asset] of planned.entries()) {
     const target = pairs[index].target;
     const info = await safeProjectAssetInfo(controlRoot, target);
     const existingOwners = owners.get(assetIdentity(asset)) ?? [];
     if (!info) {
-      if (existingOwners.some((owner) => owner.sha256 !== asset.sha256)) throw new Error(`Shared managed asset requires upgrade before add: ${asset.path}`);
+      if (existingOwners.some((owner) => owner.asset.sha256 !== asset.sha256)) throw new Error(`Shared managed asset requires upgrade before add: ${asset.path}`);
       create += 1;
+      actions.push({ kind: 'create', asset, owners: [] });
       continue;
     }
     const observed = await sha256File(target);
-    if (existingOwners.some((owner) => owner.sha256 !== observed)) throw new Error(`Managed asset was modified; refusing to overwrite: ${asset.path}`);
+    if (existingOwners.some((owner) => owner.asset.sha256 !== observed)) throw new Error(`Managed asset was modified; refusing to overwrite: ${asset.path}`);
     if (observed !== asset.sha256) throw new Error(`Adapter asset collision; existing bytes differ: ${asset.path}`);
     reuse += 1;
+    actions.push({ kind: existingOwners.length ? 'reuse-shared' : 'reuse-identical', asset, owners: existingOwners.map((owner) => owner.adapter) });
   }
-  return { create, reuse };
+  return { create, reuse, actions };
 }
 
 async function copyMissingAdapterPairs(controlRoot, pairs, planned, created = []) {
@@ -1178,6 +1182,10 @@ async function adapterAdd(options) {
   process.stdout.write(`Adapter add ${options.apply ? 'applying' : 'plan'} — ${adapter.label}\n`);
   if (migration) process.stdout.write('  Explicit v1 → v2 migration will preserve the existing adapter record.\n');
   process.stdout.write(`  Project assets: ${counts.create} create, ${counts.reuse} exact-byte reuse; global assets: none.\n`);
+  for (const action of counts.actions) {
+    const owners = action.owners.length ? ` (shared with ${action.owners.join(', ')})` : '';
+    process.stdout.write(`  ${action.kind === 'create' ? 'CREATE' : action.kind === 'reuse-shared' ? 'REUSE shared' : 'REUSE identical'} ${action.asset.path}${owners}\n`);
+  }
   process.stdout.write('  Attempt-bound host dispatch remains unsupported; no default host will be changed.\n');
   if (!options.apply) {
     process.stdout.write('Dry run only. Re-run with --apply to add the adapter.\n');
@@ -1261,6 +1269,8 @@ async function adapterRemove(options) {
   }
   process.stdout.write(`Adapter remove ${options.apply ? 'applying' : 'plan'} — ${options.host}\n`);
   process.stdout.write(`  ${removals.length} exclusive unchanged file(s) ${options.apply ? 'will be removed' : 'would be removed'}; ${preservedShared.length} shared file(s) retained.\n`);
+  for (const entry of removals) process.stdout.write(`  REMOVE ${entry.asset.path}\n`);
+  for (const assetPath of preservedShared) process.stdout.write(`  PRESERVE shared ${assetPath}\n`);
   if (!options.apply) {
     process.stdout.write('Dry run only. Re-run with --apply to remove only hash-matching adapter-owned files.\n');
     return;
@@ -1348,6 +1358,12 @@ async function adapterUpgrade(options) {
   const createCount = actions.filter((action) => action.kind === 'create').length;
   const replaceCount = actions.filter((action) => action.kind === 'replace').length;
   process.stdout.write(`Adapter upgrade ${options.apply ? 'applying' : 'plan'} — ${adapter.id}: ${createCount} missing, ${replaceCount} changed, ${actions.length - createCount - replaceCount} unchanged.\n`);
+  for (const action of actions) {
+    const owners = sharedOwners.get(assetIdentity(action.asset)) ?? [];
+    const sharedWith = owners.map((owner) => owner.adapter).filter((id) => id !== adapter.id);
+    const label = action.kind === 'create' ? 'CREATE' : action.kind === 'replace' ? 'REPLACE (backup first)' : sharedWith.length ? 'PRESERVE/REUSE shared' : 'PRESERVE/REUSE unchanged';
+    process.stdout.write(`  ${label} ${action.asset.path}${sharedWith.length ? ` (also owned by ${sharedWith.join(', ')})` : ''}\n`);
+  }
   if (!options.apply) {
     process.stdout.write('Dry run only. Re-run with --apply to back up and refresh hash-matching managed assets.\n');
     return;
@@ -1761,7 +1777,64 @@ async function interactiveInit() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The interactive wizard needs a terminal. Use init in a non-interactive shell.');
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    process.stdout.write('\nTriad+ setup\n');
+    const currentDirectory = resolve(process.cwd());
+    let currentManifest = null;
+    let currentManifestError = null;
+    try { currentManifest = await loadInstallationManifest(currentDirectory); }
+    catch (error) { currentManifestError = error; }
+    const defaultMode = currentManifest ? 'm' : 'n';
+    process.stdout.write('\nTriad+\n');
+    if (currentManifest) {
+      process.stdout.write(`Detected a valid ${currentManifest.manifest.schema_version === 1 ? 'schema-v1' : 'schema-v2'} installation manifest in the current Control Workspace.\n`);
+    } else if (currentManifestError) {
+      process.stdout.write(`The current directory does not have a valid installation manifest: ${currentManifestError.message}\n`);
+    } else {
+      process.stdout.write('No valid installation manifest was found in the current directory.\n');
+    }
+    process.stdout.write('No sibling directories will be searched.\n');
+    const mode = (await prompt.question(`Choose [N]ew workspace or [M]anage existing [${defaultMode.toUpperCase()}]: `)).trim().toLowerCase() || defaultMode;
+    if (mode === 'm' || mode === 'manage' || mode === 'manage existing') {
+      let control = currentManifest ? currentDirectory : null;
+      while (!control) {
+        const candidate = (await prompt.question('Enter the existing Control Workspace path explicitly (blank cancels): ')).trim();
+        if (!candidate) {
+          process.stdout.write('Cancelled. No files were changed.\n');
+          return;
+        }
+        const candidatePath = resolve(candidate);
+        try {
+          await requireExistingDirectory(candidatePath);
+          const manifest = await loadInstallationManifest(candidatePath);
+          if (!manifest) {
+            process.stdout.write(`No installation manifest was found at ${candidatePath}; legacy/uninitialized state will be shown without scanning elsewhere.\n`);
+            const confirm = (await prompt.question('Type manage to inspect this explicitly selected directory: ')).trim();
+            if (confirm !== 'manage') {
+              process.stdout.write('Cancelled. No files were changed.\n');
+              return;
+            }
+          } else {
+            process.stdout.write(`Using the valid Control Workspace at ${candidatePath}.\n`);
+          }
+          control = candidatePath;
+        } catch (error) {
+          process.stdout.write(`Cannot safely manage ${candidatePath}: ${error.message}\n`);
+        }
+      }
+      await interactiveAdapterManagement({
+        prompt,
+        control,
+        adapters: listAdapters(),
+        getInstalledAdapterIds: async (controlRoot) => adapterRecords((await loadInstallationManifest(controlRoot))?.manifest ?? null).map((record) => record.id),
+        runCommand: adapterCommand,
+      });
+      return;
+    }
+    if (!['n', 'new', 'new workspace'].includes(mode)) {
+      process.stdout.write('Choose New workspace or Manage existing. No files were changed.\n');
+      return;
+    }
+
+    process.stdout.write('\nNew Control Workspace setup\n');
     listAdapters().forEach((adapter, index) => process.stdout.write(`${index + 1}) ${adapter.label}\n`));
     let adapter;
     while (!adapter) {

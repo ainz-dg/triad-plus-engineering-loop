@@ -7,13 +7,31 @@ outside product repositories whenever possible.
 npx triad-plus
 ```
 
-The interactive setup selects a host, optional user-level command, language,
-owner address, role display names/personas, models, and whether the optional
-Evaluator+ is enabled. It changes files only after `install` is typed.
-Before confirmation it prints a compact summary of the host, control workspace,
-interaction settings, Evaluator+, and each role's model/binding. Colors are
-used only for an interactive terminal and are disabled by `NO_COLOR` or when
-output is not a TTY.
+The terminal wizard is the normal setup and management path. If the current
+directory contains a valid Control Workspace manifest, it defaults to managing
+that workspace. Otherwise it defaults to creating a new workspace; selecting
+management then requires an explicit existing path. It never searches sibling
+directories. For a new workspace, the existing setup questions and `install`
+confirmation remain unchanged.
+
+The management menu offers list, add, doctor/status, upgrade, remove, and exit.
+List and doctor are read-only. Upgrade and remove are limited to adapters
+recorded in that Control Workspace; add offers the registered adapters not
+already recorded. Each mutation first runs the existing CLI dry-run/preflight,
+then proceeds only when the exact word `apply` is entered. Cancellation or a
+preflight conflict makes no changes. The plan reports project-local create,
+reuse/shared, replacement/backup, removal, and preserved shared paths. Global
+assets are not written or changed by these multi-adapter operations. Installing
+an adapter still does not select it for the next Attempt; Attempt-bound host
+dispatch remains unsupported.
+
+Colors are used only for an interactive terminal and are disabled by
+`NO_COLOR` or when output is not a TTY.
+
+From an initialized Control Workspace, launch the wizard there to return to its
+management menu and add another adapter without memorizing command names. The
+menu displays installed membership and explicitly reports that this does not
+select the host for the next Attempt.
 
 For repeatable setup:
 
@@ -85,15 +103,20 @@ assets are project-local; no `--global` option is supported for these commands.
 Additional adapter metadata is stored at
 `.triad-runtime/adapters/<id>/adapter.json`; the existing
 `.triad-runtime/adapter.json` is not rewritten when another host is added.
+The terminal management menu is the recommended path. For scripts and advanced
+use, this is the equivalent pinned CLI procedure from the initialized Control
+Workspace; the first add is a dry run, and `--apply` performs the reviewed
+project-local change:
 
 ```bash
-npx triad-plus adapter list --control /path/to/project-control
-npx triad-plus adapter doctor --control /path/to/project-control
-npx triad-plus adapter add copilot --control /path/to/project-control
-npx triad-plus adapter add copilot --control /path/to/project-control --apply
-npx triad-plus adapter upgrade copilot --control /path/to/project-control --apply
-npx triad-plus adapter remove copilot --control /path/to/project-control
-npx triad-plus adapter remove copilot --control /path/to/project-control --apply
+npx triad-plus@1.17.0 adapter list --control .
+npx triad-plus@1.17.0 adapter add copilot --control .
+npx triad-plus@1.17.0 adapter add copilot --control . --apply
+npx triad-plus@1.17.0 adapter doctor copilot --control .
+npx triad-plus@1.17.0 adapter upgrade copilot --control .
+npx triad-plus@1.17.0 adapter upgrade copilot --control . --apply
+npx triad-plus@1.17.0 adapter remove copilot --control .
+npx triad-plus@1.17.0 adapter remove copilot --control . --apply
 ```
 
 `list`, `doctor`, and `version` are read-only. Add is a dry run without

@@ -4,14 +4,18 @@ Triad+ keeps project-control records outside product repositories. Choose an emp
 directory for that workspace and a runtime available on your machine.
 
 ```bash
-npx triad-plus init --host codex --control "$PWD/triad-control" --global
-npx triad-plus doctor --host codex --control "$PWD/triad-control"
+npx triad-plus
 ```
 
-The interactive setup asks for language, owner address, neutral role names,
-personas, models, and whether optional Evaluator+ is enabled. When enabled,
-Evaluator+ is automatically dispatched after Triad approval. It writes only
-after you type `install`.
+The terminal wizard guides first-time setup and management. It detects a valid
+Control Workspace manifest in the current directory and defaults to managing
+that workspace. Otherwise, it defaults to new setup; choose **Manage existing**
+and enter a path explicitly to manage another workspace. Triad+ does not search
+sibling directories. In the management menu, list and doctor/status are
+read-only; add, upgrade, and remove first show the existing CLI preflight and
+proceed only when you type the exact word `apply`. Cancellation makes no
+changes. Multi-adapter actions remain project-local and do not select a host
+for the next Attempt.
 
 For non-interactive setup, pass a reviewed team file:
 

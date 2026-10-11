@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.17.0 — proposed local release candidate (unpublished)
+## 1.17.0
 
 - Retain schema-v1 installation compatibility while adding the explicit,
   project-local schema-v2 multi-adapter inventory and lifecycle commands.
@@ -8,8 +8,12 @@
   cross-attempt host handoff is provided.
 - Preserve user/project state and use ownership/hash checks for managed adapter
   changes; removing the final adapter leaves an auditable v2 tombstone.
+- Make the default terminal wizard the normal path for managing existing
+  Control Workspaces: list, add, doctor, upgrade, and remove now reuse the
+  same project-local lifecycle commands with read-only preflight and explicit
+  `apply` confirmation. Attempt-bound host dispatch remains unsupported.
 - No breaking changes are intended. Schema-v2 migration remains opt-in through
-  an explicit `adapter add`; the default install flow and v1 readers remain.
+  an explicit adapter add; schema-v1 readers remain compatible.
 - Host-native discovery and delegated execution are not claimed for every host.
   Codex and Hermes project-local entry points remain limited/unproven, and the
   known local-filesystem path-resolution TOCTOU limitation remains unresolved.
