@@ -1451,6 +1451,11 @@ async function versionCommand(options) {
   const manifest = loaded.manifest;
   if (manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) {
     process.stdout.write(`${formatDoctorLine('Installation schema', '2 (multi-adapter)')}\n`);
+    const uninstalled = manifestIsUninstalled(manifest);
+    const installedVersion = uninstalled
+      ? `unknown (uninstalled; last ${manifest.triad_version})`
+      : manifest.triad_version;
+    process.stdout.write(`${formatDoctorLine('Installed Triad', installedVersion)}\n`);
     process.stdout.write(`${formatDoctorLine('Adapters', manifest.adapters.map((adapter) => adapter.id).join(', ') || 'none')}\n`);
     process.stdout.write('Attempt-bound host dispatch: unsupported; no adapter is selected by installation order.\n');
     return;

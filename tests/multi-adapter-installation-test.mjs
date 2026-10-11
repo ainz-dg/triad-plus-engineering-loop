@@ -109,6 +109,9 @@ try {
   validateInstallationManifest(multi);
   assert.equal(multi.schema_version, 2);
   assert.deepEqual(multi.adapters.map((entry) => entry.id), ['claude-code', 'copilot']);
+  const versionMulti = run(['version', '--control', control], { home });
+  assert.equal(versionMulti.status, 0, versionMulti.stderr);
+  assert.match(versionMulti.stdout, new RegExp(`Installed Triad\\s+${multi.triad_version}`));
   assert.ok(multi.shared_assets.some((asset) => asset.path === '.triad-runtime/triad-control-run.mjs' && asset.owners.includes('claude-code') && asset.owners.includes('copilot')));
   assert.equal(multi.adapters.find((entry) => entry.id === 'claude-code').managed_assets.find((asset) => asset.path === '.triad-runtime/adapter.json').sha256, claudeHashes.get('.triad-runtime/adapter.json'));
   for (const [relative, expected] of claudeHashes) assert.equal(digest(await readFile(path.join(control, relative))), expected, `Claude asset unchanged: ${relative}`);
@@ -196,6 +199,9 @@ try {
   const emptyManifest = JSON.parse(await readFile(path.join(lastControl, '.triad-plus/installation.json'), 'utf8'));
   assert.equal(emptyManifest.schema_version, 2);
   assert.deepEqual(emptyManifest.adapters, []);
+  const versionEmpty = run(['version', '--control', lastControl], { home });
+  assert.equal(versionEmpty.status, 0, versionEmpty.stderr);
+  assert.match(versionEmpty.stdout, new RegExp(`Installed Triad\\s+unknown \\(uninstalled; last ${emptyManifest.triad_version}\\)`));
   for (const [relative, content] of Object.entries(ownerFiles)) assert.equal(await readFile(path.join(lastControl, relative), 'utf8'), content);
   assert.equal((await readFile(path.join(lastControl, '.triad-plus/team.json'), 'utf8')).length > 0, true);
 
