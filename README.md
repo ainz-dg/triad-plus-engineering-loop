@@ -77,6 +77,32 @@ future user-initiated run, never an automatic repair.
 OpenCode is the canonical tutorial because it is open source and makes the
 separate Triad roles easy to inspect.
 
+### Project-local OpenCode with a root PRD
+
+For a local Control Workspace, put the source PRD at its root and install only
+the project-scoped Triad assets. This does not write Triad commands, skills, or
+role assets to the user's OpenCode configuration:
+
+```bash
+mkdir triad-control && cd triad-control
+```
+
+Create `PRD.md` in `triad-control`, then run:
+
+```bash
+npx triad-plus init --host opencode --control .
+npx triad-plus doctor --host opencode --control .
+opencode
+```
+
+In the OpenCode TUI opened at that root, start with `/triad ./PRD.md` (or
+`/triad` to use the root `PRD.md` default). Bootstrap copies the selected source
+to the normal immutable `artifacts/prd.md` path and records its SHA-256; keep
+the root source unchanged. Map product repositories and their worktrees
+explicitly in `project.yaml`; folders are never imported by scanning. Keep the
+Control Workspace separate from every product repository. Do not pass
+`--global` for this path.
+
 1. Install OpenCode and configure a provider/model, following the
    [OpenCode documentation](https://opencode.ai/docs).
 2. Create a small product folder and deterministic test command:

@@ -13,6 +13,20 @@ Collect only missing essentials: project ID/title, readable PRD source, target
 repositories with base/project branches and worktrees, measurable success
 conditions, runnable quality gates, practical-test need, and integration need.
 
+## Control-root PRD selection
+
+For a project-local host entry opened at the root of a Control Workspace, resolve
+a relative PRD argument from that Control Workspace root (not from a product
+repository or delegated worktree). When no PRD argument is supplied and a
+readable `PRD.md` exists at that root, use it as the source. An explicit PRD
+argument always takes precedence. Do not search product repositories or import
+arbitrary sibling directories for a PRD. Snapshot the selected source into the
+normal immutable `artifacts/prd.md` location for the project (or
+`projects/<project-id>/artifacts/prd.md` in a multi-project workspace), record
+its source and SHA-256, and leave the root source unchanged. Product repository
+and worktree paths still require explicit mappings in `project.yaml`; the root
+PRD does not make the Control Workspace a product repository.
+
 ## Native BMAD planning boundary
 
 When the owner input is a native BMAD `epics.md` artifact, BMAD is the
