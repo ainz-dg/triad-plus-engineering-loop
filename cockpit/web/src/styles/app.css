@@ -255,6 +255,8 @@ button { font: inherit; color: inherit; }
 .facts div { display: flex; justify-content: space-between; gap: 12px; padding: 0 4px; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.installation-adapters { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.installation-adapters li { display: grid; gap: 2px; }
 .facts-inline { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; }
 .facts-inline div { padding: 0; gap: 6px; }
 .facts-inline dd { text-align: left; }

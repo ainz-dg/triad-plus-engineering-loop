@@ -82,17 +82,41 @@ async function installation(reader) {
   if (loaded.status !== "ok") return { status: "invalid", provenance: PROVENANCE.code, source: loaded.path, error: loaded.error };
   try {
     const manifest = validateInstallationManifest(loaded.value);
-    return {
+    const projection = {
       status: "valid",
       provenance: PROVENANCE.code,
       source: loaded.path,
+      schema_version: manifest.schema_version,
       triad_version: manifest.triad_version,
-      adapter: manifest.adapter,
       installation_status: manifest.status,
-      scope_status: manifest.scope_status,
       installed_at: manifest.installed_at,
       updated_at: manifest.updated_at,
-      managed_asset_count: manifest.managed_assets.length,
+    };
+    if (manifest.schema_version === 1) {
+      return {
+        ...projection,
+        adapter: manifest.adapter,
+        scope_status: manifest.scope_status,
+        managed_asset_count: manifest.managed_assets.length,
+      };
+    }
+
+    const managedPaths = new Set();
+    const adapters = manifest.adapters.map((adapter) => {
+      for (const asset of adapter.managed_assets) managedPaths.add(`${asset.scope}:${asset.path}`);
+      return {
+        id: adapter.id,
+        scopes: adapter.scopes,
+        scope_status: adapter.scope_status,
+        managed_asset_reference_count: adapter.managed_assets.length,
+      };
+    });
+    return {
+      ...projection,
+      adapters,
+      adapter_count: adapters.length,
+      managed_asset_path_count: managedPaths.size,
+      shared_asset_count: manifest.shared_assets.length,
     };
   } catch (error) {
     return { status: "invalid", provenance: PROVENANCE.code, source: loaded.path, error: sanitizeError(error) };

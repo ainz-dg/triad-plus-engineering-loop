@@ -9,9 +9,21 @@ export interface Workspace {
     status: "valid" | "invalid" | "missing";
     provenance: Provenance;
     source: string;
+    schema_version?: 1 | 2;
     triad_version?: string;
     adapter?: string;
+    adapters?: Array<{
+      id: string;
+      scopes: { project: boolean; global: boolean };
+      scope_status: { project: string; global: string };
+      managed_asset_reference_count: number;
+    }>;
+    adapter_count?: number;
     installation_status?: string;
+    scope_status?: { project?: string; global?: string };
+    managed_asset_count?: number;
+    managed_asset_path_count?: number;
+    shared_asset_count?: number;
     updated_at?: string;
     error?: string;
     note?: string;

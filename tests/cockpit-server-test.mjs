@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, lstat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, lstat, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildInstallationManifest } from "../runtime/lib/installation-manifest.mjs";
+import { buildInstallationManifest, buildMultiAdapterManifest } from "../runtime/lib/installation-manifest.mjs";
 import { qualityBaselineFingerprint } from "../runtime/lib/quality-baseline.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -308,6 +308,94 @@ function request(target, { method = "GET", headers = {}, auth = true } = {}) {
   });
 }
 
+async function verifyInstallationProjection() {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), "triad-cockpit-installation-projection-"));
+  const controlRoot = path.join(fixtureRoot, "control");
+  const installationPath = path.join(controlRoot, ".triad-plus", "installation.json");
+  const installedAt = "2026-10-01T10:00:00.000Z";
+  const asset = (assetPath, hash) => ({ scope: "project", path: assetPath, kind: "file", sha256: hash });
+  const fixtureAdapter = (id, uniquePath, hash) => ({
+    id,
+    installed_at: installedAt,
+    updated_at: installedAt,
+    scopes: { project: true, global: false },
+    scope_status: { project: "installed", global: "not_configured" },
+    managed_assets: [asset(".triad-runtime/shared.mjs", "a".repeat(64)), asset(uniquePath, hash)],
+  });
+  const server = await (async () => {
+    await mkdir(controlRoot, { recursive: true });
+    return startCockpitServer({ controlRoot, staticAssets: { available: false, assets: new Map() } });
+  })();
+  const readInstallation = async () => {
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/workspace`, {
+      headers: { authorization: `Bearer ${server.token}` },
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).installation;
+  };
+
+  try {
+    const validV1 = buildInstallationManifest({
+      triadVersion: "1.16.0",
+      adapter: "opencode",
+      installedAt,
+      updatedAt: installedAt,
+      managedAssets: [asset(".triad-runtime/adapter.json", "d".repeat(64))],
+    });
+    await putJson(installationPath, validV1);
+    const v1 = await readInstallation();
+    assert.equal(v1.status, "valid");
+    assert.equal(v1.schema_version, 1);
+    assert.equal(v1.adapter, "opencode");
+    assert.equal(v1.managed_asset_count, 1);
+    assert.deepEqual(v1.scope_status, validV1.scope_status);
+    assert.equal(Object.hasOwn(v1, "adapters"), false);
+
+    const validV2 = buildMultiAdapterManifest({
+      triadVersion: "1.16.0",
+      installedAt,
+      updatedAt: installedAt,
+      adapters: [
+        fixtureAdapter("claude-code", ".triad-runtime/claude-only.mjs", "b".repeat(64)),
+        { ...fixtureAdapter("copilot", ".triad-runtime/copilot-only.mjs", "c".repeat(64)), scope_status: { project: "partial", global: "not_configured" } },
+      ],
+    });
+    await putJson(installationPath, validV2);
+    const v2 = await readInstallation();
+    assert.equal(v2.status, "valid");
+    assert.equal(v2.schema_version, 2);
+    assert.equal(v2.installation_status, "installed");
+    assert.equal(Object.hasOwn(v2, "adapter"), false, "v2 must not invent a singleton adapter");
+    assert.equal(v2.adapter_count, 2);
+    assert.deepEqual(v2.adapters.map((adapter) => adapter.id), ["claude-code", "copilot"]);
+    assert.deepEqual(v2.adapters[0].scopes, { project: true, global: false });
+    assert.equal(v2.adapters[0].scope_status.project, "installed");
+    assert.equal(v2.adapters[0].managed_asset_reference_count, 2);
+    assert.equal(v2.adapters[1].scope_status.project, "partial");
+    assert.equal(v2.managed_asset_path_count, 3, "unique scope/path pairs count a shared path once");
+    assert.equal(v2.shared_asset_count, 1);
+
+    const tombstone = buildMultiAdapterManifest({ triadVersion: "1.16.0", installedAt, updatedAt: installedAt, adapters: [] });
+    await putJson(installationPath, tombstone);
+    const emptyV2 = await readInstallation();
+    assert.equal(emptyV2.status, "valid");
+    assert.equal(emptyV2.schema_version, 2);
+    assert.equal(emptyV2.installation_status, "uninstalled");
+    assert.deepEqual(emptyV2.adapters, []);
+    assert.equal(emptyV2.adapter_count, 0);
+    assert.equal(emptyV2.managed_asset_path_count, 0);
+    assert.equal(emptyV2.shared_asset_count, 0);
+
+    await putJson(installationPath, { ...validV2, status: "uninstalled" });
+    const malformedV2 = await readInstallation();
+    assert.equal(malformedV2.status, "invalid");
+    assert.match(malformedV2.error, /status does not match adapter membership/);
+  } finally {
+    await server.close();
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 try {
   // Workspace overview from code-written and Core-validated artifacts.
   const workspace = await request("/api/workspace");
@@ -316,8 +404,14 @@ try {
   assert.equal(workspace.headers["x-content-type-options"], "nosniff");
   assert.equal(workspace.headers["access-control-allow-origin"], undefined);
   assert.equal(workspace.body.installation.status, "valid");
+  assert.equal(workspace.body.installation.schema_version, 1);
   assert.equal(workspace.body.installation.adapter, "opencode");
+  const installationPath = path.join(control, ".triad-plus", "installation.json");
+  const v1Manifest = JSON.parse(await readFile(installationPath, "utf8"));
+  assert.equal(workspace.body.installation.managed_asset_count, v1Manifest.managed_assets.length);
+  assert.deepEqual(workspace.body.installation.scope_status, v1Manifest.scope_status);
   assert.equal(workspace.body.installation.provenance, "code-written");
+  await verifyInstallationProjection();
   assert.equal(workspace.body.team.status, "valid");
   assert.equal(workspace.body.team.provenance, "code-validated");
   assert.deepEqual(workspace.body.team.roles.map((role) => role.display_name), ["Sebas", "Solution", "Yuri", "Lupusregina"]);
