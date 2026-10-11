@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const packetCli = path.join(repositoryRoot, 'runtime', 'triad-assignment-packet.mjs');
+const verifierCli = path.join(repositoryRoot, 'runtime', 'triad-verify.mjs');
 const controlRun = path.join(repositoryRoot, 'runtime', 'triad-control-run.mjs');
 
 function digest(value) {
@@ -23,7 +24,7 @@ async function writeJson(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function fixture(root, reviewerPayload) {
+async function fixture(root, reviewerPayload, { verifierMode = 'real', mutateCandidateInReviewer = false, reviewerResultFile = null } = {}) {
   const control = path.join(root, 'control');
   const product = path.join(control, 'product');
   const assignmentDir = path.join(control, '.loop', 'runtime', 'assignments');
@@ -86,21 +87,75 @@ async function fixture(root, reviewerPayload) {
   const reviewer = path.join(root, 'reviewer.mjs');
   const commit = path.join(root, 'commit.mjs');
   const marker = path.join(product, 'commit-marker.txt');
+  const reviewerStarted = path.join(root, 'reviewer-started.txt');
   await writeFile(developer, 'process.exit(0);\n');
-  await writeFile(verifier, 'console.log(JSON.stringify({status:"pass"}));\n');
-  await writeFile(reviewer, `console.log(JSON.stringify({type:"text",part:{type:"text",text:${JSON.stringify(`TRIAD_REVIEW_RESULT: ${JSON.stringify(reviewerPayload)}`)}}}));\n`);
+  const verifierInput = {
+    event: 'manual_explicit_dispatch',
+    agent_id: assignment.agent_id,
+    agent_type: assignment.agent_type,
+    run_id: assignment.verification_run_id,
+  };
+  const realVerifierCommand = [
+    process.execPath,
+    verifierCli,
+    '--project', controlRoot,
+    '--assignment', assignmentPath,
+    '--run-id', assignment.verification_run_id,
+  ];
+  let verifierCommand = realVerifierCommand;
+  if (verifierMode === 'missing-evidence') {
+    await writeFile(verifier, `console.log(JSON.stringify({status:'pass',run_id:${JSON.stringify(assignment.verification_run_id)},evidence:${JSON.stringify(path.join(control, '.loop/evidence/COMPLIANCE-001/attempt-001/verification.json'))}}));\n`);
+    verifierCommand = [process.execPath, verifier];
+  } else if (verifierMode === 'mismatched-assignment') {
+    await writeFile(verifier, `
+      const { spawnSync } = await import('node:child_process');
+      const { readFile, writeFile } = await import('node:fs/promises');
+      const child = spawnSync(${JSON.stringify(process.execPath)}, ${JSON.stringify(realVerifierCommand.slice(1))}, {
+        input: ${JSON.stringify(`${JSON.stringify(verifierInput)}\n`)}, encoding: 'utf8'
+      });
+      if (child.status !== 0) { process.stderr.write(child.stderr); process.exit(child.status ?? 1); }
+      const evidencePath = ${JSON.stringify(path.join(control, '.loop/evidence/COMPLIANCE-001/attempt-001/verification.json'))};
+      const evidence = JSON.parse(await readFile(evidencePath, 'utf8'));
+      evidence.assignment_id = 'another-project-assignment';
+      await writeFile(evidencePath, JSON.stringify(evidence, null, 2) + '\\n');
+      process.stdout.write(child.stdout);
+    `);
+    verifierCommand = [process.execPath, verifier];
+  } else if (verifierMode === 'mismatched-candidate') {
+    await writeFile(verifier, `
+      const { spawnSync } = await import('node:child_process');
+      const { readFile, writeFile } = await import('node:fs/promises');
+      const child = spawnSync(${JSON.stringify(process.execPath)}, ${JSON.stringify(realVerifierCommand.slice(1))}, {
+        input: ${JSON.stringify(`${JSON.stringify(verifierInput)}\n`)}, encoding: 'utf8'
+      });
+      if (child.status !== 0) { process.stderr.write(child.stderr); process.exit(child.status ?? 1); }
+      const evidencePath = ${JSON.stringify(path.join(control, '.loop/evidence/COMPLIANCE-001/attempt-001/verification.json'))};
+      const evidence = JSON.parse(await readFile(evidencePath, 'utf8'));
+      evidence.baseline.candidate_fingerprint = '0'.repeat(64);
+      await writeFile(evidencePath, JSON.stringify(evidence, null, 2) + '\\n');
+      process.stdout.write(child.stdout);
+    `);
+    verifierCommand = [process.execPath, verifier];
+  }
+  if (!['missing-evidence', 'mismatched-assignment', 'mismatched-candidate'].includes(verifierMode)) {
+    await writeFile(verifier, 'process.exit(0);\n');
+  }
+  const reviewerPrelude = mutateCandidateInReviewer
+    ? `await (await import('node:fs/promises')).writeFile(${JSON.stringify(path.join(product, 'candidate.txt'))}, 'changed after verification\\n');\n`
+    : '';
+  await writeFile(reviewer, `await (await import('node:fs/promises')).writeFile(${JSON.stringify(reviewerStarted)}, 'started\\n');\n${reviewerPrelude}console.log(JSON.stringify({type:"text",part:{type:"text",text:${JSON.stringify(`TRIAD_REVIEW_RESULT: ${JSON.stringify(reviewerPayload)}`)}}}));\n`);
   await writeFile(commit, `const fs = await import('node:fs/promises'); await fs.writeFile(${JSON.stringify(marker)}, 'committed\\n');\n`);
   const configPath = path.join(root, 'run.json');
   await writeJson(configPath, {
     project_root: controlRoot,
     assignment: path.relative(controlRoot, assignmentPath),
     developer: { command: [process.execPath, developer] },
-    verifier: { command: [process.execPath, verifier] },
-    reviewer: { command: [process.execPath, reviewer], result_file: path.join(control, 'reviewer-result.json') },
+    verifier: { command: verifierCommand, input: verifierInput },
+    reviewer: { command: [process.execPath, reviewer], result_file: reviewerResultFile ?? path.join(control, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json') },
     commit: { command: [process.execPath, commit] },
     output: path.join(control, 'control-run.json')
   });
-  return { control, configPath, marker, assignmentPath, skillPath: skill };
+  return { control, configPath, marker, reviewerStarted, assignmentPath, skillPath: skill, product };
 }
 
 function runControl(fixture) {
@@ -119,8 +174,69 @@ try {
     }]
   });
   const validRun = runControl(valid);
-  assert.equal(validRun.status, 0, validRun.stderr);
+  assert.equal(validRun.status, 0, `${validRun.stderr}\n${validRun.stdout}`);
   await readFile(valid.marker, 'utf8');
+
+  const noEvidence = await fixture(path.join(root, 'no-evidence'), {
+    decision: 'approved',
+    skill_compliance: [{ path: '.agents/skills/router/SKILL.md', rule: 'shared behavior placement', status: 'compliant' }],
+  }, { verifierMode: 'missing-evidence' });
+  const noEvidenceRun = runControl(noEvidence);
+  assert.notEqual(noEvidenceRun.status, 0);
+  await assert.rejects(() => readFile(noEvidence.marker, 'utf8'), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(noEvidence.reviewerStarted, 'utf8'), { code: 'ENOENT' });
+  assert.match(noEvidenceRun.stdout, /verifier evidence/);
+
+  const mismatchedAssignment = await fixture(path.join(root, 'mismatched-assignment'), {
+    decision: 'approved',
+    skill_compliance: [{ path: '.agents/skills/router/SKILL.md', rule: 'shared behavior placement', status: 'compliant' }],
+  }, { verifierMode: 'mismatched-assignment' });
+  const mismatchedAssignmentRun = runControl(mismatchedAssignment);
+  assert.notEqual(mismatchedAssignmentRun.status, 0);
+  await assert.rejects(() => readFile(mismatchedAssignment.marker, 'utf8'), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(mismatchedAssignment.reviewerStarted, 'utf8'), { code: 'ENOENT' });
+  assert.match(mismatchedAssignmentRun.stdout, /verifier evidence/);
+
+  const mismatchedCandidate = await fixture(path.join(root, 'mismatched-candidate'), {
+    decision: 'approved',
+    skill_compliance: [{ path: '.agents/skills/router/SKILL.md', rule: 'shared behavior placement', status: 'compliant' }],
+  }, { verifierMode: 'mismatched-candidate' });
+  const mismatchedCandidateRun = runControl(mismatchedCandidate);
+  assert.notEqual(mismatchedCandidateRun.status, 0);
+  await assert.rejects(() => readFile(mismatchedCandidate.marker, 'utf8'), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(mismatchedCandidate.reviewerStarted, 'utf8'), { code: 'ENOENT' });
+  assert.match(mismatchedCandidateRun.stdout, /candidate fingerprint/);
+
+  const changedCandidate = await fixture(path.join(root, 'changed-candidate'), {
+    decision: 'approved',
+    skill_compliance: [{ path: '.agents/skills/router/SKILL.md', rule: 'shared behavior placement', status: 'compliant' }],
+  }, { mutateCandidateInReviewer: true });
+  const changedCandidateRun = runControl(changedCandidate);
+  assert.notEqual(changedCandidateRun.status, 0);
+  await assert.rejects(() => readFile(changedCandidate.marker, 'utf8'), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(path.join(changedCandidate.control, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json'), 'utf8'), { code: 'ENOENT' });
+  await readFile(changedCandidate.reviewerStarted, 'utf8');
+  assert.match(changedCandidateRun.stdout, /candidate fingerprint/);
+
+  const validOutput = JSON.parse(await readFile(path.join(valid.control, 'control-run.json'), 'utf8'));
+  assert.equal(validOutput.verifier_evidence.status, 'pass');
+  assert.equal(validOutput.reviewer_binding.assignment_id, 'compliance-assignment-001');
+  assert.equal(validOutput.reviewer_binding.candidate_fingerprint, validOutput.verifier_evidence.candidate_fingerprint);
+  const reviewerResultSource = await readFile(path.join(valid.control, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json'));
+  assert.equal(validOutput.reviewer_binding.reviewer_result_ref.path, '.loop/runtime/reviewer-results/COMPLIANCE-001-attempt-001.json');
+  assert.equal(validOutput.reviewer_binding.reviewer_result_ref.sha256, digest(reviewerResultSource));
+  assert.equal(JSON.parse(reviewerResultSource.toString('utf8')).decision, 'approved');
+
+  const escapedResultPath = path.join(root, 'escaped-result', 'reviewer-result.json');
+  const escapedResult = await fixture(path.join(root, 'escaped-result'), {
+    decision: 'approved',
+    skill_compliance: [{ path: '.agents/skills/router/SKILL.md', rule: 'shared behavior placement', status: 'compliant', evidence_refs: ['candidate.txt'] }],
+  }, { reviewerResultFile: escapedResultPath });
+  const escapedResultRun = runControl(escapedResult);
+  assert.notEqual(escapedResultRun.status, 0);
+  assert.match(escapedResultRun.stderr, /must stay inside the active Control Workspace/);
+  await assert.rejects(() => readFile(escapedResultPath, 'utf8'), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(escapedResult.marker, 'utf8'), { code: 'ENOENT' });
 
   const missing = await fixture(path.join(root, 'missing'), { decision: 'approved' });
   const missingRun = runControl(missing);

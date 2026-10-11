@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, lstat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, lstat, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildInstallationManifest } from "../runtime/lib/installation-manifest.mjs";
+import { buildInstallationManifest, buildMultiAdapterManifest } from "../runtime/lib/installation-manifest.mjs";
 import { qualityBaselineFingerprint } from "../runtime/lib/quality-baseline.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -244,6 +244,93 @@ await putJson(path.join(control, ".loop/runtime/deterministic-control-run.json")
 
 await put(path.join(control, "projects/alpha/.loop/work-queue.yaml"), "items:\n  - id: A-1\n    state: ready\n");
 
+// A current deterministic run binds the normalized Reviewer result to the
+// active assignment, verifier artifact, packet, and candidate. The Cockpit
+// must resolve that binding while leaving older records explicitly unbound.
+const alphaBase = path.join(control, "projects/alpha");
+const alphaAssignmentPath = ".loop/runtime/assignments/ALPHA-1-attempt-1.json";
+const alphaPacketPath = ".loop/runtime/assignments/ALPHA-1-attempt-001.md";
+const alphaEvidencePath = ".loop/evidence/ALPHA-1/attempt-001/verification.json";
+const alphaReviewerResultPath = ".loop/runtime/reviewer-results/ALPHA-1-attempt-001.json";
+const alphaAssignment = {
+  schema_version: 1,
+  assignment_id: "alpha-a1",
+  status: "active",
+  agent_id: "alpha-developer",
+  agent_type: "triad_developer",
+  feature_id: "ALPHA-1",
+  attempt: 1,
+};
+const alphaAssignmentSource = `${JSON.stringify(alphaAssignment, null, 2)}\n`;
+const alphaAssignmentSha = sha256(alphaAssignmentSource);
+await put(path.join(alphaBase, alphaAssignmentPath), alphaAssignmentSource);
+const alphaPacketMetadata = { assignment_id: "alpha-a1", feature_id: "ALPHA-1", attempt: 1, mandatory_skills: [] };
+const alphaPacketSource = `<!-- triad-plus-assignment-packet:start -->\n${JSON.stringify(alphaPacketMetadata, null, 2)}\n<!-- triad-plus-assignment-packet:end -->\n`;
+const alphaPacketSha = sha256(alphaPacketSource);
+await put(path.join(alphaBase, alphaPacketPath), alphaPacketSource);
+const alphaCandidateFingerprint = "a".repeat(64);
+const alphaEvidence = {
+  schema_version: 1,
+  run_id: "alpha-run-1",
+  feature_id: "ALPHA-1",
+  attempt: 1,
+  assignment_id: "alpha-a1",
+  assignment_sha256: alphaAssignmentSha,
+  trigger: { event: "manual", agent_id: "alpha-developer", agent_type: "triad_developer" },
+  assignment_ref: alphaAssignmentPath,
+  baseline: {
+    prd_sha256: null,
+    card_sha256: null,
+    quality_baseline_fingerprint: null,
+    git_head: "alpha-base",
+    candidate_fingerprint: alphaCandidateFingerprint,
+    branch: "feature/alpha",
+  },
+  assignment_packet: { path: alphaPacketPath, sha256: alphaPacketSha },
+  gates: [],
+  required_gates_passed: true,
+  status: "pass",
+  failure: null,
+  created_at: "2026-10-11T12:00:00.000Z",
+};
+const alphaEvidenceSource = `${JSON.stringify(alphaEvidence, null, 2)}\n`;
+const alphaEvidenceSha = sha256(alphaEvidenceSource);
+await put(path.join(alphaBase, alphaEvidencePath), alphaEvidenceSource);
+const alphaReviewer = { decision: "approved", summary: "synthetic bound result", findings: [], evidence_refs: [] };
+const alphaReviewerSource = `${JSON.stringify(alphaReviewer, null, 2)}\n`;
+await put(path.join(alphaBase, alphaReviewerResultPath), alphaReviewerSource);
+const alphaVerifierReference = {
+  path: alphaEvidencePath,
+  sha256: alphaEvidenceSha,
+  run_id: alphaEvidence.run_id,
+  feature_id: alphaEvidence.feature_id,
+  attempt: alphaEvidence.attempt,
+  assignment_id: alphaEvidence.assignment_id,
+  assignment_sha256: alphaEvidence.assignment_sha256,
+  assignment_packet: alphaEvidence.assignment_packet,
+  candidate_fingerprint: alphaCandidateFingerprint,
+  required_gates_passed: true,
+  status: "pass",
+};
+await putJson(path.join(alphaBase, ".loop/runtime/deterministic-control-run.json"), {
+  status: "done",
+  packet: { path: alphaPacketPath, sha256: alphaPacketSha, metadata: alphaPacketMetadata },
+  verifier_evidence: alphaVerifierReference,
+  reviewer: alphaReviewer,
+  reviewer_binding: {
+    schema_version: 2,
+    assignment_ref: alphaAssignmentPath,
+    assignment_sha256: alphaAssignmentSha,
+    assignment_id: "alpha-a1",
+    feature_id: "ALPHA-1",
+    attempt: 1,
+    assignment_packet: { path: alphaPacketPath, sha256: alphaPacketSha },
+    verifier_evidence: alphaVerifierReference,
+    candidate_fingerprint: alphaCandidateFingerprint,
+    reviewer_result_ref: { path: alphaReviewerResultPath, sha256: sha256(alphaReviewerSource) },
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Snapshot the whole fixture (control + outside) to prove nothing is written.
 
@@ -261,7 +348,7 @@ async function snapshot(directory) {
   await walk(directory);
   return entries.join("\n");
 }
-const before = await snapshot(root);
+let before = await snapshot(root);
 
 // ---------------------------------------------------------------------------
 // Server
@@ -308,6 +395,151 @@ function request(target, { method = "GET", headers = {}, auth = true } = {}) {
   });
 }
 
+async function verifyInstallationProjection() {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), "triad-cockpit-installation-projection-"));
+  const controlRoot = path.join(fixtureRoot, "control");
+  const installationPath = path.join(controlRoot, ".triad-plus", "installation.json");
+  const installedAt = "2026-10-01T10:00:00.000Z";
+  const asset = (assetPath, hash) => ({ scope: "project", path: assetPath, kind: "file", sha256: hash });
+  const fixtureAdapter = (id, uniquePath, hash) => ({
+    id,
+    installed_at: installedAt,
+    updated_at: installedAt,
+    scopes: { project: true, global: false },
+    scope_status: { project: "installed", global: "not_configured" },
+    managed_assets: [asset(".triad-runtime/shared.mjs", "a".repeat(64)), asset(uniquePath, hash)],
+  });
+  const server = await (async () => {
+    await mkdir(controlRoot, { recursive: true });
+    return startCockpitServer({ controlRoot, staticAssets: { available: false, assets: new Map() } });
+  })();
+  const readInstallation = async () => {
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/workspace`, {
+      headers: { authorization: `Bearer ${server.token}` },
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).installation;
+  };
+
+  try {
+    const validV1 = buildInstallationManifest({
+      triadVersion: "1.16.0",
+      adapter: "opencode",
+      installedAt,
+      updatedAt: installedAt,
+      managedAssets: [asset(".triad-runtime/adapter.json", "d".repeat(64))],
+    });
+    await putJson(installationPath, validV1);
+    const v1 = await readInstallation();
+    assert.equal(v1.status, "valid");
+    assert.equal(v1.schema_version, 1);
+    assert.equal(v1.adapter, "opencode");
+    assert.equal(v1.managed_asset_count, 1);
+    assert.deepEqual(v1.scope_status, validV1.scope_status);
+    assert.equal(Object.hasOwn(v1, "adapters"), false);
+
+    const validV2 = buildMultiAdapterManifest({
+      triadVersion: "1.16.0",
+      installedAt,
+      updatedAt: installedAt,
+      adapters: [
+        fixtureAdapter("claude-code", ".triad-runtime/claude-only.mjs", "b".repeat(64)),
+        { ...fixtureAdapter("copilot", ".triad-runtime/copilot-only.mjs", "c".repeat(64)), scope_status: { project: "partial", global: "not_configured" } },
+      ],
+    });
+    await putJson(installationPath, validV2);
+    const v2 = await readInstallation();
+    assert.equal(v2.status, "valid");
+    assert.equal(v2.schema_version, 2);
+    assert.equal(v2.installation_status, "installed");
+    assert.equal(Object.hasOwn(v2, "adapter"), false, "v2 must not invent a singleton adapter");
+    assert.equal(v2.adapter_count, 2);
+    assert.deepEqual(v2.adapters.map((adapter) => adapter.id), ["claude-code", "copilot"]);
+    assert.deepEqual(v2.adapters[0].scopes, { project: true, global: false });
+    assert.equal(v2.adapters[0].scope_status.project, "installed");
+    assert.equal(v2.adapters[0].managed_asset_reference_count, 2);
+    assert.equal(v2.adapters[1].scope_status.project, "partial");
+    assert.equal(v2.managed_asset_path_count, 3, "unique scope/path pairs count a shared path once");
+    assert.equal(v2.shared_asset_count, 1);
+
+    const tombstone = buildMultiAdapterManifest({ triadVersion: "1.16.0", installedAt, updatedAt: installedAt, adapters: [] });
+    await putJson(installationPath, tombstone);
+    const emptyV2 = await readInstallation();
+    assert.equal(emptyV2.status, "valid");
+    assert.equal(emptyV2.schema_version, 2);
+    assert.equal(emptyV2.installation_status, "uninstalled");
+    assert.deepEqual(emptyV2.adapters, []);
+    assert.equal(emptyV2.adapter_count, 0);
+    assert.equal(emptyV2.managed_asset_path_count, 0);
+    assert.equal(emptyV2.shared_asset_count, 0);
+
+    await putJson(installationPath, { ...validV2, status: "uninstalled" });
+    const malformedV2 = await readInstallation();
+    assert.equal(malformedV2.status, "invalid");
+    assert.match(malformedV2.error, /status does not match adapter membership/);
+  } finally {
+    await server.close();
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyIntegratedV2CockpitAndReviewerProjection(v1Manifest) {
+  const installationPath = path.join(control, ".triad-plus", "installation.json");
+  const installedAt = "2026-10-11T18:00:00.000Z";
+  const sharedAsset = { scope: "project", path: ".triad-runtime/shared.mjs", kind: "file", sha256: "a".repeat(64) };
+  const adapter = (id, uniquePath, hash) => ({
+    id,
+    installed_at: installedAt,
+    updated_at: installedAt,
+    scopes: { project: true, global: false },
+    scope_status: { project: "installed", global: "not_configured" },
+    managed_assets: [sharedAsset, { scope: "project", path: uniquePath, kind: "file", sha256: hash }],
+  });
+  const integratedV2 = buildMultiAdapterManifest({
+    triadVersion: "1.16.0",
+    installedAt,
+    updatedAt: installedAt,
+    adapters: [
+      adapter("claude-code", ".triad-runtime/claude-only.mjs", "b".repeat(64)),
+      adapter("copilot", ".triad-runtime/copilot-only.mjs", "c".repeat(64)),
+    ],
+  });
+  const reviewerResultFile = path.join(alphaBase, alphaReviewerResultPath);
+  const reviewerBytes = await readFile(reviewerResultFile);
+
+  try {
+    await putJson(installationPath, integratedV2);
+    const workspace = await request("/api/workspace");
+    assert.equal(workspace.body.installation.status, "valid");
+    assert.equal(workspace.body.installation.provenance, "code-written");
+    assert.equal(workspace.body.installation.schema_version, 2);
+    assert.deepEqual(workspace.body.installation.adapters.map((entry) => entry.id), ["claude-code", "copilot"]);
+    assert.equal(workspace.body.installation.managed_asset_path_count, 3);
+    assert.equal(workspace.body.installation.shared_asset_count, 1);
+
+    const bound = await request("/api/projects/alpha/control-run");
+    assert.equal(bound.body.reviewer.binding.status, "bound");
+    assert.equal(bound.body.reviewer.binding.provenance, "cockpit-derived");
+    assert.equal(bound.body.reviewer.binding.reviewer_result_ref.path, alphaReviewerResultPath);
+
+    await writeFile(reviewerResultFile, `${JSON.stringify({ ...alphaReviewer, summary: "integrated tamper" }, null, 2)}\n`);
+    const tampered = await request("/api/projects/alpha/control-run");
+    assert.equal(tampered.body.reviewer.binding.status, "mismatch");
+    assert.ok(tampered.body.reviewer.binding.issues.includes("reviewer_result_hash_mismatch"));
+    assert.equal((await request("/api/workspace")).body.installation.schema_version, 2, "Reviewer tampering does not alter v2 installation projection");
+
+    await writeFile(reviewerResultFile, reviewerBytes);
+    await rm(reviewerResultFile);
+    const missing = await request("/api/projects/alpha/control-run");
+    assert.equal(missing.body.reviewer.binding.status, "mismatch");
+    assert.ok(missing.body.reviewer.binding.issues.includes("reviewer_result_missing"));
+    assert.equal((await request("/api/workspace")).body.installation.status, "valid", "missing Reviewer artifact does not invalidate installation state");
+  } finally {
+    await writeFile(reviewerResultFile, reviewerBytes);
+    await putJson(installationPath, v1Manifest);
+  }
+}
+
 try {
   // Workspace overview from code-written and Core-validated artifacts.
   const workspace = await request("/api/workspace");
@@ -316,8 +548,15 @@ try {
   assert.equal(workspace.headers["x-content-type-options"], "nosniff");
   assert.equal(workspace.headers["access-control-allow-origin"], undefined);
   assert.equal(workspace.body.installation.status, "valid");
+  assert.equal(workspace.body.installation.schema_version, 1);
   assert.equal(workspace.body.installation.adapter, "opencode");
+  const installationPath = path.join(control, ".triad-plus", "installation.json");
+  const v1Manifest = JSON.parse(await readFile(installationPath, "utf8"));
+  assert.equal(workspace.body.installation.managed_asset_count, v1Manifest.managed_assets.length);
+  assert.deepEqual(workspace.body.installation.scope_status, v1Manifest.scope_status);
   assert.equal(workspace.body.installation.provenance, "code-written");
+  await verifyInstallationProjection();
+  await verifyIntegratedV2CockpitAndReviewerProjection(v1Manifest);
   assert.equal(workspace.body.team.status, "valid");
   assert.equal(workspace.body.team.provenance, "code-validated");
   assert.deepEqual(workspace.body.team.roles.map((role) => role.display_name), ["Sebas", "Solution", "Yuri", "Lupusregina"]);
@@ -380,6 +619,7 @@ try {
   assert.equal(card11View.evaluations[0].candidate_binding.result, "same_as_latest_pass_record");
   assert.equal(card11View.control_run.status, "done");
   assert.equal(card11View.control_run.reviewer.status, "valid");
+  assert.equal(card11View.control_run.reviewer.binding.status, "not_recorded");
   assert.equal(card11View.control_run.reviewer.decision, "approved");
   assert.equal(card11View.control_run.trace[0].at, "2026-10-02T09:00:00.000Z");
 
@@ -438,7 +678,42 @@ try {
   // Missing resources.
   assert.equal((await request("/api/projects/root/cards/9.9")).status, 404);
   assert.equal((await request("/api/projects/nope/cards")).status, 404);
-  assert.equal((await request("/api/projects/alpha/control-run")).status, 404);
+  const legacyControlRun = (await request("/api/projects/root/control-run")).body;
+  assert.equal(legacyControlRun.reviewer.binding.status, "not_recorded");
+  const boundControlRun = await request("/api/projects/alpha/control-run");
+  assert.equal(boundControlRun.status, 200);
+  assert.equal(boundControlRun.body.reviewer.binding.status, "bound");
+  assert.equal(boundControlRun.body.reviewer.binding.candidate_fingerprint, alphaCandidateFingerprint);
+  assert.equal(boundControlRun.body.reviewer.binding.verifier_evidence.sha256, alphaEvidenceSha);
+  assert.deepEqual(boundControlRun.body.reviewer.binding.reviewer_result_ref, { path: alphaReviewerResultPath, sha256: sha256(alphaReviewerSource) });
+
+  // The Reviewer binding is checked against the separately persisted bytes,
+  // not merely against the embedded Reviewer object in deterministic output.
+  const reviewerResultFile = path.join(alphaBase, alphaReviewerResultPath);
+  const controlRunFile = path.join(alphaBase, ".loop/runtime/deterministic-control-run.json");
+  const controlRunBytes = await readFile(controlRunFile);
+  await writeFile(reviewerResultFile, `${JSON.stringify({ ...alphaReviewer, summary: "tampered" }, null, 2)}\n`);
+  const tamperedReviewer = await request("/api/projects/alpha/control-run");
+  assert.equal(tamperedReviewer.body.reviewer.binding.status, "mismatch");
+  assert.ok(tamperedReviewer.body.reviewer.binding.issues.includes("reviewer_result_hash_mismatch"));
+  assert.deepEqual(await readFile(controlRunFile), controlRunBytes, "tamper test leaves deterministic control-run bytes unchanged");
+
+  await writeFile(reviewerResultFile, alphaReviewerSource);
+  await rm(reviewerResultFile);
+  const missingReviewer = await request("/api/projects/alpha/control-run");
+  assert.equal(missingReviewer.body.reviewer.binding.status, "mismatch");
+  assert.ok(missingReviewer.body.reviewer.binding.issues.includes("reviewer_result_missing"));
+  assert.deepEqual(await readFile(controlRunFile), controlRunBytes, "missing-file test leaves deterministic control-run bytes unchanged");
+
+  await put(reviewerResultFile, alphaReviewerSource);
+  const tamperedBinding = JSON.parse(controlRunBytes.toString("utf8"));
+  tamperedBinding.reviewer_binding.reviewer_result_ref.path = "../../outside/reviewer-result.json";
+  await writeFile(controlRunFile, `${JSON.stringify(tamperedBinding, null, 2)}\n`);
+  const escapedReviewer = await request("/api/projects/alpha/control-run");
+  assert.equal(escapedReviewer.body.reviewer.binding.status, "mismatch");
+  assert.ok(escapedReviewer.body.reviewer.binding.issues.includes("reviewer_result_path_invalid"));
+  await writeFile(controlRunFile, controlRunBytes);
+  before = await snapshot(root);
   assert.equal((await request("/api/projects/root/control-run")).body.status, "done");
   assert.equal((await request("/api/projects/alpha/cards")).body.cards[0].id, "A-1");
 

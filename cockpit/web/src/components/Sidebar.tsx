@@ -59,7 +59,35 @@ export function Sidebar({ workspace, currentProject, theme, onTheme, onLegend, o
         {installation?.status === "valid" ? (
           <dl className="facts">
             <div><dt>Triad+</dt><dd className="mono">{installation.triad_version}</dd></div>
-            <div><dt>Adapter</dt><dd>{installation.adapter}</dd></div>
+            {installation.schema_version === 2 ? (
+              <>
+                <div>
+                  <dt>Adapters</dt>
+                  <dd>
+                    <ul className="installation-adapters" aria-label="Installed adapters">
+                      {(installation.adapters ?? []).map((adapter) => (
+                        <li key={adapter.id}>
+                          <strong>{adapter.id}</strong>
+                          <span className="muted tiny">
+                            Project: {adapter.scopes.project ? "enabled" : "disabled"} ({adapter.scope_status.project.replaceAll("_", " ")})
+                            {" · "}
+                            Global: {adapter.scopes.global ? "enabled" : "disabled"} ({adapter.scope_status.global.replaceAll("_", " ")})
+                          </span>
+                        </li>
+                      ))}
+                      {installation.adapters?.length === 0 && <li>None</li>}
+                    </ul>
+                  </dd>
+                </div>
+                <div><dt>Unique scope/path pairs</dt><dd>{installation.managed_asset_path_count}</dd></div>
+                <div><dt>Shared scope/path pairs</dt><dd>{installation.shared_asset_count}</dd></div>
+              </>
+            ) : (
+              <>
+                <div><dt>Adapter</dt><dd>{installation.adapter}</dd></div>
+                <div><dt>Managed assets</dt><dd>{installation.managed_asset_count}</dd></div>
+              </>
+            )}
             <div><dt>Install</dt><dd>{installation.installation_status}</dd></div>
           </dl>
         ) : (

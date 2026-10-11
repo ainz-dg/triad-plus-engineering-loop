@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { access, cp, mkdir, readFile, rm, stat, writeFile, lstat, readdir } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile, lstat, readdir } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, relative, sep } from 'node:path';
 import process from 'node:process';
@@ -23,16 +24,19 @@ import {
 } from '../runtime/lib/terminal.mjs';
 import {
   buildInstallationManifest,
+  buildMultiAdapterManifest,
   collectManagedAssetRecords,
   installationManifestFingerprint,
   installationManifestPath,
   loadInstallationManifest,
   manifestIsUninstalled,
   manifestScopeStatus,
+  MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION,
   sha256Text,
   sha256File,
   writeInstallationManifest
 } from '../runtime/lib/installation-manifest.mjs';
+import { interactiveAdapterManagement } from '../runtime/lib/interactive-adapter-menu.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageVersion = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
@@ -49,6 +53,11 @@ Usage:
   npx triad-plus version --control <path>
   npx triad-plus upgrade --host <adapter-id> --control <path> [--global] [--apply]
   npx triad-plus uninstall --host <adapter-id> --control <path> [--global] [--apply]
+  npx triad-plus adapter list --control <path>
+  npx triad-plus adapter doctor [<adapter-id>] --control <path>
+  npx triad-plus adapter add <adapter-id> --control <path> [--apply]
+  npx triad-plus adapter upgrade <adapter-id> --control <path> [--apply]
+  npx triad-plus adapter remove <adapter-id> --control <path> [--apply]
   npx triad-plus import-bmad-story --source <story.md> --output <card.md> [--target-repository <id>] [--provenance <record.json>] [--required-gate <id>] [--depends-on <card-id>]
   npx triad-plus cockpit --control <path> [--port <n>]
 
@@ -57,13 +66,20 @@ Adapters: ${listAdapters().map((adapter) => adapter.id).join(', ')}
 The control path is a project-control workspace, not a product repository.
 Installation refuses conflicting asset overwrites; identical global assets may be reused. Upgrade is a dry run unless --apply is supplied.
 cockpit serves a read-only web view of the control workspace on 127.0.0.1 only; it never starts agents.
+Multi-adapter installation records membership and exact local asset ownership. Attempt-bound host dispatch is not available in this version.
 `);
   process.exit(exitCode);
 }
 
 function parseArgs(args) {
-  const [command, ...rest] = args;
+  const [command, ...arguments_] = args;
+  const rest = [...arguments_];
   const options = { command, global: false, allowProductRepo: false, apply: false, requiredGates: [], dependsOn: [] };
+  if (command === 'adapter') {
+    options.adapterCommand = rest.shift();
+    if (!['add', 'list', 'doctor', 'upgrade', 'remove'].includes(options.adapterCommand)) throw new Error('Use adapter add, list, doctor, upgrade, or remove.');
+    if (!rest[0]?.startsWith('-') && rest.length > 0) options.host = rest.shift();
+  }
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
     if (argument === '--global') options.global = true;
@@ -577,7 +593,11 @@ async function inspectInstallation(controlRoot, adapter, installContext) {
   }
   if (!loaded) return { state: 'legacy', manifest: null, issues: [] };
   const manifest = loaded.manifest;
-  if (manifest.adapter !== adapter.id) {
+  const record = manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION
+    ? manifest.adapters.find((entry) => entry.id === adapter.id)
+    : manifest.adapter === adapter.id ? manifest : null;
+  if (!record) {
+    if (manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) return { state: 'not_installed', manifest: null, issues: [], multiAdapter: true };
     return {
       state: 'invalid',
       message: `manifest adapter ${manifest.adapter} does not match selected ${adapter.id}`,
@@ -585,9 +605,13 @@ async function inspectInstallation(controlRoot, adapter, installContext) {
       issues: []
     };
   }
-  const issues = await installationAssetIssues(controlRoot, adapter, installContext, manifest);
+  const adapterManifest = manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION
+    ? { ...record, adapter: record.id, triad_version: manifest.triad_version, status: 'installed' }
+    : manifest;
+  const issues = await installationAssetIssues(controlRoot, adapter, installContext, adapterManifest);
   const versionRelation = compareVersions(packageVersion, manifest.triad_version);
-  return { state: manifestIsUninstalled(manifest) ? 'uninstalled' : 'valid', manifest, issues, versionRelation };
+  const uninstalled = ['project', 'global'].every((scope) => ['not_configured', 'uninstalled'].includes(manifestScopeStatus(adapterManifest, scope)));
+  return { state: uninstalled ? 'uninstalled' : 'valid', manifest: adapterManifest, issues, versionRelation, multiAdapter: manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION };
 }
 
 /** Return one status per shared skill so a partial install cannot look healthy. */
@@ -724,6 +748,9 @@ async function init(options) {
   }
   let previousManifest = null;
   if (await exists(installationManifestPath(controlRoot))) previousManifest = await loadInstallationManifest(controlRoot);
+  if (previousManifest?.manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) {
+    throw new Error('This workspace has a multi-adapter installation record. Use `adapter add` instead of `init`.');
+  }
   const installContext = context(controlRoot);
   const projectPlanned = [
     ...adapter.projectPaths(controlRoot, installContext),
@@ -819,6 +846,9 @@ async function upgrade(options) {
   await requireExistingDirectory(controlRoot);
   let previousManifest = null;
   if (await exists(installationManifestPath(controlRoot))) previousManifest = await loadInstallationManifest(controlRoot);
+  if (previousManifest?.manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) {
+    throw new Error('This workspace has a multi-adapter installation record. Use `adapter upgrade <adapter-id>`.');
+  }
   if (previousManifest && previousManifest.manifest.adapter !== adapter.id) {
     throw new Error(`Installation manifest belongs to ${previousManifest.manifest.adapter}, not ${adapter.id}.`);
   }
@@ -877,6 +907,542 @@ function installationScopeText(manifest, scope) {
   return status;
 }
 
+function adapterRecords(manifest) {
+  if (!manifest) return [];
+  if (manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) return manifest.adapters;
+  return [{
+    id: manifest.adapter,
+    installed_at: manifest.installed_at,
+    updated_at: manifest.updated_at,
+    scopes: manifest.scopes,
+    scope_status: {
+      project: manifestScopeStatus(manifest, 'project'),
+      global: manifestScopeStatus(manifest, 'global'),
+    },
+    managed_assets: manifest.managed_assets,
+  }];
+}
+
+function assetIdentity(asset) {
+  return `${asset.scope}:${asset.path}`;
+}
+
+function recordedRuntimeMetadataPath(record) {
+  return record?.managed_assets?.find((asset) => asset.scope === 'project' && asset.path.endsWith('/adapter.json') && asset.path.startsWith('.triad-runtime/'))?.path
+    ?? null;
+}
+
+async function adapterAssetPairs(adapter, controlRoot, installContext, records, record = null) {
+  const pairs = await materializedAssetPairs(adapter.projectAssets, controlRoot, installContext);
+  const runtimeSource = resolve(sourcePath(`adapters/${adapter.id}/runtime.json`));
+  const recordedPath = recordedRuntimeMetadataPath(record);
+  const runtimePath = recordedPath
+    ?? (records.length === 0 ? '.triad-runtime/adapter.json' : `.triad-runtime/adapters/${adapter.id}/adapter.json`);
+  return pairs.map((pair) => pair.source === runtimeSource && pair.target === resolve(controlRoot, '.triad-runtime/adapter.json')
+    ? { ...pair, target: resolve(controlRoot, runtimePath) }
+    : pair);
+}
+
+async function safeProjectAssetInfo(controlRoot, target) {
+  if (!pathWithin(controlRoot, target) || resolve(target) === resolve(controlRoot)) throw new Error(`Managed project asset escaped the Control Workspace: ${target}`);
+  const rootInfo = await lstat(resolve(controlRoot));
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) throw new Error(`Control Workspace path is unsafe: ${controlRoot}`);
+  const relativePath = relative(resolve(controlRoot), resolve(target)).split(sep).join('/');
+  let current = resolve(controlRoot);
+  const segments = relativePath.split('/');
+  for (const segment of segments.slice(0, -1)) {
+    current = join(current, segment);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`Managed project asset path is unsafe: ${relative(controlRoot, current)}`);
+    } catch (error) {
+      if (error.code === 'ENOENT') break;
+      throw error;
+    }
+  }
+  try {
+    const info = await lstat(target);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Managed project asset is not a regular file: ${relative(controlRoot, target)}`);
+    return info;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function ensureSafeProjectParents(controlRoot, target) {
+  if (!pathWithin(controlRoot, target)) throw new Error(`Managed project asset escaped the Control Workspace: ${target}`);
+  const root = resolve(controlRoot);
+  const rootInfo = await lstat(root);
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) throw new Error(`Control Workspace path is unsafe: ${controlRoot}`);
+  const parentRelative = relative(root, dirname(resolve(target)));
+  if (parentRelative.startsWith('..')) throw new Error(`Managed project asset escaped the Control Workspace: ${target}`);
+  let current = root;
+  for (const segment of parentRelative.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`Managed project asset parent is unsafe: ${relative(root, current)}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      try { await mkdir(current); }
+      catch (mkdirError) { if (mkdirError.code !== 'EEXIST') throw mkdirError; }
+      const info = await lstat(current);
+      if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`Managed project asset parent is unsafe: ${relative(root, current)}`);
+    }
+  }
+}
+
+async function plannedAdapterRecords(pairs, controlRoot) {
+  const seen = new Set();
+  const records = [];
+  for (const pair of pairs) {
+    if (!pathWithin(controlRoot, pair.target)) throw new Error(`Adapter asset escapes the Control Workspace: ${pair.target}`);
+    const targetPath = relative(resolve(controlRoot), resolve(pair.target)).split(sep).join('/');
+    if (!targetPath || targetPath.startsWith('../')) throw new Error(`Adapter asset escapes the Control Workspace: ${pair.target}`);
+    if (seen.has(targetPath)) throw new Error(`Adapter plan contains duplicate target ownership: ${targetPath}`);
+    seen.add(targetPath);
+    const sourceInfo = await lstat(pair.source);
+    if (!sourceInfo.isFile()) throw new Error(`Adapter asset source is not a regular file: ${pair.source}`);
+    records.push({ scope: 'project', path: targetPath, kind: 'file', sha256: await sha256File(pair.source) });
+  }
+  return records;
+}
+
+async function observedAdapterRecords(planned, pairs, controlRoot) {
+  const byPath = new Map(pairs.map((pair) => [relative(resolve(controlRoot), resolve(pair.target)).split(sep).join('/'), pair.target]));
+  const records = [];
+  for (const asset of planned) {
+    const target = byPath.get(asset.path);
+    if (!target || !(await safeProjectAssetInfo(controlRoot, target))) throw new Error(`Adapter asset is missing after materialization: ${asset.path}`);
+    records.push({ ...asset, sha256: await sha256File(target) });
+  }
+  return records;
+}
+
+async function preflightAdapterAdd(controlRoot, pairs, planned, records) {
+  const owners = new Map();
+  for (const record of records) {
+    for (const asset of record.managed_assets) {
+      const list = owners.get(assetIdentity(asset)) ?? [];
+      list.push({ adapter: record.id, asset });
+      owners.set(assetIdentity(asset), list);
+    }
+  }
+  let create = 0;
+  let reuse = 0;
+  const actions = [];
+  for (const [index, asset] of planned.entries()) {
+    const target = pairs[index].target;
+    const info = await safeProjectAssetInfo(controlRoot, target);
+    const existingOwners = owners.get(assetIdentity(asset)) ?? [];
+    if (!info) {
+      if (existingOwners.some((owner) => owner.asset.sha256 !== asset.sha256)) throw new Error(`Shared managed asset requires upgrade before add: ${asset.path}`);
+      create += 1;
+      actions.push({ kind: 'create', asset, owners: [] });
+      continue;
+    }
+    const observed = await sha256File(target);
+    if (existingOwners.some((owner) => owner.asset.sha256 !== observed)) throw new Error(`Managed asset was modified; refusing to overwrite: ${asset.path}`);
+    if (observed !== asset.sha256) throw new Error(`Adapter asset collision; existing bytes differ: ${asset.path}`);
+    reuse += 1;
+    actions.push({ kind: existingOwners.length ? 'reuse-shared' : 'reuse-identical', asset, owners: existingOwners.map((owner) => owner.adapter) });
+  }
+  return { create, reuse, actions };
+}
+
+async function copyMissingAdapterPairs(controlRoot, pairs, planned, created = []) {
+  for (const [index, pair] of pairs.entries()) {
+    const info = await safeProjectAssetInfo(controlRoot, pair.target);
+    if (info) continue;
+    await ensureSafeProjectParents(controlRoot, pair.target);
+    if (await safeProjectAssetInfo(controlRoot, pair.target)) throw new Error(`Adapter asset appeared during install; refusing to overwrite: ${planned[index].path}`);
+    await copyFile(pair.source, pair.target, fsConstants.COPYFILE_EXCL);
+    created.push({ target: pair.target, expected: planned[index].sha256 });
+  }
+  return created;
+}
+
+async function rollbackCreatedAssets(created, finalRecords, controlRoot) {
+  const expected = new Map(finalRecords.map((asset) => [asset.path, asset.sha256]));
+  const failures = [];
+  for (const entry of [...created].reverse()) {
+    try {
+      const info = await safeProjectAssetInfo(controlRoot, entry.target);
+      if (!info) continue;
+      const assetPath = relative(resolve(controlRoot), resolve(entry.target)).split(sep).join('/');
+      const currentHash = await sha256File(entry.target);
+      if (currentHash !== (expected.get(assetPath) ?? entry.expected)) {
+        failures.push(assetPath);
+        continue;
+      }
+      await rm(entry.target);
+    } catch {
+      failures.push(relative(resolve(controlRoot), resolve(entry.target)).split(sep).join('/'));
+    }
+  }
+  return failures;
+}
+
+async function loadMultiMutationState(controlRoot) {
+  const loaded = await loadInstallationManifest(controlRoot);
+  return { loaded, records: adapterRecords(loaded?.manifest ?? null) };
+}
+
+async function adapterList(options) {
+  if (!options.control) throw new Error('Provide --control <project-control-path>.');
+  const controlRoot = resolve(options.control);
+  await requireExistingDirectory(controlRoot);
+  const { loaded, records } = await loadMultiMutationState(controlRoot);
+  process.stdout.write(`Control Workspace ${controlRoot}\n`);
+  if (!loaded) {
+    process.stdout.write('Installed adapters: none (legacy/uninitialized workspace)\n');
+    process.stdout.write(`Available adapters: ${listAdapters().map((adapter) => adapter.id).join(', ')}\n`);
+    return;
+  }
+  process.stdout.write(`Installation schema ${loaded.manifest.schema_version}\n`);
+  for (const record of records) {
+    const adapter = getAdapter(record.id);
+    const binary = adapter ? commandVersion(adapter.binaryCandidates ?? adapter.binary) : null;
+    const project = manifestScopeStatus(record, 'project');
+    const global = manifestScopeStatus(record, 'global');
+    process.stdout.write(`  ${record.id}  project=${project} global=${global} host=${binary?.version ? 'available' : 'unavailable'}`);
+    if (!adapter) process.stdout.write(' registry=unsupported');
+    if (record.managed_assets.some((asset) => asset.path.startsWith('.triad-runtime/adapters/'))) process.stdout.write(' metadata=per-adapter');
+    process.stdout.write('\n');
+  }
+  process.stdout.write('Attempt-bound host dispatch: unsupported; installed adapters are not selected automatically.\n');
+}
+
+async function adapterDoctor(options) {
+  if (!options.control) throw new Error('Provide --control <project-control-path>.');
+  const controlRoot = resolve(options.control);
+  await requireExistingDirectory(controlRoot);
+  const { loaded, records } = await loadMultiMutationState(controlRoot);
+  const requested = options.host ? records.filter((record) => record.id === options.host) : records;
+  if (options.host && requested.length === 0) {
+    process.stdout.write(`Adapter ${options.host}: not installed\n`);
+    return;
+  }
+  if (!loaded) {
+    process.stdout.write('No installation manifest; doctor is read-only and does not migrate legacy state.\n');
+    return;
+  }
+  process.stdout.write(`Installation schema ${loaded.manifest.schema_version}; ${records.length} adapter(s) recorded.\n`);
+  for (const record of requested) {
+    const adapter = getAdapter(record.id);
+    if (!adapter) {
+      process.stdout.write(`  ${record.id}: unsupported registry entry; assets preserved.\n`);
+      continue;
+    }
+    const binary = commandVersion(adapter.binaryCandidates ?? adapter.binary);
+    const issues = [];
+    for (const asset of record.managed_assets.filter((entry) => entry.scope === 'project')) {
+      const target = manifestAssetPath(controlRoot, asset);
+      let info;
+      try { info = await safeProjectAssetInfo(controlRoot, target); }
+      catch { issues.push(`${asset.path}: unsafe`); continue; }
+      if (!info) issues.push(`${asset.path}: missing`);
+      else if (await sha256File(target) !== asset.sha256) issues.push(`${asset.path}: modified`);
+    }
+    const runtimePath = recordedRuntimeMetadataPath(record);
+    const entrySupport = ['codex', 'hermes'].includes(record.id) ? 'limited/unproven' : 'installed project assets (static only)';
+    process.stdout.write(`  ${record.id}: manifest=${issues.length ? 'incomplete' : 'OK'} host=${binary?.version ? `available (${binary.version})` : 'unavailable'} project-entry=${entrySupport}\n`);
+    process.stdout.write(`    runtime metadata=${runtimePath ?? 'missing'}; attempt dispatch=unsupported\n`);
+    for (const issue of issues) process.stdout.write(`    ISSUE ${issue}\n`);
+  }
+  process.stdout.write('Doctor is read-only; no manifest migration or global host assets are written.\n');
+}
+
+async function adapterAdd(options) {
+  const adapter = getAdapter(options.host);
+  if (!adapter) throw new Error(`Choose adapter add <${listAdapters().map((entry) => entry.id).join('|')}>.`);
+  if (!options.control) throw new Error('Provide --control <project-control-path>.');
+  if (options.global) throw new Error('Multi-adapter add is project-local only; it never creates global Triad assets.');
+  const controlRoot = resolve(options.control);
+  await requireExistingDirectory(controlRoot);
+  const { loaded, records } = await loadMultiMutationState(controlRoot);
+  const existing = records.find((record) => record.id === adapter.id);
+  const installContext = context(controlRoot);
+  if (existing) {
+    const pairs = await adapterAssetPairs(adapter, controlRoot, installContext, records, existing);
+    const observed = await plannedAdapterRecords(pairs, controlRoot);
+    const expected = new Map(existing.managed_assets.filter((asset) => asset.scope === 'project').map((asset) => [asset.path, asset.sha256]));
+    for (const asset of observed) {
+      const info = await safeProjectAssetInfo(controlRoot, resolve(controlRoot, asset.path));
+      if (!info || await sha256File(resolve(controlRoot, asset.path)) !== expected.get(asset.path)) throw new Error(`Adapter ${adapter.id} is already recorded but unhealthy; use adapter doctor/upgrade. No files were changed.`);
+    }
+    process.stdout.write(`Adapter ${adapter.id} is already installed and healthy; no changes.\n`);
+    return;
+  }
+  const pairs = await adapterAssetPairs(adapter, controlRoot, installContext, records);
+  const planned = await plannedAdapterRecords(pairs, controlRoot);
+  const counts = await preflightAdapterAdd(controlRoot, pairs, planned, records);
+  const migration = loaded?.manifest.schema_version === 1;
+  process.stdout.write(`Adapter add ${options.apply ? 'applying' : 'plan'} — ${adapter.label}\n`);
+  if (migration) process.stdout.write('  Explicit v1 → v2 migration will preserve the existing adapter record.\n');
+  process.stdout.write(`  Project assets: ${counts.create} create, ${counts.reuse} exact-byte reuse; global assets: none.\n`);
+  for (const action of counts.actions) {
+    const owners = action.owners.length ? ` (shared with ${action.owners.join(', ')})` : '';
+    process.stdout.write(`  ${action.kind === 'create' ? 'CREATE' : action.kind === 'reuse-shared' ? 'REUSE shared' : 'REUSE identical'} ${action.asset.path}${owners}\n`);
+  }
+  process.stdout.write('  Attempt-bound host dispatch remains unsupported; no default host will be changed.\n');
+  if (!options.apply) {
+    process.stdout.write('Dry run only. Re-run with --apply to add the adapter.\n');
+    return;
+  }
+  const created = [];
+  let finalAssets = [];
+  try {
+    await copyMissingAdapterPairs(controlRoot, pairs, planned, created);
+    const team = await currentTeam(controlRoot);
+    if (team && adapter.modelBinding === 'project-frontmatter') await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
+    finalAssets = await observedAdapterRecords(planned, pairs, controlRoot);
+    const now = new Date().toISOString();
+    const entry = {
+      id: adapter.id,
+      installed_at: now,
+      updated_at: now,
+      scopes: { project: true, global: false },
+      scope_status: { project: 'installed', global: 'not_configured' },
+      managed_assets: finalAssets,
+    };
+    const manifest = buildMultiAdapterManifest({
+      triadVersion: packageVersion,
+      installedAt: loaded?.manifest.installed_at ?? now,
+      updatedAt: now,
+      adapters: [...records, entry],
+    });
+    await writeInstallationManifest(controlRoot, manifest);
+    process.stdout.write(`Adapter ${adapter.id} added; installation manifest migrated/written as schema v2.\n`);
+  } catch (error) {
+    const rollbackFailures = await rollbackCreatedAssets(created, finalAssets.length ? finalAssets : planned, controlRoot);
+    if (rollbackFailures.length) process.stderr.write(`Recovery required; newly created assets preserved at: ${rollbackFailures.join(', ')}\n`);
+    else process.stderr.write('Newly created adapter assets were rolled back; previous workspace state was preserved.\n');
+    throw error;
+  }
+}
+
+async function adapterRemove(options) {
+  if (!options.host) throw new Error('Provide adapter remove <adapter-id>.');
+  if (!options.control) throw new Error('Provide --control <project-control-path>.');
+  if (options.global) throw new Error('Global adapter removal is intentionally unsupported; no global assets will be changed.');
+  const controlRoot = resolve(options.control);
+  await requireExistingDirectory(controlRoot);
+  const { loaded, records } = await loadMultiMutationState(controlRoot);
+  if (!loaded || !records.some((record) => record.id === options.host)) {
+    process.stdout.write(`Adapter ${options.host} is not installed; no changes.\n`);
+    return;
+  }
+  const selected = records.find((record) => record.id === options.host);
+  if (selected.scopes.global) throw new Error(`Adapter ${options.host} also owns global assets. Global migration/removal is not part of this project-local operation; no files were changed.`);
+  const remaining = records.filter((record) => record.id !== options.host);
+  const owners = new Map();
+  for (const record of records) for (const asset of record.managed_assets) {
+    const list = owners.get(assetIdentity(asset)) ?? [];
+    list.push({ record, asset });
+    owners.set(assetIdentity(asset), list);
+  }
+  const removals = [];
+  const preservedShared = [];
+  const conflicts = [];
+  for (const asset of selected.managed_assets.filter((entry) => entry.scope === 'project')) {
+    const target = manifestAssetPath(controlRoot, asset);
+    const info = await safeProjectAssetInfo(controlRoot, target);
+    const assetOwners = owners.get(assetIdentity(asset)) ?? [];
+    if (assetOwners.some((owner) => owner.asset.sha256 !== asset.sha256)) {
+      conflicts.push(`${asset.path}: conflicting manifest owner`);
+      continue;
+    }
+    if (!info) continue;
+    const observed = await sha256File(target);
+    if (observed !== asset.sha256) {
+      conflicts.push(`${asset.path}: modified; preserved`);
+      continue;
+    }
+    if (assetOwners.length > 1) preservedShared.push(asset.path);
+    else removals.push({ asset, target });
+  }
+  if (conflicts.length) {
+    process.stderr.write(`Removal refused; no files were changed. ${conflicts.join('; ')}\n`);
+    throw new Error('Resolve the preserved/modified asset before removing this adapter.');
+  }
+  process.stdout.write(`Adapter remove ${options.apply ? 'applying' : 'plan'} — ${options.host}\n`);
+  process.stdout.write(`  ${removals.length} exclusive unchanged file(s) ${options.apply ? 'will be removed' : 'would be removed'}; ${preservedShared.length} shared file(s) retained.\n`);
+  for (const entry of removals) process.stdout.write(`  REMOVE ${entry.asset.path}\n`);
+  for (const assetPath of preservedShared) process.stdout.write(`  PRESERVE shared ${assetPath}\n`);
+  if (!options.apply) {
+    process.stdout.write('Dry run only. Re-run with --apply to remove only hash-matching adapter-owned files.\n');
+    return;
+  }
+  const backupRoot = await mkdtemp(join(tmpdir(), 'triad-adapter-remove-'));
+  const backedUp = [];
+  try {
+    for (const [index, entry] of removals.entries()) {
+      const backup = join(backupRoot, String(index));
+      await cp(entry.target, backup);
+      backedUp.push({ target: entry.target, backup, sha256: entry.asset.sha256 });
+      await rm(entry.target);
+    }
+    const now = new Date().toISOString();
+    const manifest = buildMultiAdapterManifest({
+      triadVersion: loaded.manifest.triad_version,
+      installedAt: loaded.manifest.installed_at,
+      updatedAt: now,
+      adapters: remaining.map((record) => record.id === options.host ? record : record),
+    });
+    await writeInstallationManifest(controlRoot, manifest);
+    process.stdout.write(`Adapter ${options.host} removed. Project/user state and all shared assets were preserved.\n`);
+  } catch (error) {
+    const recovery = [];
+    for (const entry of backedUp.reverse()) {
+      try {
+        if (!(await safeProjectAssetInfo(controlRoot, entry.target))) {
+          await mkdir(dirname(entry.target), { recursive: true });
+          await cp(entry.backup, entry.target);
+        } else if (await sha256File(entry.target) !== entry.sha256) recovery.push(relative(controlRoot, entry.target));
+      } catch { recovery.push(relative(controlRoot, entry.target)); }
+    }
+    if (recovery.length) process.stderr.write(`Recovery required; assets could not be restored safely: ${recovery.join(', ')}\n`);
+    throw error;
+  } finally {
+    await rm(backupRoot, { recursive: true, force: true });
+  }
+}
+
+async function adapterUpgrade(options) {
+  const adapter = getAdapter(options.host);
+  if (!adapter) throw new Error(`Choose adapter upgrade <${listAdapters().map((entry) => entry.id).join('|')}>.`);
+  if (!options.control) throw new Error('Provide --control <project-control-path>.');
+  if (options.global) throw new Error('Multi-adapter upgrade is project-local only; no global assets are changed.');
+  const controlRoot = resolve(options.control);
+  await requireExistingDirectory(controlRoot);
+  const { loaded, records } = await loadMultiMutationState(controlRoot);
+  if (!loaded || loaded.manifest.schema_version !== MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) throw new Error('Upgrade requires an explicit v2 adapter add; use `adapter add` first.');
+  const selected = records.find((record) => record.id === adapter.id);
+  if (!selected) throw new Error(`Adapter ${adapter.id} is not installed.`);
+  if (selected.scopes.global) throw new Error(`Adapter ${adapter.id} also owns global assets; project-local upgrade will not modify them.`);
+  const installContext = context(controlRoot);
+  const pairs = await adapterAssetPairs(adapter, controlRoot, installContext, records, selected);
+  const planned = await plannedAdapterRecords(pairs, controlRoot);
+  const previous = new Map(selected.managed_assets.filter((asset) => asset.scope === 'project').map((asset) => [asset.path, asset]));
+  const sharedOwners = new Map();
+  for (const record of records) for (const asset of record.managed_assets) {
+    const list = sharedOwners.get(assetIdentity(asset)) ?? [];
+    list.push({ adapter: record.id, asset });
+    sharedOwners.set(assetIdentity(asset), list);
+  }
+  const actions = [];
+  for (const [index, asset] of planned.entries()) {
+    const target = pairs[index].target;
+    const info = await safeProjectAssetInfo(controlRoot, target);
+    const existing = previous.get(asset.path);
+    if (!info) {
+      if (!existing) throw new Error(`Unowned adapter asset is missing; refusing to claim it during upgrade: ${asset.path}`);
+      actions.push({ kind: 'create', asset, target });
+      continue;
+    }
+    const actual = await sha256File(target);
+    if (!existing) {
+      if (actual !== asset.sha256) throw new Error(`Unowned adapter asset collision: ${asset.path}`);
+      actions.push({ kind: 'reuse', asset, target });
+    } else if (actual !== existing.sha256) {
+      throw new Error(`Modified managed asset preserved; refusing upgrade: ${asset.path}`);
+    } else if (actual !== asset.sha256) {
+      if ((sharedOwners.get(assetIdentity(asset)) ?? []).some((owner) => owner.adapter !== adapter.id)) {
+        throw new Error(`Shared asset requires a coordinated upgrade; no files were changed: ${asset.path}`);
+      }
+      actions.push({ kind: 'replace', asset, target, previous: existing });
+    } else actions.push({ kind: 'reuse', asset, target });
+  }
+  const createCount = actions.filter((action) => action.kind === 'create').length;
+  const replaceCount = actions.filter((action) => action.kind === 'replace').length;
+  process.stdout.write(`Adapter upgrade ${options.apply ? 'applying' : 'plan'} — ${adapter.id}: ${createCount} missing, ${replaceCount} changed, ${actions.length - createCount - replaceCount} unchanged.\n`);
+  for (const action of actions) {
+    const owners = sharedOwners.get(assetIdentity(action.asset)) ?? [];
+    const sharedWith = owners.map((owner) => owner.adapter).filter((id) => id !== adapter.id);
+    const label = action.kind === 'create' ? 'CREATE' : action.kind === 'replace' ? 'REPLACE (backup first)' : sharedWith.length ? 'PRESERVE/REUSE shared' : 'PRESERVE/REUSE unchanged';
+    process.stdout.write(`  ${label} ${action.asset.path}${sharedWith.length ? ` (also owned by ${sharedWith.join(', ')})` : ''}\n`);
+  }
+  if (!options.apply) {
+    process.stdout.write('Dry run only. Re-run with --apply to back up and refresh hash-matching managed assets.\n');
+    return;
+  }
+  const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
+  const backupRoot = join(controlRoot, '.triad-plus', 'backups', stamp, 'adapter', adapter.id);
+  const created = [];
+  const replaced = [];
+  let finalAssets = [];
+  try {
+    for (const action of actions) {
+      if (action.kind === 'reuse') continue;
+      if (action.kind === 'replace') {
+        const backup = join(backupRoot, action.asset.path);
+        await ensureSafeProjectParents(controlRoot, backup);
+        if (await safeProjectAssetInfo(controlRoot, backup)) throw new Error(`Upgrade backup already exists; refusing to overwrite: ${relative(controlRoot, backup)}`);
+        const currentInfo = await safeProjectAssetInfo(controlRoot, action.target);
+        if (!currentInfo || await sha256File(action.target) !== action.previous.sha256) throw new Error(`Managed asset changed during upgrade; refusing to overwrite: ${action.asset.path}`);
+        await copyFile(action.target, backup, fsConstants.COPYFILE_EXCL);
+        replaced.push({ ...action, backup });
+      } else {
+        const currentInfo = await safeProjectAssetInfo(controlRoot, action.target);
+        if (currentInfo) throw new Error(`Adapter asset appeared during upgrade; refusing to overwrite: ${action.asset.path}`);
+        created.push(action);
+      }
+      await ensureSafeProjectParents(controlRoot, action.target);
+      await copyFile(pairs[planned.findIndex((asset) => asset.path === action.asset.path)].source, action.target, action.kind === 'create' ? fsConstants.COPYFILE_EXCL : 0);
+    }
+    const team = await currentTeam(controlRoot);
+    if (team && adapter.modelBinding === 'project-frontmatter') await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
+    finalAssets = await observedAdapterRecords(planned, pairs, controlRoot);
+    const now = new Date().toISOString();
+    const updated = {
+      ...selected,
+      updated_at: now,
+      managed_assets: finalAssets,
+    };
+    await writeInstallationManifest(controlRoot, buildMultiAdapterManifest({
+      triadVersion: packageVersion,
+      installedAt: loaded.manifest.installed_at,
+      updatedAt: now,
+      adapters: records.map((record) => record.id === adapter.id ? updated : record),
+    }));
+    process.stdout.write(`Adapter ${adapter.id} upgraded; replaced files were backed up under ${relative(controlRoot, backupRoot)}.\n`);
+  } catch (error) {
+    const rollbackFailures = await rollbackCreatedAssets(created, finalAssets.length ? finalAssets : planned, controlRoot);
+    const recovery = [];
+    for (const entry of replaced.reverse()) {
+      try {
+        const info = await safeProjectAssetInfo(controlRoot, entry.target);
+        if (!info) {
+          await ensureSafeProjectParents(controlRoot, entry.target);
+          await copyFile(entry.backup, entry.target, fsConstants.COPYFILE_EXCL);
+        } else {
+          const currentHash = await sha256File(entry.target);
+          if (currentHash === entry.previous.sha256) continue;
+          if (currentHash !== entry.asset.sha256) {
+            recovery.push(relative(controlRoot, entry.target));
+            continue;
+          }
+          await copyFile(entry.backup, entry.target);
+        }
+      }
+      catch { recovery.push(relative(controlRoot, entry.target)); }
+    }
+    if (rollbackFailures.length || recovery.length) process.stderr.write(`Recovery required; inspect: ${[...rollbackFailures, ...recovery].join(', ')}\n`);
+    throw error;
+  }
+}
+
+async function adapterCommand(options) {
+  if (options.adapterCommand === 'list') return adapterList(options);
+  if (options.adapterCommand === 'doctor') return adapterDoctor(options);
+  if (options.adapterCommand === 'add') return adapterAdd(options);
+  if (options.adapterCommand === 'remove') return adapterRemove(options);
+  if (options.adapterCommand === 'upgrade') return adapterUpgrade(options);
+  throw new Error('Use adapter add, list, doctor, upgrade, or remove.');
+}
+
 async function versionCommand(options) {
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
@@ -899,6 +1465,17 @@ async function versionCommand(options) {
     return;
   }
   const manifest = loaded.manifest;
+  if (manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) {
+    process.stdout.write(`${formatDoctorLine('Installation schema', '2 (multi-adapter)')}\n`);
+    const uninstalled = manifestIsUninstalled(manifest);
+    const installedVersion = uninstalled
+      ? `unknown (uninstalled; last ${manifest.triad_version})`
+      : manifest.triad_version;
+    process.stdout.write(`${formatDoctorLine('Installed Triad', installedVersion)}\n`);
+    process.stdout.write(`${formatDoctorLine('Adapters', manifest.adapters.map((adapter) => adapter.id).join(', ') || 'none')}\n`);
+    process.stdout.write('Attempt-bound host dispatch: unsupported; no adapter is selected by installation order.\n');
+    return;
+  }
   const adapter = getAdapter(manifest.adapter);
   const uninstalled = manifestIsUninstalled(manifest);
   process.stdout.write(`Installed Triad   ${uninstalled ? 'unknown (uninstalled)' : manifest.triad_version}\n`);
@@ -916,6 +1493,9 @@ async function uninstall(options) {
   await requireExistingDirectory(controlRoot);
   const loaded = await loadInstallationManifest(controlRoot);
   process.stdout.write(`Triad+ uninstall — ${adapter.label}\n`);
+  if (loaded?.manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION) {
+    throw new Error('This workspace has a multi-adapter installation record. Use `adapter remove <adapter-id>`.');
+  }
   if (!loaded) {
     process.stdout.write('Manifest          legacy / manifest missing\n');
     process.stdout.write('No files were changed. Refusing to delete assets without an installation manifest.\n');
@@ -1058,8 +1638,17 @@ async function doctor(options) {
   for (const adapter of requested) {
     const installContext = context(controlRoot);
     const installation = await inspectInstallation(controlRoot, adapter, installContext);
+    if (installation.state === 'not_installed') {
+      process.stdout.write(`\n${formatDoctorSection(`Triad+ doctor — ${adapter.label}`)}\n`);
+      process.stdout.write(`  ${formatDoctorLine('Installation', 'not installed in this multi-adapter workspace')}\n`);
+      process.stdout.write(`  ${formatDoctorLine('Attempt dispatch', 'unsupported; no implicit host selection')}\n`);
+      continue;
+    }
     const absent = [];
-    for (const target of adapter.projectPaths(controlRoot, installContext)) if (!(await exists(target))) absent.push(target);
+    const recordedMetadata = installation.multiAdapter ? recordedRuntimeMetadataPath(installation.manifest) : null;
+    const projectTargets = adapter.projectPaths(controlRoot, installContext).filter((target) => !(installation.multiAdapter && resolve(target) === resolve(controlRoot, '.triad-runtime/adapter.json')));
+    if (recordedMetadata) projectTargets.push(resolve(controlRoot, recordedMetadata));
+    for (const target of projectTargets) if (!(await exists(target))) absent.push(target);
     const globalDetected = adapter.globalPaths ? await anyExist(adapter.globalPaths(installContext)) : false;
     const inspectGlobal = Boolean(options.global || globalDetected);
     const globalTargets = inspectGlobal && adapter.globalPaths ? adapter.globalPaths(installContext) : [];
@@ -1067,10 +1656,10 @@ async function doctor(options) {
     for (const target of globalTargets) if (!(await exists(target))) globalAbsent.push(target);
     const binary = commandVersion(adapter.binaryCandidates ?? adapter.binary);
     const node = commandVersion('node');
-    const manifestPath = join(controlRoot, '.triad-runtime', 'adapter.json');
+    const manifestPath = recordedMetadata ? resolve(controlRoot, recordedMetadata) : join(controlRoot, '.triad-runtime', 'adapter.json');
     let manifest = false;
     try { manifest = (JSON.parse(await readFile(manifestPath, 'utf8'))?.id === adapter.id); } catch {}
-    const targets = adapter.projectPaths(controlRoot, installContext);
+    const targets = projectTargets;
     const roleTargets = targets.filter((target) => /[/\\]agents[/\\]triad-/.test(target));
     const triadSkillTargets = targets.filter((target) => /[/\\]skills[/\\]triad$/.test(target));
     const capability = manifest ? capabilitySnapshot(controlRoot, manifestPath) : null;
@@ -1114,6 +1703,7 @@ async function doctor(options) {
     process.stdout.write(`  ${formatDoctorLine('Host runtime', binary ? `OK (${binary})` : 'not installed or version unavailable')}\n`);
     process.stdout.write(`  ${formatDoctorLine('Verifier', node && await exists(join(controlRoot, '.triad-runtime', 'triad-verify.mjs')) ? 'OK' : 'incomplete')}\n`);
     process.stdout.write(`  ${formatDoctorLine('Adapter', manifest ? 'OK' : 'missing or different adapter')}\n`);
+    if (installation.multiAdapter) process.stdout.write(`  ${formatDoctorLine('Attempt dispatch', 'unsupported; no implicit host selection')}\n`);
     if (roleTargets.length) process.stdout.write(`  ${formatDoctorLine('Role agents', await allExist(roleTargets) ? 'OK' : 'missing')}\n`);
     if (triadSkillTargets.length) process.stdout.write(`  ${formatDoctorLine('Triad skill', await allExist(triadSkillTargets) ? 'OK' : 'missing')}\n`);
     const projectSharedSkills = await sharedSkillStatuses(adapter, controlRoot, installContext, 'project');
@@ -1187,7 +1777,64 @@ async function interactiveInit() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The interactive wizard needs a terminal. Use init in a non-interactive shell.');
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    process.stdout.write('\nTriad+ setup\n');
+    const currentDirectory = resolve(process.cwd());
+    let currentManifest = null;
+    let currentManifestError = null;
+    try { currentManifest = await loadInstallationManifest(currentDirectory); }
+    catch (error) { currentManifestError = error; }
+    const defaultMode = currentManifest ? 'm' : 'n';
+    process.stdout.write('\nTriad+\n');
+    if (currentManifest) {
+      process.stdout.write(`Detected a valid ${currentManifest.manifest.schema_version === 1 ? 'schema-v1' : 'schema-v2'} installation manifest in the current Control Workspace.\n`);
+    } else if (currentManifestError) {
+      process.stdout.write(`The current directory does not have a valid installation manifest: ${currentManifestError.message}\n`);
+    } else {
+      process.stdout.write('No valid installation manifest was found in the current directory.\n');
+    }
+    process.stdout.write('No sibling directories will be searched.\n');
+    const mode = (await prompt.question(`Choose [N]ew workspace or [M]anage existing [${defaultMode.toUpperCase()}]: `)).trim().toLowerCase() || defaultMode;
+    if (mode === 'm' || mode === 'manage' || mode === 'manage existing') {
+      let control = currentManifest ? currentDirectory : null;
+      while (!control) {
+        const candidate = (await prompt.question('Enter the existing Control Workspace path explicitly (blank cancels): ')).trim();
+        if (!candidate) {
+          process.stdout.write('Cancelled. No files were changed.\n');
+          return;
+        }
+        const candidatePath = resolve(candidate);
+        try {
+          await requireExistingDirectory(candidatePath);
+          const manifest = await loadInstallationManifest(candidatePath);
+          if (!manifest) {
+            process.stdout.write(`No installation manifest was found at ${candidatePath}; legacy/uninitialized state will be shown without scanning elsewhere.\n`);
+            const confirm = (await prompt.question('Type manage to inspect this explicitly selected directory: ')).trim();
+            if (confirm !== 'manage') {
+              process.stdout.write('Cancelled. No files were changed.\n');
+              return;
+            }
+          } else {
+            process.stdout.write(`Using the valid Control Workspace at ${candidatePath}.\n`);
+          }
+          control = candidatePath;
+        } catch (error) {
+          process.stdout.write(`Cannot safely manage ${candidatePath}: ${error.message}\n`);
+        }
+      }
+      await interactiveAdapterManagement({
+        prompt,
+        control,
+        adapters: listAdapters(),
+        getInstalledAdapterIds: async (controlRoot) => adapterRecords((await loadInstallationManifest(controlRoot))?.manifest ?? null).map((record) => record.id),
+        runCommand: adapterCommand,
+      });
+      return;
+    }
+    if (!['n', 'new', 'new workspace'].includes(mode)) {
+      process.stdout.write('Choose New workspace or Manage existing. No files were changed.\n');
+      return;
+    }
+
+    process.stdout.write('\nNew Control Workspace setup\n');
     listAdapters().forEach((adapter, index) => process.stdout.write(`${index + 1}) ${adapter.label}\n`));
     let adapter;
     while (!adapter) {
@@ -1214,6 +1861,7 @@ try {
   }
   const options = parseArgs(argv);
   if (options.command === 'init') await init(options);
+  else if (options.command === 'adapter') await adapterCommand(options);
   else if (options.command === 'doctor') await doctor(options);
   else if (options.command === 'version') await versionCommand(options);
   else if (options.command === 'upgrade') await upgrade(options);

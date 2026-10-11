@@ -77,6 +77,32 @@ future user-initiated run, never an automatic repair.
 OpenCode is the canonical tutorial because it is open source and makes the
 separate Triad roles easy to inspect.
 
+### Project-local OpenCode with a root PRD
+
+For a local Control Workspace, put the source PRD at its root and install only
+the project-scoped Triad assets. This does not write Triad commands, skills, or
+role assets to the user's OpenCode configuration:
+
+```bash
+mkdir triad-control && cd triad-control
+```
+
+Create `PRD.md` in `triad-control`, then run:
+
+```bash
+npx triad-plus init --host opencode --control .
+npx triad-plus doctor --host opencode --control .
+opencode
+```
+
+In the OpenCode TUI opened at that root, start with `/triad ./PRD.md` (or
+`/triad` to use the root `PRD.md` default). Bootstrap copies the selected source
+to the normal immutable `artifacts/prd.md` path and records its SHA-256; keep
+the root source unchanged. Map product repositories and their worktrees
+explicitly in `project.yaml`; folders are never imported by scanning. Keep the
+Control Workspace separate from every product repository. Do not pass
+`--global` for this path.
+
 1. Install OpenCode and configure a provider/model, following the
    [OpenCode documentation](https://opencode.ai/docs).
 2. Create a small product folder and deterministic test command:
@@ -138,6 +164,16 @@ and [troubleshooting](docs/troubleshooting.md).
 
 ## Installation version and safe uninstall
 
+For interactive setup or day-to-day management, run `npx triad-plus` in a
+terminal. A valid Control Workspace manifest in the current directory defaults
+to the management menu; without one, the wizard defaults to new setup. To
+manage a workspace elsewhere, choose **Manage existing** and provide its path
+explicitly. The wizard does not search sibling directories. Its menu lists
+adapters and offers add, doctor/status, upgrade, remove, and exit. Every
+mutation runs the existing CLI preflight first and requires the exact `apply`
+confirmation; canceled or conflicting plans make no changes. Management is
+project-local and does not select a host for the next Attempt.
+
 The CLI version and the version materialized in a control workspace are
 reported independently:
 
@@ -167,6 +203,16 @@ managed `AGENTS.md` role-run block is removed only when its markers and hash
 are exact; surrounding user content is preserved. Global assets are shown but
 preserved by default with `--global` because another control workspace may
 share them.
+
+Schema-v2 workspaces can inventory multiple project-local adapters without
+overwriting one another. `adapter list` and `adapter doctor` are read-only;
+`adapter add`, `adapter upgrade`, and `adapter remove` use explicit local
+ownership records and conservative hash checks. This is an installation
+foundation, not multi-host dispatch: an Attempt does not yet select an adapter,
+and the CLI reports dispatch as unsupported rather than choosing the last-added
+host. Codex and Hermes project-local native entries remain limited/unproven.
+The terminal menu is the normal path; direct `adapter` commands remain useful
+for scripts and advanced use. See [multi-adapter details](docs/npx-installation.md#local-multi-adapter-inventory).
 
 ## Optional immutable quality target
 
@@ -262,11 +308,12 @@ It sees only the goal, quality target, final candidate, and verifier evidence.
 ## Configuration and verification
 
 The installer writes `.triad-plus/team.json`, which separates stable role IDs
-from user-facing names, personas, models, and supported effort/options. A control
-workspace selects one host adapter for the whole run; its roles can use different
-models where that host supports them. To use another host, create another control
-workspace with that adapter. Triad+ does not dispatch different roles across
-different hosts in one run. Read [configuration](docs/configuration.md) and
+from user-facing names, personas, models, and supported effort/options. A
+schema-v1 control workspace still uses one selected adapter for its run. Schema
+v2 can record several local adapters, but runtime dispatch remains single-host
+and is not Attempt-bound yet; installing another adapter does not change the
+existing `.triad-runtime/adapter.json` selector. Different hosts are never
+blended within an Attempt. Read [configuration](docs/configuration.md) and
 [runtime details](docs/runtimes.md).
 
 The installed `triad-model-configuration` Agent Skill lets the host agent
