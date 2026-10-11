@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.17.0 — proposed local release candidate (unpublished)
+
+- Retain schema-v1 installation compatibility while adding the explicit,
+  project-local schema-v2 multi-adapter inventory and lifecycle commands.
+- Keep adapter membership separate from Attempt dispatch: no automatic
+  cross-attempt host handoff is provided.
+- Preserve user/project state and use ownership/hash checks for managed adapter
+  changes; removing the final adapter leaves an auditable v2 tombstone.
+- No breaking changes are intended. Schema-v2 migration remains opt-in through
+  an explicit `adapter add`; the default install flow and v1 readers remain.
+- Host-native discovery and delegated execution are not claimed for every host.
+  Codex and Hermes project-local entry points remain limited/unproven, and the
+  known local-filesystem path-resolution TOCTOU limitation remains unresolved.
+
 ## 1.16.0 — 2026-10-11
 
 - Add Triad Cockpit, a read-only local web view started with
