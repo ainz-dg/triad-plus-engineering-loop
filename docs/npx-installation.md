@@ -75,6 +75,43 @@ and does not delete them without a cross-workspace ownership model.
 Read-only commands require an existing control workspace; a typo path is
 never created by `version` or `uninstall`.
 
+### Local multi-adapter inventory
+
+Schema-v1 workspaces remain readable as one adapter. `adapter list` and
+`adapter doctor` do not write or migrate that record. A successful explicit
+`adapter add <id> --control <path> --apply` migrates it to schema v2 and records
+per-adapter managed assets plus exact shared-path owners. New multi-adapter
+assets are project-local; no `--global` option is supported for these commands.
+Additional adapter metadata is stored at
+`.triad-runtime/adapters/<id>/adapter.json`; the existing
+`.triad-runtime/adapter.json` is not rewritten when another host is added.
+
+```bash
+npx triad-plus adapter list --control /path/to/project-control
+npx triad-plus adapter doctor --control /path/to/project-control
+npx triad-plus adapter add copilot --control /path/to/project-control
+npx triad-plus adapter add copilot --control /path/to/project-control --apply
+npx triad-plus adapter upgrade copilot --control /path/to/project-control --apply
+npx triad-plus adapter remove copilot --control /path/to/project-control
+npx triad-plus adapter remove copilot --control /path/to/project-control --apply
+```
+
+`list`, `doctor`, and `version` are read-only. Add is a dry run without
+`--apply`; repeating a healthy add is a no-op. Upgrade backs up only unchanged
+managed files that it refreshes. Remove checks ownership and byte hashes before
+deleting exclusive adapter files, retains shared paths, and aborts without
+side effects when an asset was edited. Removing the final adapter retains the
+v2 tombstone and all project/user state. Global assets in a legacy installation
+are not changed by these local operations. Host binary availability is reported
+separately from adapter membership.
+
+The schema-v2 inventory is an installation/lifecycle foundation only. It does
+not provide per-Attempt host selection or active-run safety. Attempts are not
+dispatched to whichever adapter was most recently installed; host dispatch is
+reported as unsupported until an explicit Attempt-bound liveness contract is
+approved and implemented. Codex and Hermes project-local native entry points
+are marked limited/unproven rather than treated as validated.
+
 ## Upgrade, repair, or restore an existing control workspace
 
 `init` is the first-install command and refuses to overwrite an existing

@@ -194,6 +194,15 @@ are exact; surrounding user content is preserved. Global assets are shown but
 preserved by default with `--global` because another control workspace may
 share them.
 
+Schema-v2 workspaces can inventory multiple project-local adapters without
+overwriting one another. `adapter list` and `adapter doctor` are read-only;
+`adapter add`, `adapter upgrade`, and `adapter remove` use explicit local
+ownership records and conservative hash checks. This is an installation
+foundation, not multi-host dispatch: an Attempt does not yet select an adapter,
+and the CLI reports dispatch as unsupported rather than choosing the last-added
+host. Codex and Hermes project-local native entries remain limited/unproven.
+See [multi-adapter details](docs/npx-installation.md#local-multi-adapter-inventory).
+
 ## Optional immutable quality target
 
 An initialized project may bind an immutable JSON Quality Baseline through
@@ -288,11 +297,12 @@ It sees only the goal, quality target, final candidate, and verifier evidence.
 ## Configuration and verification
 
 The installer writes `.triad-plus/team.json`, which separates stable role IDs
-from user-facing names, personas, models, and supported effort/options. A control
-workspace selects one host adapter for the whole run; its roles can use different
-models where that host supports them. To use another host, create another control
-workspace with that adapter. Triad+ does not dispatch different roles across
-different hosts in one run. Read [configuration](docs/configuration.md) and
+from user-facing names, personas, models, and supported effort/options. A
+schema-v1 control workspace still uses one selected adapter for its run. Schema
+v2 can record several local adapters, but runtime dispatch remains single-host
+and is not Attempt-bound yet; installing another adapter does not change the
+existing `.triad-runtime/adapter.json` selector. Different hosts are never
+blended within an Attempt. Read [configuration](docs/configuration.md) and
 [runtime details](docs/runtimes.md).
 
 The installed `triad-model-configuration` Agent Skill lets the host agent
