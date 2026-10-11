@@ -244,6 +244,91 @@ await putJson(path.join(control, ".loop/runtime/deterministic-control-run.json")
 
 await put(path.join(control, "projects/alpha/.loop/work-queue.yaml"), "items:\n  - id: A-1\n    state: ready\n");
 
+// A current deterministic run binds the normalized Reviewer result to the
+// active assignment, verifier artifact, packet, and candidate. The Cockpit
+// must resolve that binding while leaving older records explicitly unbound.
+const alphaBase = path.join(control, "projects/alpha");
+const alphaAssignmentPath = ".loop/runtime/assignments/ALPHA-1-attempt-1.json";
+const alphaPacketPath = ".loop/runtime/assignments/ALPHA-1-attempt-001.md";
+const alphaEvidencePath = ".loop/evidence/ALPHA-1/attempt-001/verification.json";
+const alphaAssignment = {
+  schema_version: 1,
+  assignment_id: "alpha-a1",
+  status: "active",
+  agent_id: "alpha-developer",
+  agent_type: "triad_developer",
+  feature_id: "ALPHA-1",
+  attempt: 1,
+};
+const alphaAssignmentSource = `${JSON.stringify(alphaAssignment, null, 2)}\n`;
+const alphaAssignmentSha = sha256(alphaAssignmentSource);
+await put(path.join(alphaBase, alphaAssignmentPath), alphaAssignmentSource);
+const alphaPacketMetadata = { assignment_id: "alpha-a1", feature_id: "ALPHA-1", attempt: 1, mandatory_skills: [] };
+const alphaPacketSource = `<!-- triad-plus-assignment-packet:start -->\n${JSON.stringify(alphaPacketMetadata, null, 2)}\n<!-- triad-plus-assignment-packet:end -->\n`;
+const alphaPacketSha = sha256(alphaPacketSource);
+await put(path.join(alphaBase, alphaPacketPath), alphaPacketSource);
+const alphaCandidateFingerprint = "a".repeat(64);
+const alphaEvidence = {
+  schema_version: 1,
+  run_id: "alpha-run-1",
+  feature_id: "ALPHA-1",
+  attempt: 1,
+  assignment_id: "alpha-a1",
+  assignment_sha256: alphaAssignmentSha,
+  trigger: { event: "manual", agent_id: "alpha-developer", agent_type: "triad_developer" },
+  assignment_ref: alphaAssignmentPath,
+  baseline: {
+    prd_sha256: null,
+    card_sha256: null,
+    quality_baseline_fingerprint: null,
+    git_head: "alpha-base",
+    candidate_fingerprint: alphaCandidateFingerprint,
+    branch: "feature/alpha",
+  },
+  assignment_packet: { path: alphaPacketPath, sha256: alphaPacketSha },
+  gates: [],
+  required_gates_passed: true,
+  status: "pass",
+  failure: null,
+  created_at: "2026-10-11T12:00:00.000Z",
+};
+const alphaEvidenceSource = `${JSON.stringify(alphaEvidence, null, 2)}\n`;
+const alphaEvidenceSha = sha256(alphaEvidenceSource);
+await put(path.join(alphaBase, alphaEvidencePath), alphaEvidenceSource);
+const alphaReviewer = { decision: "approved", summary: "synthetic bound result", findings: [], evidence_refs: [] };
+const alphaReviewerSource = `${JSON.stringify(alphaReviewer, null, 2)}\n`;
+const alphaVerifierReference = {
+  path: alphaEvidencePath,
+  sha256: alphaEvidenceSha,
+  run_id: alphaEvidence.run_id,
+  feature_id: alphaEvidence.feature_id,
+  attempt: alphaEvidence.attempt,
+  assignment_id: alphaEvidence.assignment_id,
+  assignment_sha256: alphaEvidence.assignment_sha256,
+  assignment_packet: alphaEvidence.assignment_packet,
+  candidate_fingerprint: alphaCandidateFingerprint,
+  required_gates_passed: true,
+  status: "pass",
+};
+await putJson(path.join(alphaBase, ".loop/runtime/deterministic-control-run.json"), {
+  status: "done",
+  packet: { path: alphaPacketPath, sha256: alphaPacketSha, metadata: alphaPacketMetadata },
+  verifier_evidence: alphaVerifierReference,
+  reviewer: alphaReviewer,
+  reviewer_binding: {
+    schema_version: 1,
+    assignment_ref: alphaAssignmentPath,
+    assignment_sha256: alphaAssignmentSha,
+    assignment_id: "alpha-a1",
+    feature_id: "ALPHA-1",
+    attempt: 1,
+    assignment_packet: { path: alphaPacketPath, sha256: alphaPacketSha },
+    verifier_evidence: alphaVerifierReference,
+    candidate_fingerprint: alphaCandidateFingerprint,
+    reviewer_result_sha256: sha256(alphaReviewerSource),
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Snapshot the whole fixture (control + outside) to prove nothing is written.
 
@@ -380,6 +465,7 @@ try {
   assert.equal(card11View.evaluations[0].candidate_binding.result, "same_as_latest_pass_record");
   assert.equal(card11View.control_run.status, "done");
   assert.equal(card11View.control_run.reviewer.status, "valid");
+  assert.equal(card11View.control_run.reviewer.binding.status, "not_recorded");
   assert.equal(card11View.control_run.reviewer.decision, "approved");
   assert.equal(card11View.control_run.trace[0].at, "2026-10-02T09:00:00.000Z");
 
@@ -438,7 +524,13 @@ try {
   // Missing resources.
   assert.equal((await request("/api/projects/root/cards/9.9")).status, 404);
   assert.equal((await request("/api/projects/nope/cards")).status, 404);
-  assert.equal((await request("/api/projects/alpha/control-run")).status, 404);
+  const legacyControlRun = (await request("/api/projects/root/control-run")).body;
+  assert.equal(legacyControlRun.reviewer.binding.status, "not_recorded");
+  const boundControlRun = await request("/api/projects/alpha/control-run");
+  assert.equal(boundControlRun.status, 200);
+  assert.equal(boundControlRun.body.reviewer.binding.status, "bound");
+  assert.equal(boundControlRun.body.reviewer.binding.candidate_fingerprint, alphaCandidateFingerprint);
+  assert.equal(boundControlRun.body.reviewer.binding.verifier_evidence.sha256, alphaEvidenceSha);
   assert.equal((await request("/api/projects/root/control-run")).body.status, "done");
   assert.equal((await request("/api/projects/alpha/cards")).body.cards[0].id, "A-1");
 

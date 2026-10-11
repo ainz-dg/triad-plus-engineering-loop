@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { validateAssignmentPacket } from "../../runtime/lib/assignment-packet.mjs";
 import { validateInstallationManifest } from "../../runtime/lib/installation-manifest.mjs";
@@ -55,6 +56,119 @@ function normalizedOrNull(value) {
 
 function projectFile(project, relative) {
   return project.base ? `${project.base}/${relative}` : relative;
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function reviewerBindingView(reader, project, value, reviewerContract) {
+  const binding = value.reviewer_binding;
+  if (binding === undefined) {
+    return {
+      status: "not_recorded",
+      provenance: PROVENANCE.derived,
+      note: "legacy deterministic-driver output has no Reviewer provenance binding; it is not inferred",
+    };
+  }
+  const issues = [];
+  const requireEqual = (label, actual, expected) => {
+    if (actual !== expected) issues.push(label);
+  };
+  const packet = value.packet ?? {};
+  const metadata = packet.metadata ?? {};
+  const verifier = value.verifier_evidence ?? {};
+  const recordedVerifier = binding.verifier_evidence ?? {};
+  const featureId = metadata.feature_id ?? value.assignment_context?.feature_id ?? null;
+  requireEqual("schema_version", binding.schema_version, 1);
+  requireEqual("assignment_id", binding.assignment_id, metadata.assignment_id);
+  requireEqual("feature_id", binding.feature_id, featureId);
+  requireEqual("attempt", binding.attempt, metadata.attempt);
+  requireEqual("assignment_ref", normalizedOrNull(binding.assignment_ref), binding.assignment_ref);
+  if (!/^[a-f0-9]{64}$/i.test(binding.assignment_sha256 ?? "")) issues.push("assignment_sha256");
+  requireEqual("packet.path", binding.assignment_packet?.path, packet.path ?? null);
+  requireEqual("packet.sha256", binding.assignment_packet?.sha256, packet.sha256 ?? null);
+  if (!/^[a-f0-9]{64}$/i.test(binding.assignment_packet?.sha256 ?? "")) issues.push("packet.sha256");
+  for (const field of ["path", "sha256", "run_id", "feature_id", "attempt", "assignment_id", "assignment_sha256", "candidate_fingerprint", "required_gates_passed", "status"]) {
+    requireEqual(`verifier_evidence.${field}`, recordedVerifier[field], verifier[field]);
+  }
+  requireEqual("candidate_fingerprint", binding.candidate_fingerprint, verifier.candidate_fingerprint);
+  if (!/^[a-f0-9]{64}$/i.test(binding.candidate_fingerprint ?? "")) issues.push("candidate_fingerprint");
+  if (!/^[a-f0-9]{64}$/i.test(binding.reviewer_result_sha256 ?? "")) issues.push("reviewer_result_sha256");
+  if (reviewerContract) {
+    requireEqual("reviewer_result_sha256", binding.reviewer_result_sha256, sha256(`${JSON.stringify(reviewerContract, null, 2)}\n`));
+  } else {
+    issues.push("reviewer_result_invalid");
+  }
+  requireEqual("verifier status", verifier.status, "pass");
+  requireEqual("required_gates_passed", verifier.required_gates_passed, true);
+  requireEqual("assignment_id/evidence", binding.assignment_id, verifier.assignment_id);
+  requireEqual("assignment_sha256/evidence", binding.assignment_sha256, verifier.assignment_sha256);
+  requireEqual("feature_id/evidence", binding.feature_id, verifier.feature_id);
+  requireEqual("attempt/evidence", binding.attempt, verifier.attempt);
+
+  const evidenceRelative = normalizedOrNull(verifier.path);
+  if (!evidenceRelative) {
+    issues.push("verifier_evidence_path_invalid");
+  } else {
+    let evidenceSource;
+    try { evidenceSource = await reader.readText(project.base, evidenceRelative, { maxBytes: 5 * 1024 * 1024 }); }
+    catch (error) {
+      if (error instanceof AccessError) issues.push("verifier_evidence_unavailable");
+      else throw error;
+    }
+    if (!evidenceSource) {
+      issues.push("verifier_evidence_missing");
+    } else if (evidenceSource.truncated || evidenceSource.sha256 !== verifier.sha256) {
+      issues.push("verifier_evidence_hash_mismatch");
+    } else {
+      let evidence;
+      try { evidence = JSON.parse(evidenceSource.text); }
+      catch { issues.push("verifier_evidence_invalid_json"); }
+      if (evidence) {
+        const contract = validateVerificationEvidence(evidence);
+        if (!contract.valid) issues.push("verifier_evidence_invalid_schema");
+        requireEqual("evidence.run_id", evidence.run_id, verifier.run_id);
+        requireEqual("evidence.status", evidence.status, "pass");
+        requireEqual("evidence.assignment_id", evidence.assignment_id, binding.assignment_id);
+        requireEqual("evidence.assignment_sha256", evidence.assignment_sha256, binding.assignment_sha256);
+        requireEqual("evidence.feature_id", evidence.feature_id, binding.feature_id);
+        requireEqual("evidence.attempt", evidence.attempt, binding.attempt);
+        requireEqual("evidence.candidate_fingerprint", evidence.baseline?.candidate_fingerprint, binding.candidate_fingerprint);
+        requireEqual("evidence.required_gates_passed", evidence.required_gates_passed, true);
+        requireEqual("evidence.packet.path", evidence.assignment_packet?.path, binding.assignment_packet?.path ?? null);
+        requireEqual("evidence.packet.sha256", evidence.assignment_packet?.sha256, binding.assignment_packet?.sha256 ?? null);
+      }
+    }
+  }
+
+  const assignmentRelative = normalizedOrNull(binding.assignment_ref);
+  if (!assignmentRelative) {
+    issues.push("assignment_path_invalid");
+  } else {
+    let assignmentSource;
+    try { assignmentSource = await reader.readText(project.base, assignmentRelative); }
+    catch (error) {
+      if (error instanceof AccessError) issues.push("assignment_unavailable");
+      else throw error;
+    }
+    if (!assignmentSource) issues.push("assignment_missing");
+    else if (assignmentSource.truncated || assignmentSource.sha256 !== binding.assignment_sha256) issues.push("assignment_hash_mismatch");
+  }
+
+  return issues.length > 0
+    ? { status: "mismatch", provenance: PROVENANCE.derived, issues: [...new Set(issues)] }
+    : {
+      status: "bound",
+      provenance: PROVENANCE.derived,
+      assignment_id: binding.assignment_id,
+      feature_id: binding.feature_id,
+      attempt: binding.attempt,
+      assignment_sha256: binding.assignment_sha256,
+      candidate_fingerprint: binding.candidate_fingerprint,
+      verifier_evidence: { path: evidenceRelative, sha256: verifier.sha256, run_id: verifier.run_id },
+      reviewer_result_sha256: binding.reviewer_result_sha256,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -604,9 +718,17 @@ async function controlRunView(reader, project, cardId) {
         findings: contract.findings ?? [],
         evidence_refs: contract.evidence_refs ?? [],
         skill_compliance: contract.skill_compliance ?? [],
+        binding: await reviewerBindingView(reader, project, value, contract),
       };
     } catch (error) {
-      reviewer = { status: "invalid", provenance: PROVENANCE.declared, error: sanitizeError(error) };
+      reviewer = {
+        status: "invalid",
+        provenance: PROVENANCE.declared,
+        error: sanitizeError(error),
+        binding: value.reviewer_binding === undefined
+          ? { status: "not_recorded", provenance: PROVENANCE.derived, note: "no Reviewer binding was recorded" }
+          : { status: "mismatch", provenance: PROVENANCE.derived, issues: ["reviewer_result_invalid"] },
+      };
     }
   }
   return {

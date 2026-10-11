@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { nextAction } from './lib/orchestrator-control.mjs';
 import { resolveAssignmentContext, validateAssignmentPacket } from './lib/assignment-packet.mjs';
+import { calculateCandidateFingerprint } from './lib/fingerprint.mjs';
 import { parseReviewerResultJsonl } from './lib/reviewer-result.mjs';
+import { validateVerificationEvidence } from './lib/verification-evidence.mjs';
 
 function option(argv, name) {
   const index = argv.indexOf(name);
@@ -74,6 +77,144 @@ async function writeText(file, value) {
   await writeFile(file, value ?? '');
 }
 
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function evidencePathFor(control, assignment) {
+  const directory = assignment.evidence_directory
+    ? path.resolve(control, assignment.evidence_directory)
+    : path.join(control, '.loop', 'evidence', assignment.feature_id, `attempt-${String(assignment.attempt).padStart(3, '0')}`);
+  if (!directory.startsWith(`${control}${path.sep}`)) return null;
+  return path.join(directory, 'verification.json');
+}
+
+function relativeRef(root, file) {
+  return path.relative(root, file).split(path.sep).join('/');
+}
+
+function verifierEvidenceError(message) {
+  return { valid: false, error: `verifier evidence ${message}` };
+}
+
+async function loadVerifierEvidence({ control, worktree, assignment, assignmentPath, assignmentSha256, packet, verifierJson }) {
+  if (!verifierJson || typeof verifierJson !== 'object' || verifierJson.status !== 'pass') {
+    return verifierEvidenceError('did not report a passing run');
+  }
+  const evidencePath = evidencePathFor(control, assignment);
+  if (!evidencePath) return verifierEvidenceError('path escapes the active Control Workspace');
+  if (typeof verifierJson.evidence !== 'string' || path.resolve(control, verifierJson.evidence) !== evidencePath) {
+    return verifierEvidenceError('path does not match the active attempt');
+  }
+
+  let source;
+  let evidence;
+  try {
+    source = await readFile(evidencePath, 'utf8');
+    const actualPath = await realpath(evidencePath);
+    if (!actualPath.startsWith(`${control}${path.sep}`)) return verifierEvidenceError('resolves outside the active Control Workspace');
+    evidence = JSON.parse(source);
+  } catch {
+    return verifierEvidenceError('is missing or unreadable');
+  }
+  const contract = validateVerificationEvidence(evidence);
+  if (!contract.valid) return verifierEvidenceError(`does not match its schema (${contract.errors.join('; ')})`);
+
+  const expectedRunId = assignment.verification_run_id ?? verifierJson.run_id;
+  const identityProblems = [];
+  const requireEqual = (label, actual, expected) => {
+    if (actual !== expected) identityProblems.push(label);
+  };
+  let evidenceAssignmentPath = null;
+  try {
+    evidenceAssignmentPath = await realpath(path.resolve(control, evidence.assignment_ref));
+  } catch {}
+  requireEqual('run_id', evidence.run_id, expectedRunId);
+  requireEqual('verifier run_id', evidence.run_id, verifierJson.run_id);
+  requireEqual('status', evidence.status, verifierJson.status);
+  requireEqual('feature_id', evidence.feature_id, assignment.feature_id);
+  requireEqual('attempt', evidence.attempt, assignment.attempt);
+  requireEqual('assignment_id', evidence.assignment_id, assignment.assignment_id);
+  requireEqual('assignment_ref', evidenceAssignmentPath, await realpath(assignmentPath));
+  requireEqual('assignment_sha256', evidence.assignment_sha256, assignmentSha256);
+  requireEqual('trigger.agent_id', evidence.trigger?.agent_id, assignment.agent_id);
+  requireEqual('trigger.agent_type', evidence.trigger?.agent_type, assignment.agent_type);
+  requireEqual('baseline.prd_sha256', evidence.baseline?.prd_sha256, assignment.expected_prd_sha256);
+  requireEqual('baseline.card_sha256', evidence.baseline?.card_sha256, assignment.expected_card_sha256);
+  if (assignment.expected_gates_sha256) requireEqual('baseline.gates_sha256', evidence.baseline?.gates_sha256, assignment.expected_gates_sha256);
+  if (assignment.expected_branch) requireEqual('baseline.branch', evidence.baseline?.branch, assignment.expected_branch);
+  if (evidence.required_gates_passed !== true) identityProblems.push('required_gates_passed');
+  if (typeof evidence.baseline?.candidate_fingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(evidence.baseline.candidate_fingerprint)) {
+    identityProblems.push('baseline.candidate_fingerprint');
+  }
+  if (identityProblems.length > 0) return verifierEvidenceError(`does not bind to the active assignment, run, or passing candidate (${identityProblems.join(', ')})`);
+
+  const currentCandidate = await calculateCandidateFingerprint(worktree);
+  if (currentCandidate.value !== evidence.baseline.candidate_fingerprint) {
+    return verifierEvidenceError('candidate fingerprint does not match the current worktree');
+  }
+
+  const recordedPacket = evidence.assignment_packet;
+  if (packet) {
+    if (recordedPacket?.path !== packet.path || recordedPacket?.sha256 !== packet.sha256) {
+      return verifierEvidenceError('assignment-packet binding does not match the active packet');
+    }
+  } else if (recordedPacket !== null && recordedPacket !== undefined) {
+    return verifierEvidenceError('contains an unrecognized assignment-packet binding');
+  }
+
+  return {
+    valid: true,
+    evidence,
+    source,
+    reference: {
+      path: relativeRef(control, evidencePath),
+      sha256: sha256(source),
+      run_id: evidence.run_id,
+      feature_id: evidence.feature_id,
+      attempt: evidence.attempt,
+      assignment_id: evidence.assignment_id,
+      assignment_sha256: evidence.assignment_sha256,
+      assignment_packet: recordedPacket ?? null,
+      candidate_fingerprint: evidence.baseline.candidate_fingerprint,
+      required_gates_passed: evidence.required_gates_passed,
+      status: evidence.status,
+    },
+  };
+}
+
+function reviewerBinding({ control, assignment, assignmentPath, assignmentSha256, packet, verifierEvidence, reviewerResultSha256 }) {
+  return {
+    schema_version: 1,
+    assignment_ref: relativeRef(control, assignmentPath),
+    assignment_sha256: assignmentSha256,
+    assignment_id: assignment.assignment_id,
+    feature_id: assignment.feature_id,
+    attempt: assignment.attempt,
+    assignment_packet: packet ? { path: packet.path, sha256: packet.sha256 } : null,
+    verifier_evidence: verifierEvidence,
+    candidate_fingerprint: verifierEvidence.candidate_fingerprint,
+    reviewer_result_sha256: reviewerResultSha256,
+  };
+}
+
+async function reviewerBindingProblem({ control, worktree, assignment, assignmentPath, assignmentSha256, packet, verifierEvidence }) {
+  if (sha256(await readFile(assignmentPath)) !== assignmentSha256) return 'assignment changed during Reviewer execution';
+  let currentPacket;
+  try { currentPacket = await validateAssignmentPacket(assignment, control); }
+  catch { return 'assignment packet changed or became invalid during Reviewer execution'; }
+  if ((currentPacket?.path ?? null) !== (packet?.path ?? null) || (currentPacket?.sha256 ?? null) !== (packet?.sha256 ?? null)) {
+    return 'assignment packet changed during Reviewer execution';
+  }
+  let currentEvidence;
+  try { currentEvidence = await readFile(path.resolve(control, verifierEvidence.path), 'utf8'); }
+  catch { return 'verifier evidence disappeared during Reviewer execution'; }
+  if (sha256(currentEvidence) !== verifierEvidence.sha256) return 'verifier evidence changed during Reviewer execution';
+  const currentCandidate = await calculateCandidateFingerprint(worktree);
+  if (currentCandidate.value !== verifierEvidence.candidate_fingerprint) return 'candidate fingerprint changed after verification';
+  return null;
+}
+
 function tokenTotal(text) {
   let total = null;
   for (const line of text.split('\n')) {
@@ -91,9 +232,10 @@ async function main() {
   const configPath = option(argv, '--config');
   if (!configPath) usage(2);
   const config = await readJson(path.resolve(configPath), 'control run config');
-  const control = path.resolve(config.project_root);
+  const control = await realpath(path.resolve(config.project_root));
   const assignmentPath = path.resolve(control, config.assignment);
   const assignment = await readJson(assignmentPath, 'assignment');
+  const assignmentSha256 = sha256(await readFile(assignmentPath));
   const outputPath = config.output ? path.resolve(config.output) : path.join(control, '.loop/runtime/deterministic-control-run.json');
   const started = Date.now();
   const trace = [];
@@ -146,11 +288,17 @@ async function main() {
   await writeText(config.verifier.output, verifierResult.stdout);
   await writeText(config.verifier.stderr_output, verifierResult.stderr);
   const verifierJson = lastJsonLine(verifierResult.stdout);
-  if (verifierResult.status !== 0 || verifierJson?.status !== 'pass') {
+  const verifierEvidenceCheck = verifierResult.status === 0 && verifierJson?.status === 'pass'
+    ? await loadVerifierEvidence({ control, worktree: assignmentContext.worktree, assignment, assignmentPath, assignmentSha256, packet, verifierJson })
+    : { valid: false, error: 'verifier evidence is unavailable because the verifier did not pass' };
+  if (verifierResult.status !== 0 || verifierJson?.status !== 'pass' || !verifierEvidenceCheck.valid) {
+    const verifierStatus = verifierResult.status !== 0 || verifierJson?.status !== 'pass'
+      ? verifierJson?.status ?? 'invalid_context'
+      : 'invalid_context';
     state = {
       ...state,
       phase: 'verifier_result',
-      verifier: { status: verifierJson?.status ?? 'invalid_context' },
+      verifier: { status: verifierStatus },
       failure: { kind: config.verifier.failure_kind ?? 'verifier_candidate_failure' },
       retry: config.verifier.retry ?? { kind: config.verifier.failure_kind ?? 'verifier_candidate_failure', allowed: false }
     };
@@ -164,14 +312,22 @@ async function main() {
       assignment_context: assignmentContext,
       timings: { started, ended: Date.now(), control_wall_ms: Date.now() - started },
       developer: { ...developerResult, stdout: undefined, stderr: undefined, tokens: developerTokenTotal },
-      verifier: { ...verifierResult, stdout: undefined, stderr: undefined, parsed: verifierJson }
+      verifier: {
+        ...verifierResult,
+        stdout: undefined,
+        stderr: undefined,
+        parsed: verifierJson ? { run_id: verifierJson.run_id ?? null, status: verifierJson.status ?? null } : null,
+      },
+      verifier_evidence: verifierEvidenceCheck.valid ? verifierEvidenceCheck.reference : null,
+      verifier_evidence_error: verifierEvidenceCheck.valid ? null : verifierEvidenceCheck.error,
     };
     await writeOutput(outputPath, output);
     process.stdout.write(`${JSON.stringify(output)}\n`);
-    process.exitCode = 2;
+    process.exitCode = verifierResult.status !== 0 || verifierJson?.status !== 'pass' ? 2 : 3;
     return;
   }
 
+  const verifierEvidence = verifierEvidenceCheck.reference;
   state = { ...state, phase: 'verifier_result', verifier: { status: 'pass' } };
   decision = nextAction(state);
   record(state, decision);
@@ -201,14 +357,78 @@ async function main() {
     if (error?.code === 'reviewer_result_invalid') throw error;
     fail(error.message);
   }
-  // Persist the validated native result for auditability; it is never an
-  // input that can override the streamed role output.
+  const bindingProblem = await reviewerBindingProblem({
+    control,
+    worktree: assignmentContext.worktree,
+    assignment,
+    assignmentPath,
+    assignmentSha256,
+    packet,
+    verifierEvidence,
+  });
+  if (bindingProblem) {
+    const invalidState = { ...state, phase: 'verifier_result', verifier: { status: 'mismatch' } };
+    const stopped = nextAction(invalidState);
+    record(invalidState, stopped);
+    const output = {
+      status: 'stopped_after_review',
+      stop_action: stopped,
+      provenance_error: bindingProblem,
+      trace,
+      packet,
+      assignment_context: assignmentContext,
+      verifier_evidence: verifierEvidence,
+      reviewer: reviewerContract,
+      timings: { started, ended: Date.now(), control_wall_ms: Date.now() - started },
+    };
+    await writeOutput(outputPath, output);
+    process.stdout.write(`${JSON.stringify(output)}\n`);
+    process.exitCode = 3;
+    return;
+  }
+
+  // Persist only after the result is bound to the unchanged assignment,
+  // verifier evidence, and candidate. The result is never an input that can
+  // override the streamed role output.
   await writeOutput(config.reviewer.result_file, reviewerContract);
+  const reviewerResultSource = await readFile(config.reviewer.result_file, 'utf8');
+  const reviewerBindingRecord = reviewerBinding({
+    control,
+    assignment,
+    assignmentPath,
+    assignmentSha256,
+    packet,
+    verifierEvidence,
+    reviewerContract,
+    reviewerResultSha256: sha256(reviewerResultSource),
+  });
+
+  // Persist a bound Reviewer result before an approved verdict can reach the
+  // commit transition. The result contains the bounded contract, not a private
+  // model transcript.
+  await writeOutput(outputPath, {
+    status: 'review_pending_commit',
+    trace,
+    packet,
+    assignment_context: assignmentContext,
+    verifier_evidence: verifierEvidence,
+    reviewer: reviewerContract,
+    reviewer_binding: reviewerBindingRecord,
+  });
   state = { ...state, phase: 'reviewer_result', reviewer: { verdict: reviewerContract.decision } };
   if (reviewerContract.decision !== 'approved') {
     const stopped = nextAction({ ...state, retry: config.reviewer.retry ?? { kind: 'reviewer_rework', allowed: false } });
     record(state, stopped);
-    const output = { status: 'stopped_after_review', stop_action: stopped, reviewer: reviewerContract, trace, packet, timings: { started, ended: Date.now(), control_wall_ms: Date.now() - started } };
+    const output = {
+      status: 'stopped_after_review',
+      stop_action: stopped,
+      reviewer: reviewerContract,
+      reviewer_binding: reviewerBindingRecord,
+      verifier_evidence: verifierEvidence,
+      trace,
+      packet,
+      timings: { started, ended: Date.now(), control_wall_ms: Date.now() - started },
+    };
     await writeOutput(outputPath, output);
     process.stdout.write(`${JSON.stringify(output)}\n`);
     process.exitCode = 2;
@@ -259,7 +479,9 @@ async function main() {
     trace,
     packet,
     assignment_context: assignmentContext,
+    verifier_evidence: verifierEvidence,
     reviewer: reviewerContract,
+    reviewer_binding: reviewerBindingRecord,
     timings: {
       started,
       ended,
