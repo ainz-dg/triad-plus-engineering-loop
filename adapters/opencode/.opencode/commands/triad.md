@@ -7,6 +7,14 @@ Operate a Triad+ Engineering Loop for the following owner request:
 
 $ARGUMENTS
 
+Resolve a relative PRD path from the opened Control Workspace root. If the
+request has no PRD path and a readable `PRD.md` is present at that root, use it
+as the bootstrap source. Never infer a PRD from a product repository or scan
+arbitrary sibling directories. Bootstrap freezes the selected source into the
+normal immutable project artifact path and records its SHA-256; it does not
+modify the root `PRD.md`. Keep every product repository and worktree explicitly
+mapped in `project.yaml` and separate from this Control Workspace.
+
 When the input is a native BMAD `epics.md` (or its `_bmad-output` directory),
 use the deterministic native intake from `triad-loop-orchestrator`. Do not ask
 the owner to create one Story file per BMAD Story or to run
