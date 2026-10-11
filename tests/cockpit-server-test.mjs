@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, lstat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, lstat, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -244,6 +244,93 @@ await putJson(path.join(control, ".loop/runtime/deterministic-control-run.json")
 
 await put(path.join(control, "projects/alpha/.loop/work-queue.yaml"), "items:\n  - id: A-1\n    state: ready\n");
 
+// A current deterministic run binds the normalized Reviewer result to the
+// active assignment, verifier artifact, packet, and candidate. The Cockpit
+// must resolve that binding while leaving older records explicitly unbound.
+const alphaBase = path.join(control, "projects/alpha");
+const alphaAssignmentPath = ".loop/runtime/assignments/ALPHA-1-attempt-1.json";
+const alphaPacketPath = ".loop/runtime/assignments/ALPHA-1-attempt-001.md";
+const alphaEvidencePath = ".loop/evidence/ALPHA-1/attempt-001/verification.json";
+const alphaReviewerResultPath = ".loop/runtime/reviewer-results/ALPHA-1-attempt-001.json";
+const alphaAssignment = {
+  schema_version: 1,
+  assignment_id: "alpha-a1",
+  status: "active",
+  agent_id: "alpha-developer",
+  agent_type: "triad_developer",
+  feature_id: "ALPHA-1",
+  attempt: 1,
+};
+const alphaAssignmentSource = `${JSON.stringify(alphaAssignment, null, 2)}\n`;
+const alphaAssignmentSha = sha256(alphaAssignmentSource);
+await put(path.join(alphaBase, alphaAssignmentPath), alphaAssignmentSource);
+const alphaPacketMetadata = { assignment_id: "alpha-a1", feature_id: "ALPHA-1", attempt: 1, mandatory_skills: [] };
+const alphaPacketSource = `<!-- triad-plus-assignment-packet:start -->\n${JSON.stringify(alphaPacketMetadata, null, 2)}\n<!-- triad-plus-assignment-packet:end -->\n`;
+const alphaPacketSha = sha256(alphaPacketSource);
+await put(path.join(alphaBase, alphaPacketPath), alphaPacketSource);
+const alphaCandidateFingerprint = "a".repeat(64);
+const alphaEvidence = {
+  schema_version: 1,
+  run_id: "alpha-run-1",
+  feature_id: "ALPHA-1",
+  attempt: 1,
+  assignment_id: "alpha-a1",
+  assignment_sha256: alphaAssignmentSha,
+  trigger: { event: "manual", agent_id: "alpha-developer", agent_type: "triad_developer" },
+  assignment_ref: alphaAssignmentPath,
+  baseline: {
+    prd_sha256: null,
+    card_sha256: null,
+    quality_baseline_fingerprint: null,
+    git_head: "alpha-base",
+    candidate_fingerprint: alphaCandidateFingerprint,
+    branch: "feature/alpha",
+  },
+  assignment_packet: { path: alphaPacketPath, sha256: alphaPacketSha },
+  gates: [],
+  required_gates_passed: true,
+  status: "pass",
+  failure: null,
+  created_at: "2026-10-11T12:00:00.000Z",
+};
+const alphaEvidenceSource = `${JSON.stringify(alphaEvidence, null, 2)}\n`;
+const alphaEvidenceSha = sha256(alphaEvidenceSource);
+await put(path.join(alphaBase, alphaEvidencePath), alphaEvidenceSource);
+const alphaReviewer = { decision: "approved", summary: "synthetic bound result", findings: [], evidence_refs: [] };
+const alphaReviewerSource = `${JSON.stringify(alphaReviewer, null, 2)}\n`;
+await put(path.join(alphaBase, alphaReviewerResultPath), alphaReviewerSource);
+const alphaVerifierReference = {
+  path: alphaEvidencePath,
+  sha256: alphaEvidenceSha,
+  run_id: alphaEvidence.run_id,
+  feature_id: alphaEvidence.feature_id,
+  attempt: alphaEvidence.attempt,
+  assignment_id: alphaEvidence.assignment_id,
+  assignment_sha256: alphaEvidence.assignment_sha256,
+  assignment_packet: alphaEvidence.assignment_packet,
+  candidate_fingerprint: alphaCandidateFingerprint,
+  required_gates_passed: true,
+  status: "pass",
+};
+await putJson(path.join(alphaBase, ".loop/runtime/deterministic-control-run.json"), {
+  status: "done",
+  packet: { path: alphaPacketPath, sha256: alphaPacketSha, metadata: alphaPacketMetadata },
+  verifier_evidence: alphaVerifierReference,
+  reviewer: alphaReviewer,
+  reviewer_binding: {
+    schema_version: 2,
+    assignment_ref: alphaAssignmentPath,
+    assignment_sha256: alphaAssignmentSha,
+    assignment_id: "alpha-a1",
+    feature_id: "ALPHA-1",
+    attempt: 1,
+    assignment_packet: { path: alphaPacketPath, sha256: alphaPacketSha },
+    verifier_evidence: alphaVerifierReference,
+    candidate_fingerprint: alphaCandidateFingerprint,
+    reviewer_result_ref: { path: alphaReviewerResultPath, sha256: sha256(alphaReviewerSource) },
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Snapshot the whole fixture (control + outside) to prove nothing is written.
 
@@ -261,7 +348,7 @@ async function snapshot(directory) {
   await walk(directory);
   return entries.join("\n");
 }
-const before = await snapshot(root);
+let before = await snapshot(root);
 
 // ---------------------------------------------------------------------------
 // Server
@@ -380,6 +467,7 @@ try {
   assert.equal(card11View.evaluations[0].candidate_binding.result, "same_as_latest_pass_record");
   assert.equal(card11View.control_run.status, "done");
   assert.equal(card11View.control_run.reviewer.status, "valid");
+  assert.equal(card11View.control_run.reviewer.binding.status, "not_recorded");
   assert.equal(card11View.control_run.reviewer.decision, "approved");
   assert.equal(card11View.control_run.trace[0].at, "2026-10-02T09:00:00.000Z");
 
@@ -438,7 +526,42 @@ try {
   // Missing resources.
   assert.equal((await request("/api/projects/root/cards/9.9")).status, 404);
   assert.equal((await request("/api/projects/nope/cards")).status, 404);
-  assert.equal((await request("/api/projects/alpha/control-run")).status, 404);
+  const legacyControlRun = (await request("/api/projects/root/control-run")).body;
+  assert.equal(legacyControlRun.reviewer.binding.status, "not_recorded");
+  const boundControlRun = await request("/api/projects/alpha/control-run");
+  assert.equal(boundControlRun.status, 200);
+  assert.equal(boundControlRun.body.reviewer.binding.status, "bound");
+  assert.equal(boundControlRun.body.reviewer.binding.candidate_fingerprint, alphaCandidateFingerprint);
+  assert.equal(boundControlRun.body.reviewer.binding.verifier_evidence.sha256, alphaEvidenceSha);
+  assert.deepEqual(boundControlRun.body.reviewer.binding.reviewer_result_ref, { path: alphaReviewerResultPath, sha256: sha256(alphaReviewerSource) });
+
+  // The Reviewer binding is checked against the separately persisted bytes,
+  // not merely against the embedded Reviewer object in deterministic output.
+  const reviewerResultFile = path.join(alphaBase, alphaReviewerResultPath);
+  const controlRunFile = path.join(alphaBase, ".loop/runtime/deterministic-control-run.json");
+  const controlRunBytes = await readFile(controlRunFile);
+  await writeFile(reviewerResultFile, `${JSON.stringify({ ...alphaReviewer, summary: "tampered" }, null, 2)}\n`);
+  const tamperedReviewer = await request("/api/projects/alpha/control-run");
+  assert.equal(tamperedReviewer.body.reviewer.binding.status, "mismatch");
+  assert.ok(tamperedReviewer.body.reviewer.binding.issues.includes("reviewer_result_hash_mismatch"));
+  assert.deepEqual(await readFile(controlRunFile), controlRunBytes, "tamper test leaves deterministic control-run bytes unchanged");
+
+  await writeFile(reviewerResultFile, alphaReviewerSource);
+  await rm(reviewerResultFile);
+  const missingReviewer = await request("/api/projects/alpha/control-run");
+  assert.equal(missingReviewer.body.reviewer.binding.status, "mismatch");
+  assert.ok(missingReviewer.body.reviewer.binding.issues.includes("reviewer_result_missing"));
+  assert.deepEqual(await readFile(controlRunFile), controlRunBytes, "missing-file test leaves deterministic control-run bytes unchanged");
+
+  await put(reviewerResultFile, alphaReviewerSource);
+  const tamperedBinding = JSON.parse(controlRunBytes.toString("utf8"));
+  tamperedBinding.reviewer_binding.reviewer_result_ref.path = "../../outside/reviewer-result.json";
+  await writeFile(controlRunFile, `${JSON.stringify(tamperedBinding, null, 2)}\n`);
+  const escapedReviewer = await request("/api/projects/alpha/control-run");
+  assert.equal(escapedReviewer.body.reviewer.binding.status, "mismatch");
+  assert.ok(escapedReviewer.body.reviewer.binding.issues.includes("reviewer_result_path_invalid"));
+  await writeFile(controlRunFile, controlRunBytes);
+  before = await snapshot(root);
   assert.equal((await request("/api/projects/root/control-run")).body.status, "done");
   assert.equal((await request("/api/projects/alpha/cards")).body.cards[0].id, "A-1");
 
