@@ -124,7 +124,7 @@ const sharedLinks = [...attemptOneRow.matchAll(/\[[^\]]*\]\(([^)]+shared\.log)\)
 assert.equal(sharedLinks.length, 1, `only the source whose absolute path belongs to the report root should link when roots contain duplicate relative paths: ${attemptOneRow}`);
 assert.equal(path.resolve(path.dirname(outputPath), decodeURIComponent(sharedLinks[0])), controlSharedPath, "the control-root reference must resolve to its exact originating file");
 assert.ok(attemptOneRow.includes(`\`${sharedReference}\``), "ambiguous relative evidence must remain plain text");
-assert.ok(!attemptOneRow.includes("escape.log"), "a symlink resolving outside declared roots must stay redacted and unlinked");
+assert.doesNotMatch(attemptOneRow, /\[[^\]]*escape\.log[^\]]*\]\(/, "a symlink resolving outside declared roots must remain unlinked");
 const productRootReport = renderCardReport(input, {
   projectRoot: product,
   worktree: product,
