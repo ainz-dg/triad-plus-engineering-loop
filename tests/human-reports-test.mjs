@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { calculateCandidateFingerprintAtCommit } from "../runtime/lib/fingerprint.mjs";
+import { renderCardReport } from "../runtime/lib/human-reports.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const cli = path.join(repositoryRoot, "runtime", "triad-human-report.mjs");
@@ -48,7 +49,18 @@ const attemptTwoGate = ".loop/evidence/CARD-001/attempt-002/logs/test.stdout.log
 const cardReviewer = ".loop/reviews/CARD-001.md";
 const assignmentPath = ".loop/runtime/assignments/CARD-001.json";
 const packetPath = ".loop/runtime/packets/CARD-001.md";
-for (const reference of [attemptOneReviewer, attemptOneHtmlName, attemptOnePreview, attemptTwoVerification, attemptTwoGate, cardReviewer, assignmentPath, packetPath, ".loop/run-state.yaml"]) {
+const sharedReference = ".loop/evidence/CARD-001/attempt-001/shared.log";
+const controlSharedPath = path.join(control, sharedReference);
+const productSharedPath = path.join(product, sharedReference);
+const outsideEvidencePath = path.join(root, "outside-evidence.log");
+const symlinkReferencePath = path.join(control, ".loop/evidence/CARD-001/attempt-001/escape.log");
+await mkdir(path.dirname(controlSharedPath), { recursive: true });
+await mkdir(path.dirname(productSharedPath), { recursive: true });
+await writeFile(controlSharedPath, "CONTROL ROOT EVIDENCE\n", "utf8");
+await writeFile(productSharedPath, "PRODUCT ROOT EVIDENCE\n", "utf8");
+await writeFile(outsideEvidencePath, "outside evidence must not be linked\n", "utf8");
+await symlink(outsideEvidencePath, symlinkReferencePath);
+for (const reference of [attemptOneReviewer, attemptOneHtmlName, attemptOnePreview, sharedReference, attemptTwoVerification, attemptTwoGate, cardReviewer, assignmentPath, packetPath, ".loop/run-state.yaml"]) {
   const file = path.join(control, reference);
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, `synthetic ${path.basename(file)}\n`, "utf8");
@@ -67,7 +79,7 @@ const input = {
   status: "approved",
   implementation: { summary: "Implemented the bounded outcome." },
   attempts: [
-    { attempt: 1, outcome: "rework", resolution_kind: "reviewer_rework", candidate_fingerprint: "a".repeat(64), evidence_refs: ["/Users/alice/control/log.txt", attemptOneReviewer, attemptOneHtmlName, attemptOnePreview, "../../private/key.txt", "https://external.example/review"], notes: "Reviewer requested a bounded correction." },
+    { attempt: 1, outcome: "rework", resolution_kind: "reviewer_rework", candidate_fingerprint: "a".repeat(64), evidence_refs: ["/Users/alice/control/log.txt", attemptOneReviewer, attemptOneHtmlName, attemptOnePreview, controlSharedPath, productSharedPath, sharedReference, symlinkReferencePath, "../../private/key.txt", "https://external.example/review"], notes: "Reviewer requested a bounded correction." },
     { attempt: 2, outcome: "pass", resolution_kind: "none", candidate_fingerprint: finalFingerprint, evidence_refs: [attemptTwoVerification], notes: "Current candidate verified." }
   ],
   verification: [{ run_id: "verify-2", status: "pass", candidate_fingerprint: finalFingerprint, evidence_path: attemptTwoVerification, gates: [{ id: "test", status: "pass", evidence_refs: ["/Users/alice/control/gate.log", attemptTwoGate], exit_code: 0, duration_ms: 12 }] }],
@@ -107,6 +119,19 @@ assert.ok(reportLinks.includes("../.loop/evidence/CARD-001/attempt-002/verificat
 const attemptOneReportCells = report.split("\n").find((line) => line.startsWith("| 1 | rework"))?.split("|").map((cell) => cell.trim()).filter(Boolean) ?? [];
 assert.ok(attemptOneReportCells[5]?.includes("reviewer"), "review-named evidence should occupy the Reviewer column");
 assert.ok(attemptOneReportCells[6]?.includes("preview.json"), "preview-named evidence should remain ordinary evidence");
+const attemptOneRow = report.split("\n").find((line) => line.startsWith("| 1 | rework")) ?? "";
+const sharedLinks = [...attemptOneRow.matchAll(/\[[^\]]*\]\(([^)]+shared\.log)\)/g)].map((match) => match[1]);
+assert.equal(sharedLinks.length, 1, `only the source whose absolute path belongs to the report root should link when roots contain duplicate relative paths: ${attemptOneRow}`);
+assert.equal(path.resolve(path.dirname(outputPath), decodeURIComponent(sharedLinks[0])), controlSharedPath, "the control-root reference must resolve to its exact originating file");
+assert.ok(attemptOneRow.includes(`\`${sharedReference}\``), "ambiguous relative evidence must remain plain text");
+assert.ok(!attemptOneRow.includes("escape.log"), "a symlink resolving outside declared roots must stay redacted and unlinked");
+const productRootReport = renderCardReport(input, {
+  projectRoot: product,
+  worktree: product,
+  outputPath: path.join(product, "card-reports", "CARD-001.md"),
+});
+const productSharedHref = [...productRootReport.matchAll(/\[[^\]]*\]\(([^)]+shared\.log)\)/g)].map((match) => match[1]);
+assert.ok(productSharedHref.some((href) => path.resolve(path.dirname(path.join(product, "card-reports", "CARD-001.md")), decodeURIComponent(href)) === productSharedPath), "the product-root absolute reference should resolve to its exact source when the report is in that root");
 assert.ok(!reportLinks.some((href) => href.includes("private") || /^https?:/i.test(href)), "traversal and external references must not become links");
 assert.doesNotMatch(report, /\/Users\/alice\/control/);
 assert.match(report, /reviewer_rework/);
