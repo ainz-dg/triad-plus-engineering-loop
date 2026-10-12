@@ -85,7 +85,22 @@ describe("navigation: project → card → attempt", () => {
     expect((attempts[1] as HTMLDetailsElement).open).toBe(true);
     expect((attempts[0] as HTMLDetailsElement).open).toBe(false);
     const attemptTwo = attempts[1] as HTMLElement;
+    const attemptOne = attempts[0] as HTMLElement;
+    fireEvent.click(within(attemptOne).getByText("Attempt 1"));
+    expect(attemptOne.textContent).toContain("Reviewer documents");
+    expect(attemptOne.textContent).toContain("Document available · verdict not attested");
+    expect(attemptOne.textContent).toContain(".loop/evidence/NOTE-101/attempt-001/reviewer-result.md");
+    expect(attemptOne.textContent).toContain("preview.json");
+    expect(attemptOne.textContent).not.toContain("REWORK");
+    fireEvent.click(within(attemptOne).getByRole("button", { name: "reviewer-result.md" }));
+    const attemptOneReview = await screen.findByRole("dialog", { name: "reviewer-result.md" });
+    await within(attemptOneReview).findByText("Recommendation: REWORK");
+    expect(attemptOneReview.textContent).toContain("Unclassified file");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(within(attemptTwo).getByText("asg-note-101-2")).toBeTruthy();
+    expect(attemptTwo.textContent).toContain("Reviewer documents");
+    expect(attemptTwo.textContent).toContain(".loop/evidence/NOTE-101/attempt-002/review-report.md");
     expect(within(attemptTwo).getByText(/Packet valid/)).toBeTruthy();
     const gates = within(attemptTwo).getByRole("table");
     expect(within(gates).getAllByRole("row").map((row) => row.querySelector("th")?.textContent)).toEqual(["Gate", "unit", "lint", "e2e-smoke"]);
@@ -138,6 +153,17 @@ describe("meaning is preserved", () => {
     await screen.findByRole("heading", { level: 1, name: "Export notes as Markdown" });
     expect(screen.getByText(/does not mean an agent is running now/)).toBeTruthy();
     expect(screen.getByText(/Attempt 1 has an assignment but no verifier evidence/)).toBeTruthy();
+  });
+
+  it("keeps unbound and ambiguous reviews at Card level", async () => {
+    go("#/p/root/c/NOTE-102");
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "Keyboard shortcuts for note search" });
+    expect(screen.getByText(/Card-level documents are not bound to an Attempt by filename/)).toBeTruthy();
+    const attempt = document.querySelector("details.attempt") as HTMLElement;
+    expect(attempt.textContent).not.toContain(".loop/reviews/NOTE-102-review.md");
+    expect(screen.getByText(/Not attributed — the name matches several cards/)).toBeTruthy();
+    expect(document.body.textContent).toContain("NOTE-101, NOTE-102");
   });
 
   it("surfaces anomalies: invalid context, invalid Evaluator+ result, unread queue keys", async () => {

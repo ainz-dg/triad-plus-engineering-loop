@@ -219,6 +219,8 @@ items:
       "e2e-smoke.stderr.log": "",
     },
   });
+  await put(path.join(control, ".loop/evidence/NOTE-101/attempt-001/reviewer-result.md"), "# Reviewer document — Attempt 1\n\nRecommendation: REWORK\n");
+  await put(path.join(control, ".loop/evidence/NOTE-101/attempt-001/preview.json"), "{\"kind\":\"ordinary-evidence\"}\n");
   const a1012 = await writeAssignment("NOTE-101", 2);
   await writeVerification("NOTE-101", 2, a1012, {
     status: "pass",
@@ -252,6 +254,7 @@ items:
 > Reviewer note: see [the design doc](https://example.invalid/design) for the
 > storage key format.
 `);
+  await put(path.join(control, ".loop/reviews/NOTE-101-vs-NOTE-102-review.md"), "# Ambiguous Card-level review\n");
   await putJson(path.join(control, "artifacts/evaluator-plus/NOTE-101.json"), {
     schema_version: 1,
     feature_id: "NOTE-101",

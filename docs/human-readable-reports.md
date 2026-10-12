@@ -13,6 +13,12 @@ It attributes changed paths to the complete Card baseline, so a rework attempt
 does not hide files changed by an earlier attempt. Reports contain relative
 evidence references and redact unrelated absolute paths.
 
+An available renderer is not proof that a report file exists: the Orchestrator
+must invoke the CLI with derived context. Until then, `card-reports/<card-id>.md`
+and `handoff.md` are **not materialized**; if an expected output is absent, do
+not describe it as generated. The Cockpit and these reports are views of the
+canonical records, not new approval evidence.
+
 ## Materialize a Card report
 
 The Orchestrator first writes a small derived JSON context from the canonical
@@ -58,6 +64,18 @@ fingerprint recorded by the passing verifier. The renderer computes and records
 the verified fingerprint with a newly calculated value in the input context.
 The source card and canonical evidence remain read-only.
 
+### Attempt-local Reviewer references
+
+When a Card report input already includes an attempt-local Reviewer file in
+that Attempt's `evidence_refs`, the report places a safe relative link in that
+Attempt's row. It does not invent a reference, read the Markdown to derive a
+verdict, or promote the document to a validated approval. The singular
+`review` object remains a **Card-level** Reviewer section and must not be read
+as a decision for every Attempt. References are linked only when they resolve
+to an existing regular file inside the declared project or worktree root and
+the generated URL remains within that root; otherwise the report retains a
+plain, redacted path.
+
 ## Materialize the final handoff
 
 ```bash
@@ -72,6 +90,12 @@ The handoff opens with the executive summary and Card results, then preserves
 links to the technical evidence, branch/commit map, quality-contract closure,
 Evaluator+ result, delivery gates, demo details, risks, and practical test.
 It is a view for people, not an alternative delivery state machine.
+
+When the output exists, its Card-report links are relative to `handoff.md`, and
+explicit local evidence references are linked relative to that output. A report
+or evidence file that was not supplied, does not exist, is external, or fails
+path-safety checks remains unlinked; generating the handoff does not create
+the underlying canonical evidence.
 
 ### Handoff context checklist
 

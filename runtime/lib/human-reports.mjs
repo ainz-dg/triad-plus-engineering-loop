@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { calculateCandidateFingerprintAtCommit, candidateManifestsBind, collectCandidateChangesAtCommit } from "./fingerprint.mjs";
 import { writeAtomicText } from "./evidence.mjs";
@@ -58,6 +59,81 @@ function within(root, target) {
   return resolved === base || resolved.startsWith(`${base}${path.sep}`);
 }
 
+function realPathWithMissingSuffix(target) {
+  let current = path.resolve(target);
+  const suffix = [];
+  while (true) {
+    try {
+      return path.join(realpathSync(current), ...suffix.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function markdownCode(value) {
+  const content = String(value).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replaceAll("|", "\\|");
+  const fence = "`".repeat(Math.max(1, ...[...content.matchAll(/`+/g)].map((match) => match[0].length + 1)));
+  const padded = content.startsWith("`") || content.endsWith("`") || /^\s|\s$/.test(content) ? ` ${content} ` : content;
+  return `${fence}${padded}${fence}`;
+}
+
+function markdownLinkText(value) {
+  return String(value).replace(/[\r\n]+/g, " ")
+    .replaceAll("\\", "\\\\")
+    .replaceAll("`", "\\`")
+    .replaceAll("[", "\\[")
+    .replaceAll("]", "\\]")
+    .replaceAll("(", "\\(")
+    .replaceAll(")", "\\)")
+    .replaceAll("|", "\\|")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function encodePathSegment(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/**
+ * Link only an existing file within a declared workspace root. The href is
+ * calculated from the actual report directory; lexical and real paths must
+ * both remain inside the same root, so symlinks and traversal cannot escape.
+ */
+function reportReference(value, options = {}, label = null) {
+  const display = reportPath(value, options);
+  const plain = markdownCode(display);
+  if (!options.outputPath || display === "—" || display === "<external path>" || /[\\\u0000-\u001f\u007f-\u009f]/.test(display)) return plain;
+  const normalized = display.replaceAll(path.sep, "/");
+  if (path.posix.isAbsolute(normalized) || /^[a-z][a-z0-9+.-]*:/i.test(normalized)) return plain;
+  const segments = normalized.split("/");
+  if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === "..")) return plain;
+
+  const outputDirectory = path.dirname(path.resolve(options.outputPath));
+  for (const rootValue of [options.projectRoot, options.worktree].filter(Boolean)) {
+    try {
+      const root = realpathSync(path.resolve(rootValue));
+      const target = path.resolve(root, ...segments);
+      if (!within(root, target) || target === root || !existsSync(target)) continue;
+      const targetReal = realpathSync(target);
+      if (!within(root, targetReal) || !statSync(targetReal).isFile()) continue;
+      const outputReal = realPathWithMissingSuffix(outputDirectory);
+      if (!outputReal || !within(root, outputReal)) continue;
+      const relative = path.relative(outputReal, targetReal);
+      if (!relative || path.isAbsolute(relative)) continue;
+      const href = relative.split(path.sep).map(encodePathSegment).join("/");
+      return `[${markdownLinkText(label ?? display)}](${href})`;
+    } catch {
+      // A missing, unreadable, or out-of-root reference stays plain text.
+    }
+  }
+  return plain;
+}
+
 /**
  * Reports are views. Absolute machine paths are never emitted in them. A path
  * inside a declared project/worktree is converted to a portable relative ref;
@@ -97,12 +173,19 @@ function normalizeChangedPaths(changes, context) {
 
 function validateAttempt(attempt, index, context = {}) {
   if (!objectLike(attempt)) throw reportError("human_report_invalid", `attempt ${index + 1} must be an object`);
+  const number = attempt.number ?? attempt.attempt ?? index + 1;
+  const evidenceRefs = list(attempt.evidence_refs).map((ref) => reportPath(ref, context));
+  const reviewerPrefix = `.loop/evidence/${context.cardId}/attempt-${String(number).padStart(3, "0")}/`;
+  const reviewerEvidenceRefs = evidenceRefs.filter((ref) => ref.startsWith(reviewerPrefix)
+    && !ref.slice(reviewerPrefix.length).includes("/")
+    && /(?:^|[-_.\s])review(?:er)?(?:[-_.\s]|$)/i.test(path.posix.basename(ref)));
   return {
-    number: attempt.number ?? attempt.attempt ?? index + 1,
+    number,
     outcome: text(attempt.outcome ?? attempt.status, "not recorded"),
     resolution: text(attempt.resolution ?? attempt.resolution_kind, "none"),
     candidate_fingerprint: optionalString(attempt.candidate_fingerprint, `attempt ${index + 1} candidate_fingerprint`),
-    evidence_refs: list(attempt.evidence_refs).map((ref) => reportPath(ref, context)),
+    evidence_refs: evidenceRefs,
+    reviewer_evidence_refs: reviewerEvidenceRefs,
     notes: text(attempt.notes, "—"),
   };
 }
@@ -176,7 +259,7 @@ export function normalizeCardReportInput(input, { projectRoot = null, worktree =
   }
   const context = { projectRoot, worktree };
   const final = validateFinal(input.final ?? {}, status);
-  const attempts = list(input.attempts).map((attempt, index) => validateAttempt(attempt, index, context));
+  const attempts = list(input.attempts).map((attempt, index) => validateAttempt(attempt, index, { ...context, cardId }));
   const verification = list(input.verification ?? input.verification_runs).map((run, index) => validateVerification(run, index, context));
   const review = validateReview(input.review, context);
   if (status === "approved") {
@@ -247,13 +330,17 @@ export function renderCardReport(input, options = {}) {
     ? input
     : normalizeCardReportInput(input, options);
   const changed = changedPathsForReport(report);
+  const context = { ...(report.context ?? {}), ...options };
   const status = statusLabel(report.status);
   const verificationRows = report.verification.flatMap((run) => run.gates.length
-    ? run.gates.map((gate) => `| ${tableCell(run.run_id)} | ${tableCell(gate.id)} | ${tableCell(gate.status)} | ${tableCell(gate.exit_code)} | ${tableCell(gate.duration_ms)} | ${tableCell([run.evidence_path, ...gate.evidence_refs].filter((ref) => ref && ref !== "—").join(", "))} |`)
-    : [`| ${tableCell(run.run_id)} | — | ${tableCell(run.status)} | — | — | ${tableCell(run.evidence_path)} |`]);
+    ? run.gates.map((gate) => `| ${tableCell(run.run_id)} | ${tableCell(gate.id)} | ${tableCell(gate.status)} | ${tableCell(gate.exit_code)} | ${tableCell(gate.duration_ms)} | ${[run.evidence_path, ...gate.evidence_refs].filter((ref) => ref && ref !== "—").map((ref) => reportReference(ref, context)).join(", ")} |`)
+    : [`| ${tableCell(run.run_id)} | — | ${tableCell(run.status)} | — | — | ${reportReference(run.evidence_path, context)} |`]);
   const attemptRows = report.attempts.length
-    ? report.attempts.map((attempt) => `| ${tableCell(attempt.number)} | ${tableCell(attempt.outcome)} | ${tableCell(attempt.resolution)} | ${tableCell(attempt.candidate_fingerprint)} | ${tableCell(attempt.notes)} | ${tableCell(attempt.evidence_refs.join(", "))} |`)
-    : ["| — | No attempts recorded | — | — | — | — |"];
+    ? report.attempts.map((attempt) => {
+      const reviewerRefs = attempt.reviewer_evidence_refs ?? [];
+      return `| ${tableCell(attempt.number)} | ${tableCell(attempt.outcome)} | ${tableCell(attempt.resolution)} | ${tableCell(attempt.candidate_fingerprint)} | ${tableCell(attempt.notes)} | ${reviewerRefs.length ? reviewerRefs.map((ref) => reportReference(ref, context)).join(", ") : "Not supplied in attempt evidence references"} | ${attempt.evidence_refs.filter((ref) => !reviewerRefs.includes(ref)).map((ref) => reportReference(ref, context)).join(", ") || "—"} |`;
+    })
+    : ["| — | No attempts recorded | — | — | — | Not supplied | — |"];
   const changedRows = changed.length
     ? changed.map((entry) => `| ${tableCell(entry.status)} | ${tableCell(entry.label)} | ${tableCell(entry.repository ?? report.card.repository)} |`)
     : ["| — | No changed paths recorded from the card baseline | — |"];
@@ -262,7 +349,7 @@ export function renderCardReport(input, options = {}) {
     ? review.findings.map((finding) => `| ${tableCell(finding.severity)} | ${tableCell(finding.finding)} | ${tableCell(finding.evidence)} | ${tableCell(finding.resolution)} |`)
     : ["| — | No findings recorded | — | None |"];
   const finalEvidence = report.status === "approved"
-    ? `- Final commit: \`${tableCell(report.final.commit)}\`\n- Verified candidate fingerprint: \`${tableCell(report.final.candidate_fingerprint)}\`\n- Committed candidate fingerprint: \`${tableCell(report.final.committed_candidate_fingerprint ?? "not recorded")}\`\n- Reviewer decision: \`${tableCell(review?.decision)}\``
+    ? `- Final commit: \`${tableCell(report.final.commit)}\`\n- Verified candidate fingerprint: \`${tableCell(report.final.candidate_fingerprint)}\`\n- Committed candidate fingerprint: \`${tableCell(report.final.committed_candidate_fingerprint ?? "not recorded")}\`\n- Final Card-level Reviewer decision: \`${tableCell(review?.decision)}\``
     : `- Terminal state: \`${status}\`\n- Reason: ${text(report.block_reason)}`;
   return `# Card report — ${report.card.id}: ${report.card.title}
 
@@ -298,15 +385,17 @@ ${verificationRows.join("\n")}
 
 ## Attempts and rework
 
-| Attempt | Outcome | Resolution | Candidate fingerprint | Notes | Evidence |
-| --- | --- | --- | --- | --- | --- |
+Attempt-local Reviewer references are shown only when supplied in that attempt's existing evidence references. They remain agent-declared documents; the renderer does not parse their contents into a verdict.
+
+| Attempt | Outcome | Resolution | Candidate fingerprint | Notes | Attempt-local Reviewer document | Other evidence |
+| --- | --- | --- | --- | --- | --- | --- |
 ${attemptRows.join("\n")}
 
-## Independent Reviewer
+## Final Card-level Reviewer
 
 - Reviewer: ${tableCell(review?.reviewer ?? "Not dispatched")}
-- Decision: **${tableCell(review?.decision ?? "not recorded")}**
-- Evidence: \`${tableCell(review?.evidence_path ?? "not recorded")}\`
+- Card-level decision: **${tableCell(review?.decision ?? "not recorded")}**
+- Evidence: ${review ? reportReference(review.evidence_path, context) : markdownCode("not recorded")}
 
 | Severity | Finding | Evidence | Resolution |
 | --- | --- | --- | --- |
@@ -321,10 +410,10 @@ ${finalEvidence}
 - Branch: \`${tableCell(report.final.branch)}\`
 - Repository baseline: \`${tableCell(report.final.base_commit)}\`
 - Source: ${tableCell(report.generated_from)}
-- Evidence references: ${report.evidence_refs.length ? report.evidence_refs.map((ref) => `\`${tableCell(ref)}\``).join(", ") : "none recorded"}
-- Assignment: \`${tableCell(report.provenance.assignment_path)}\` (${tableCell(report.provenance.assignment_sha256)})
-- Assignment Packet: \`${tableCell(report.provenance.packet_path)}\` (${tableCell(report.provenance.packet_sha256)})
-- Verification references: ${report.provenance.verification_paths.length ? report.provenance.verification_paths.map((ref) => `\`${tableCell(ref)}\``).join(", ") : "none recorded"}
+- Evidence references: ${report.evidence_refs.length ? report.evidence_refs.map((ref) => reportReference(ref, context)).join(", ") : "none recorded"}
+- Assignment: ${reportReference(report.provenance.assignment_path, context)} (${tableCell(report.provenance.assignment_sha256)})
+- Assignment Packet: ${reportReference(report.provenance.packet_path, context)} (${tableCell(report.provenance.packet_sha256)})
+- Verification references: ${report.provenance.verification_paths.length ? report.provenance.verification_paths.map((ref) => reportReference(ref, context)).join(", ") : "none recorded"}
 
 ## Risks, deferred work, and terminal notes
 
@@ -387,8 +476,9 @@ export function renderHandoffReport(input, options = {}) {
   const handoff = input.project_id && Array.isArray(input.cards) && input.cards[0]?.report_path !== undefined
     ? input
     : normalizeHandoffInput(input, options);
-  const cardRows = handoff.cards.map((card) => `| ${tableCell(card.id)} | ${tableCell(card.title)} | **${tableCell(statusLabel(card.status))}** | ${tableCell(card.summary)} | ${tableCell(card.commit)} | ${tableCell(card.candidate_fingerprint)} | ${tableCell(card.evaluator_report)} | [Card report](${tableCell(card.report_path)}) |`);
-  const links = handoff.cards.map((card) => `- [${card.id} card report](${card.report_path})`).join("\n");
+  const context = { ...(handoff.context ?? {}), ...options };
+  const cardRows = handoff.cards.map((card) => `| ${tableCell(card.id)} | ${tableCell(card.title)} | **${tableCell(statusLabel(card.status))}** | ${tableCell(card.summary)} | ${tableCell(card.commit)} | ${tableCell(card.candidate_fingerprint)} | ${reportReference(card.evaluator_report, context)} | ${card.evidence_refs.length ? card.evidence_refs.map((ref) => reportReference(ref, context)).join(", ") : "—"} | ${reportReference(card.report_path, context)} |`);
+  const links = handoff.cards.map((card) => `- ${reportReference(card.report_path, context, `${card.id} card report`)}`).join("\n");
   return `# Delivery handoff — ${handoff.project_id}
 
 ## Executive summary
@@ -399,8 +489,8 @@ ${handoff.executive_summary}
 
 ## Card-by-card results
 
-| Card | Title | Result | Outcome | Commit | Candidate fingerprint | Evaluator+ | Human-readable report |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+| Card | Title | Result | Outcome | Commit | Candidate fingerprint | Evaluator+ | Key evidence | Human-readable report |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${cardRows.join("\n")}
 
 ${links}
@@ -430,7 +520,7 @@ ${handoff.residual.length ? handoff.residual.map((item) => `- ${text(item)}`).jo
 - Quality Contract: ${handoff.quality_contract}
 - Demo: ${handoff.demo}
 
-${handoff.delivery_criteria.length ? `| Criterion | Verdict | Evidence |\n| --- | --- | --- |\n${handoff.delivery_criteria.map((criterion) => `| ${tableCell(criterion?.id)} | ${tableCell(criterion?.verdict)} | ${tableCell(criterion?.evidence_refs?.join(", "))} |`).join("\n")}` : "No delivery criteria recorded."}
+${handoff.delivery_criteria.length ? `| Criterion | Verdict | Evidence |\n| --- | --- | --- |\n${handoff.delivery_criteria.map((criterion) => `| ${tableCell(criterion?.id)} | ${tableCell(criterion?.verdict)} | ${criterion?.evidence_refs?.length ? criterion.evidence_refs.map((ref) => reportReference(ref, context)).join(", ") : "—"} |`).join("\n")}` : "No delivery criteria recorded."}
 
 - Delivery closure record: ${handoff.delivery_closure_record}
 - Final delivery message: ${handoff.final_message}
@@ -448,7 +538,7 @@ ${handoff.practical_test.length ? handoff.practical_test.map((item) => `- ${text
 ## Exceptions and evidence references
 
 ${handoff.exceptions.length ? handoff.exceptions.map((item) => `- ${text(item)}`).join("\n") : "- No exceptions recorded."}
-${handoff.evidence_refs.length ? handoff.evidence_refs.map((item) => `- \`${tableCell(item)}\``).join("\n") : "- No additional evidence references recorded."}
+${handoff.evidence_refs.length ? handoff.evidence_refs.map((item) => `- ${reportReference(item, context)}`).join("\n") : "- No additional evidence references recorded."}
 
 ## Risks
 
@@ -502,7 +592,7 @@ export async function writeCardReport(input, { outputPath, projectRoot = null, w
     changed_paths: changedPaths ?? [],
     changed_paths_base: changedPathsBase
   };
-  const markdown = renderCardReport(report, { projectRoot, worktree });
+  const markdown = renderCardReport(report, { projectRoot, worktree, outputPath });
   if (outputPath) {
     try {
       const previous = await readFile(outputPath, "utf8");
@@ -524,7 +614,7 @@ export async function writeCardReport(input, { outputPath, projectRoot = null, w
 
 export async function writeHandoffReport(input, { outputPath, projectRoot = null } = {}) {
   const handoff = normalizeHandoffInput(input, { projectRoot });
-  const markdown = renderHandoffReport(handoff, { projectRoot });
+  const markdown = renderHandoffReport(handoff, { projectRoot, outputPath });
   if (outputPath) await writeAtomicText(outputPath, markdown);
   return { handoff, markdown, outputPath: outputPath ?? null };
 }
