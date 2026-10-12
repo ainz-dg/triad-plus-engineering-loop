@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.18.0
+
+- Make attempt-local Reviewer documents easier to find in the Cockpit while
+  keeping them explicitly agent-declared and their verdicts unattested; Card-
+  level and ambiguous reviews remain separate.
+- Improve human-readable report references for project/worktree artifacts,
+  including absolute paths, and link only uniquely resolved, existing regular
+  files that remain within a declared root.
+- Keep missing, external, ambiguous, unsafe, or symlink-escaping references
+  unlinked. The accepted local-filesystem path-resolution TOCTOU limitation
+  remains unresolved.
+- No automatic report materialization, host-governed attempt verdict,
+  multi-host dispatch, or Control Room integration is claimed.
+
 ## 1.17.0
 
 - Retain schema-v1 installation compatibility while adding the explicit,
