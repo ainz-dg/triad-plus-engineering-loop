@@ -42,6 +42,16 @@ The UI follows Workspace → Project → Card → Attempt → Evidence. Navigati
 uses URL hashes (`#/p/<project>/c/<card>?file=<path>`), so refresh, deep links,
 and the Back button work and the server needs no fallback routes.
 
+From a Card, open the matching Attempt to find its evidence and any
+attempt-local document whose filename identifies it as a review. The Cockpit
+shows that file inside the Attempt with its path and `agent-declared`
+provenance; it labels the document as available but the verdict as **not
+attested**. It does not parse Markdown, infer a decision, or validate reviewer
+identity. Files under `.loop/reviews/` remain Card-level unless an existing
+validated binding says otherwise; names matching multiple Card IDs stay
+unattributed. A deterministic-driver Reviewer contract remains visibly
+separate from host-governed documents.
+
 **Data identity.** Each request is keyed by what it is for: the workspace, a
 project's cards, one card, or one file.
 - When the key changes, nothing loaded for the previous key is ever shown,
@@ -187,6 +197,15 @@ Every object carries `provenance`, so a client can tell fact from declaration.
   `done` or one of the `stopped_*` states. Its Reviewer contract was parsed and
   validated by the driver, and the Cockpit re-validates it with
   `validateReviewerResult`. Only the default output path is discovered.
+
+## Finding a Reviewer document
+
+The human path is **Project → Card → Attempt → Reviewer document → evidence**.
+Attempt-local documents are surfaced only from the existing attempt evidence
+directory and remain `agent-declared`. Card-level `.loop/reviews/` documents
+and ambiguous filename matches are not moved or rebound to an Attempt. The
+viewer opens their contents as inert text/Markdown; the Cockpit never derives
+`REWORK` or `APPROVED` from the file contents.
 
 ## Verifier evidence contract
 

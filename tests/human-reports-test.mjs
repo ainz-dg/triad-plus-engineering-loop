@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { calculateCandidateFingerprintAtCommit } from "../runtime/lib/fingerprint.mjs";
+import { renderCardReport } from "../runtime/lib/human-reports.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const cli = path.join(repositoryRoot, "runtime", "triad-human-report.mjs");
@@ -40,6 +41,30 @@ git(product, "add", "-A");
 git(product, "-c", "user.name=Triad Test", "-c", "user.email=triad@example.test", "commit", "-qm", "candidate");
 const finalCommit = git(product, "rev-parse", "HEAD");
 const finalFingerprint = (await calculateCandidateFingerprintAtCommit(product, { baseCommit: baseline, commit: finalCommit })).value;
+const attemptOneReviewer = ".loop/evidence/CARD-001/attempt-001/reviewer [v1](notes).md";
+const attemptOneHtmlName = ".loop/evidence/CARD-001/attempt-001/reviewer-<script>alert(1)</script>.md";
+const attemptOnePreview = ".loop/evidence/CARD-001/attempt-001/preview.json";
+const attemptTwoVerification = ".loop/evidence/CARD-001/attempt-002/verification.json";
+const attemptTwoGate = ".loop/evidence/CARD-001/attempt-002/logs/test.stdout.log";
+const cardReviewer = ".loop/reviews/CARD-001.md";
+const assignmentPath = ".loop/runtime/assignments/CARD-001.json";
+const packetPath = ".loop/runtime/packets/CARD-001.md";
+const sharedReference = ".loop/evidence/CARD-001/attempt-001/shared.log";
+const controlSharedPath = path.join(control, sharedReference);
+const productSharedPath = path.join(product, sharedReference);
+const outsideEvidencePath = path.join(root, "outside-evidence.log");
+const symlinkReferencePath = path.join(control, ".loop/evidence/CARD-001/attempt-001/escape.log");
+await mkdir(path.dirname(controlSharedPath), { recursive: true });
+await mkdir(path.dirname(productSharedPath), { recursive: true });
+await writeFile(controlSharedPath, "CONTROL ROOT EVIDENCE\n", "utf8");
+await writeFile(productSharedPath, "PRODUCT ROOT EVIDENCE\n", "utf8");
+await writeFile(outsideEvidencePath, "outside evidence must not be linked\n", "utf8");
+await symlink(outsideEvidencePath, symlinkReferencePath);
+for (const reference of [attemptOneReviewer, attemptOneHtmlName, attemptOnePreview, sharedReference, attemptTwoVerification, attemptTwoGate, cardReviewer, assignmentPath, packetPath, ".loop/run-state.yaml"]) {
+  const file = path.join(control, reference);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `synthetic ${path.basename(file)}\n`, "utf8");
+}
 
 const input = {
   project_id: "human-report-fixture",
@@ -54,14 +79,14 @@ const input = {
   status: "approved",
   implementation: { summary: "Implemented the bounded outcome." },
   attempts: [
-    { attempt: 1, outcome: "rework", resolution_kind: "reviewer_rework", candidate_fingerprint: "a".repeat(64), evidence_refs: ["/Users/alice/control/log.txt"], notes: "Reviewer requested a bounded correction." },
-    { attempt: 2, outcome: "pass", resolution_kind: "none", candidate_fingerprint: finalFingerprint, notes: "Current candidate verified." }
+    { attempt: 1, outcome: "rework", resolution_kind: "reviewer_rework", candidate_fingerprint: "a".repeat(64), evidence_refs: ["/Users/alice/control/log.txt", attemptOneReviewer, attemptOneHtmlName, attemptOnePreview, controlSharedPath, productSharedPath, sharedReference, symlinkReferencePath, "../../private/key.txt", "https://external.example/review"], notes: "Reviewer requested a bounded correction." },
+    { attempt: 2, outcome: "pass", resolution_kind: "none", candidate_fingerprint: finalFingerprint, evidence_refs: [attemptTwoVerification], notes: "Current candidate verified." }
   ],
-  verification: [{ run_id: "verify-2", status: "pass", candidate_fingerprint: finalFingerprint, evidence_path: ".loop/evidence/CARD-001/attempt-002/verification.json", gates: [{ id: "test", status: "pass", evidence_refs: ["/Users/alice/control/gate.log", ".loop/evidence/CARD-001/attempt-002/logs/test.stdout.log"], exit_code: 0, duration_ms: 12 }] }],
-  review: { reviewer: "Yuri", decision: "approved", candidate_fingerprint: finalFingerprint, evidence_path: ".loop/reviews/CARD-001.md", risks: ["none"], findings: [{ severity: "low", finding: "No blocking finding.", evidence: "review", resolution: "accepted" }] },
+  verification: [{ run_id: "verify-2", status: "pass", candidate_fingerprint: finalFingerprint, evidence_path: attemptTwoVerification, gates: [{ id: "test", status: "pass", evidence_refs: ["/Users/alice/control/gate.log", attemptTwoGate], exit_code: 0, duration_ms: 12 }] }],
+  review: { reviewer: "Yuri", decision: "approved", candidate_fingerprint: finalFingerprint, evidence_path: cardReviewer, risks: ["none"], findings: [{ severity: "low", finding: "No blocking finding.", evidence: "review", resolution: "accepted" }] },
   final: { repository: "product", branch: "feat/card", commit: finalCommit, base_commit: baseline, candidate_fingerprint: finalFingerprint, worktree: product },
-  evidence_refs: [".loop/evidence/CARD-001/attempt-002/verification.json"],
-  provenance: { assignment_path: ".loop/runtime/assignments/CARD-001.json", assignment_sha256: "c".repeat(64), packet_path: ".loop/runtime/packets/CARD-001.md", packet_sha256: "d".repeat(64), verification_paths: [".loop/evidence/CARD-001/attempt-002/verification.json"], review_path: ".loop/reviews/CARD-001.md" },
+  evidence_refs: [attemptTwoVerification],
+  provenance: { assignment_path: assignmentPath, assignment_sha256: "c".repeat(64), packet_path: packetPath, packet_sha256: "d".repeat(64), verification_paths: [attemptTwoVerification], review_path: cardReviewer },
   risks: [],
   deferred: []
 };
@@ -78,6 +103,36 @@ assert.match(report, /README\.md/);
 assert.match(report, /Assignment Packet/);
 assert.match(report, /test\.stdout\.log/);
 assert.match(report, /<external path>/);
+assert.match(report, /Attempt-local Reviewer document/);
+assert.match(report, /Final Card-level Reviewer/);
+assert.match(report, /Card-level decision: \*\*approved\*\*/i);
+const reportLinks = [...report.matchAll(/\]\(([^)\n]+)\)/g)].map((match) => match[1]);
+const attemptOneHref = "../.loop/evidence/CARD-001/attempt-001/reviewer%20%5Bv1%5D%28notes%29.md";
+assert.ok(reportLinks.includes(attemptOneHref), "attempt-local Reviewer reference should be a safe relative link");
+assert.equal(path.resolve(path.dirname(outputPath), decodeURIComponent(attemptOneHref)), path.join(control, attemptOneReviewer), "attempt-local Reviewer link should resolve from the report directory");
+assert.ok(report.includes("&lt;script&gt;alert"), "HTML in a filename should be inert in Markdown link text");
+assert.doesNotMatch(report, /<script>/i, "path-derived Markdown labels must not emit raw HTML");
+assert.ok(reportLinks.includes("../.loop/reviews/CARD-001.md"), "Card-level Reviewer evidence should be linked separately");
+assert.ok(reportLinks.includes("../.loop/runtime/assignments/CARD-001.json"), "assignment evidence should be linked");
+assert.ok(reportLinks.includes("../.loop/runtime/packets/CARD-001.md"), "packet evidence should be linked");
+assert.ok(reportLinks.includes("../.loop/evidence/CARD-001/attempt-002/verification.json"), "verifier evidence should be linked");
+const attemptOneReportCells = report.split("\n").find((line) => line.startsWith("| 1 | rework"))?.split("|").map((cell) => cell.trim()).filter(Boolean) ?? [];
+assert.ok(attemptOneReportCells[5]?.includes("reviewer"), "review-named evidence should occupy the Reviewer column");
+assert.ok(attemptOneReportCells[6]?.includes("preview.json"), "preview-named evidence should remain ordinary evidence");
+const attemptOneRow = report.split("\n").find((line) => line.startsWith("| 1 | rework")) ?? "";
+const sharedLinks = [...attemptOneRow.matchAll(/\[[^\]]*\]\(([^)]+shared\.log)\)/g)].map((match) => match[1]);
+assert.equal(sharedLinks.length, 1, `only the source whose absolute path belongs to the report root should link when roots contain duplicate relative paths: ${attemptOneRow}`);
+assert.equal(path.resolve(path.dirname(outputPath), decodeURIComponent(sharedLinks[0])), controlSharedPath, "the control-root reference must resolve to its exact originating file");
+assert.ok(attemptOneRow.includes(`\`${sharedReference}\``), "ambiguous relative evidence must remain plain text");
+assert.doesNotMatch(attemptOneRow, /\[[^\]]*escape\.log[^\]]*\]\(/, "a symlink resolving outside declared roots must remain unlinked");
+const productRootReport = renderCardReport(input, {
+  projectRoot: product,
+  worktree: product,
+  outputPath: path.join(product, "card-reports", "CARD-001.md"),
+});
+const productSharedHref = [...productRootReport.matchAll(/\[[^\]]*\]\(([^)]+shared\.log)\)/g)].map((match) => match[1]);
+assert.ok(productSharedHref.some((href) => path.resolve(path.dirname(path.join(product, "card-reports", "CARD-001.md")), decodeURIComponent(href)) === productSharedPath), "the product-root absolute reference should resolve to its exact source when the report is in that root");
+assert.ok(!reportLinks.some((href) => href.includes("private") || /^https?:/i.test(href)), "traversal and external references must not become links");
 assert.doesNotMatch(report, /\/Users\/alice\/control/);
 assert.match(report, /reviewer_rework/);
 assert.match(report, /APPROVED/);
@@ -110,7 +165,7 @@ const handoffInput = {
   project_id: "human-report-fixture",
   decision: "delivered",
   executive_summary: "One bounded card was approved and delivered.",
-  cards: [{ id: "CARD-001", title: "Produce a bounded candidate", status: "approved", summary: "Delivered.", report_path: "card-reports/CARD-001.md", commit: finalCommit, candidate_fingerprint: finalFingerprint, evaluator_report: "/Users/alice/control/evaluator/CARD-001.json", evidence_refs: [".loop/evidence/CARD-001/attempt-002/verification.json"], verification: "PASS", review: "approved" }],
+  cards: [{ id: "CARD-001", title: "Produce a bounded candidate", status: "approved", summary: "Delivered.", report_path: "card-reports/CARD-001.md", commit: finalCommit, candidate_fingerprint: finalFingerprint, evaluator_report: "/Users/alice/control/evaluator/CARD-001.json", evidence_refs: [attemptTwoVerification], verification: "PASS", review: "approved" }],
   code_areas: ["src.js"],
   residual: [],
   verification: "All required gates PASS.",
@@ -127,7 +182,7 @@ const handoffInput = {
   delivery_closure_record: ".loop/run-state.yaml delivery.status=delivered",
   final_message: ".loop/evidence/final-owner-message.md",
   quality_contract: "not configured",
-  delivery_criteria: [{ id: "delivery-001", verdict: "PASS", evidence_refs: ["/Users/alice/control/handoff"] }],
+  delivery_criteria: [{ id: "delivery-001", verdict: "PASS", evidence_refs: [attemptTwoGate, "/Users/alice/control/handoff"] }],
   demo: "not configured",
   evidence_refs: [".loop/run-state.yaml"],
   exceptions: [],
@@ -144,6 +199,11 @@ assert.match(handoffReport, /Independent Reviewer approved/);
 assert.match(handoffReport, /PRD baseline/);
 assert.match(handoffReport, /delivery-001/);
 assert.match(handoffReport, /<external path>/);
+assert.match(handoffReport, /\[CARD-001 card report\]\(card-reports\/CARD-001\.md\)/);
+assert.match(handoffReport, /\[\.loop\/evidence\/CARD-001\/attempt-002\/verification\.json\]\(\.loop\/evidence\/CARD-001\/attempt-002\/verification\.json\)/);
+assert.match(handoffReport, /\[\.loop\/evidence\/CARD-001\/attempt-002\/logs\/test\.stdout\.log\]\(\.loop\/evidence\/CARD-001\/attempt-002\/logs\/test\.stdout\.log\)/);
+const handoffLinks = [...handoffReport.matchAll(/\]\(([^)\n]+)\)/g)].map((match) => match[1]);
+assert.ok(!handoffLinks.some((href) => href.includes("Users") || /^https?:/i.test(href)), "handoff must not link outside the declared project root");
 assert.doesNotMatch(handoffReport, /\/Users\/alice\/control/);
 
 const invalid = { ...input, final: { repository: "product", branch: "feat/card", base_commit: baseline } };

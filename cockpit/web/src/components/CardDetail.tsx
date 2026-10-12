@@ -197,6 +197,8 @@ function VerificationBlock({ verification, onOpen }: { verification: Verificatio
 
 function AttemptBlock({ attempt, open, onOpen }: { attempt: Attempt; open: boolean; onOpen: Open }) {
   const statuses = attempt.verifications.map((verification) => verification.status);
+  const reviewerDocuments = attempt.documents.filter((document) => /(?:^|[-_.\s])review(?:er)?(?:[-_.\s]|$)/i.test(fileName(document.source)));
+  const otherDocuments = attempt.documents.filter((document) => !reviewerDocuments.includes(document));
   return (
     <details className="attempt" open={open}>
       <summary>
@@ -242,11 +244,26 @@ function AttemptBlock({ attempt, open, onOpen }: { attempt: Attempt; open: boole
             attempt.verifications.map((verification) => <VerificationBlock key={verification.source} verification={verification} onOpen={onOpen} />)
           )}
         </div>
-        {attempt.documents.length > 0 && (
+        {reviewerDocuments.length > 0 && (
+          <div className="subsection">
+            <h4>Reviewer documents <ProvenanceBadge kind="agent-declared" compact /></h4>
+            <p className="muted small">Document available · verdict not attested. Markdown is not parsed as a Reviewer decision.</p>
+            <ul className="doc-list">
+              {reviewerDocuments.map((document) => (
+                <li key={document.source}>
+                  <button type="button" className="link-btn" onClick={() => onOpen(document.source)}><Icon name="file" size={14} /> {fileName(document.source)}</button>
+                  <code className="mono small">{document.source}</code>
+                  <ProvenanceBadge kind={document.provenance} compact />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {otherDocuments.length > 0 && (
           <div className="subsection">
             <h4>Files next to the evidence <ProvenanceBadge kind="agent-declared" compact /></h4>
             <ul className="doc-list">
-              {attempt.documents.map((document) => (
+              {otherDocuments.map((document) => (
                 <li key={document.source}><button type="button" className="link-btn" onClick={() => onOpen(document.source)}><Icon name="file" size={14} /> {fileName(document.source)}</button></li>
               ))}
             </ul>
@@ -317,15 +334,18 @@ export function CardDetail({ card, onOpen, onBack }: { card: CardDetailData; onO
             )}
           </div>
         )}
-        {card.reviewer.documents.length === 0 && card.attempts.every((attempt) => attempt.documents.length === 0) && !card.control_run?.reviewer ? (
-          <p className="muted small">No review document is attributed to this card.</p>
-        ) : (
+        {card.reviewer.documents.length > 0 ? (
+          <>
+            <p className="muted small">Card-level documents are not bound to an Attempt by filename. Attempt-local Reviewer documents appear inside their Attempt above.</p>
           <ul className="doc-list">
             {card.reviewer.documents.map((document) => (
               <li key={document.source}><button type="button" className="link-btn" onClick={() => onOpen(document.source)}><Icon name="file" size={14} /> {document.source}</button> <ProvenanceBadge kind={document.provenance} compact /></li>
             ))}
           </ul>
-        )}
+          </>
+        ) : card.reviewer.ambiguous_documents.length === 0 && !card.control_run?.reviewer ? (
+          <p className="muted small">No Card-level Reviewer document attributed. Attempt-local documents, if present, appear inside their Attempt.</p>
+        ) : null}
         {card.reviewer.ambiguous_documents.length > 0 && (
           <div className="ambiguous">
             <p className="small"><Icon name="info" size={14} /> Not attributed — the name matches several cards:</p>
