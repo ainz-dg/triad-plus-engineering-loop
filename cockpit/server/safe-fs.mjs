@@ -21,6 +21,7 @@ const PROJECT_ALLOW = [
   /^feature-plan\.md$/,
   /^project\.yaml$/,
 ];
+const ASSIGNED_EVIDENCE_ROOT = /^test\/results-triad-evidence\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/attempt-([0-9]{3})$/;
 
 // Paths relative to the control root only.
 const CONTROL_ALLOW = [
@@ -68,21 +69,24 @@ export function sha256(buffer) {
  * Create a reader bound to one control workspace. `projectBase` values are
  * control-relative directories produced by discovery, never client text.
  */
-export async function createWorkspaceReader(controlRoot) {
-  let root;
-  try { root = await realpath(controlRoot); }
-  catch { throw new AccessError("workspace_missing", "control workspace does not exist"); }
-  if (!(await lstat(root)).isDirectory()) throw new AccessError("workspace_missing", "control workspace is not a directory");
-
-  function allowed(projectBase, relative) {
-    if (projectBase === "" && CONTROL_ALLOW.some((rule) => rule.test(relative))) return true;
-    return PROJECT_ALLOW.some((rule) => rule.test(relative));
+function createBoundReader(root, assignedEvidenceRoots = new Map()) {
+  function scope(projectBase, relative) {
+    if ((projectBase === "" && CONTROL_ALLOW.some((rule) => rule.test(relative))) || PROJECT_ALLOW.some((rule) => rule.test(relative))) {
+      return { kind: "static" };
+    }
+    for (const entry of assignedEvidenceRoots.get(projectBase) ?? []) {
+      if (relative === entry.root || relative.startsWith(`${entry.root}/`)) {
+        if (!entry.verificationOnly || relative === `${entry.root}/verification.json`) return { kind: "assigned", root: entry.root };
+      }
+    }
+    return null;
   }
 
   /** Resolve an allowlisted path; returns null when it does not exist. */
   async function resolveAllowed(projectBase, value) {
     const relative = normalizeRelative(value);
-    if (!allowed(projectBase, relative)) deny("path is outside the Cockpit allowlist");
+    const requestedScope = scope(projectBase, relative);
+    if (!requestedScope) deny("path is outside the Cockpit allowlist");
     const lexical = path.resolve(root, projectBase, relative);
     if (!within(root, lexical)) deny("path escapes the control workspace");
     let real;
@@ -94,7 +98,11 @@ export async function createWorkspaceReader(controlRoot) {
     // A symlink anywhere on the path may point elsewhere; only the real target counts.
     if (!within(root, real)) deny("path resolves outside the control workspace");
     const realRelative = path.relative(path.resolve(root, projectBase), real).split(path.sep).join("/");
-    if (realRelative.startsWith("..") || !allowed(projectBase, realRelative)) deny("path resolves outside the Cockpit allowlist");
+    const resolvedScope = scope(projectBase, realRelative);
+    if (realRelative.startsWith("..") || !resolvedScope || resolvedScope.kind !== requestedScope.kind
+      || (requestedScope.kind === "assigned" && resolvedScope.root !== requestedScope.root)) {
+      deny("path resolves outside the Cockpit allowlist");
+    }
     return { relative, absolute: real };
   }
 
@@ -191,5 +199,26 @@ export async function createWorkspaceReader(controlRoot) {
       .sort();
   }
 
-  return { root, readBytes, readText, readJson, list, isDirectory, listProjectDirectories };
+  function withAssignedEvidenceRoots(projectBase, roots, { verificationOnly = false } = {}) {
+    if (typeof projectBase !== "string" || !Array.isArray(roots)) deny("invalid assigned evidence scope");
+    const additions = roots.map((value) => {
+      const normalized = normalizeRelative(value);
+      const match = ASSIGNED_EVIDENCE_ROOT.exec(normalized);
+      if (normalized !== value || !match) deny("assigned evidence root is outside the supported path family");
+      return { root: normalized, verificationOnly };
+    });
+    const next = new Map(assignedEvidenceRoots);
+    next.set(projectBase, [...(next.get(projectBase) ?? []), ...additions]);
+    return createBoundReader(root, next);
+  }
+
+  return { root, readBytes, readText, readJson, list, isDirectory, listProjectDirectories, withAssignedEvidenceRoots };
+}
+
+export async function createWorkspaceReader(controlRoot) {
+  let root;
+  try { root = await realpath(controlRoot); }
+  catch { throw new AccessError("workspace_missing", "control workspace does not exist"); }
+  if (!(await lstat(root)).isDirectory()) throw new AccessError("workspace_missing", "control workspace is not a directory");
+  return createBoundReader(root);
 }

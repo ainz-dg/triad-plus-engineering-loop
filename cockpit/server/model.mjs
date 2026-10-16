@@ -24,6 +24,7 @@ export const PROVENANCE = Object.freeze({
 });
 
 const CONTROL_RUN_PATH = ".loop/runtime/deterministic-control-run.json";
+const ASSIGNED_EVIDENCE_DIRECTORY = /^test\/results-triad-evidence\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/attempt-([0-9]{3})$/;
 
 function sanitizeError(error) {
   // Core validators return contract messages; filesystem errors may carry
@@ -322,6 +323,33 @@ async function collectAssignments(reader, project, diagnostics) {
   return assignments;
 }
 
+function assignedEvidenceDirectory(assignment) {
+  const { value } = assignment;
+  if (!Number.isSafeInteger(value.attempt) || value.attempt < 1
+    || typeof value.feature_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.feature_id)
+    || typeof value.assignment_id !== "string" || !value.assignment_id.trim()
+    || !/^[a-f0-9]{64}$/i.test(assignment.sha256 ?? "")) return null;
+  const declared = value.evidence_directory;
+  const normalized = normalizedOrNull(declared);
+  const match = normalized && normalized === declared ? ASSIGNED_EVIDENCE_DIRECTORY.exec(normalized) : null;
+  if (!match || match[1] !== String(value.attempt).padStart(3, "0")) return null;
+  return normalized;
+}
+
+function evidenceAssignmentMismatch(value, assignment) {
+  const issues = [];
+  if (value.feature_id !== assignment.value.feature_id) issues.push("feature_id does not match assignment");
+  if (value.attempt !== assignment.value.attempt) issues.push("attempt does not match assignment");
+  if (value.assignment_id !== assignment.value.assignment_id) issues.push("assignment_id does not match assignment");
+  if (typeof value.assignment_sha256 !== "string" || value.assignment_sha256.toLowerCase() !== assignment.sha256.toLowerCase()) {
+    issues.push("assignment_sha256 does not match assignment");
+  }
+  if (value.assignment_ref !== undefined && normalizedOrNull(value.assignment_ref) !== assignment.relative) {
+    issues.push("assignment_ref does not match assignment");
+  }
+  return issues;
+}
+
 async function collectVerifications(reader, project, assignments, diagnostics) {
   const candidates = new Set();
   for (const feature of await reader.list(project.base, ".loop/evidence")) {
@@ -330,15 +358,30 @@ async function collectVerifications(reader, project, assignments, diagnostics) {
       if (attempt.directory) candidates.add(`.loop/evidence/${feature.name}/${attempt.name}`);
     }
   }
-  // Assignments may bind a non-default evidence directory.
+  // Only a single valid assignment may bootstrap the verifier document in the
+  // narrow external evidence path family. Its contents must then bind back to
+  // that assignment before any other file in the root becomes readable.
+  const externalAssignments = new Map();
+  const ambiguousRoots = new Set();
   for (const assignment of assignments) {
-    const declared = normalizedOrNull(assignment.value.evidence_directory);
-    if (declared) candidates.add(declared);
+    const declared = assignedEvidenceDirectory(assignment);
+    if (!declared) continue;
+    if (externalAssignments.has(declared)) {
+      externalAssignments.delete(declared);
+      ambiguousRoots.add(declared);
+      continue;
+    }
+    if (!ambiguousRoots.has(declared)) externalAssignments.set(declared, assignment);
   }
+  for (const directory of externalAssignments.keys()) candidates.add(directory);
+  const pendingReader = reader.withAssignedEvidenceRoots(project.base, [...externalAssignments.keys()], { verificationOnly: true });
   const verifications = [];
+  const authorizedRoots = [];
   for (const directory of [...candidates].sort()) {
+    const assignment = externalAssignments.get(directory);
+    const sourceReader = assignment ? pendingReader : reader;
     const relative = `${directory}/verification.json`;
-    const loaded = await safeJson(reader, project.base, relative);
+    const loaded = await safeJson(sourceReader, project.base, relative);
     if (loaded.status === "missing") continue;
     if (loaded.status !== "ok") {
       verifications.push({ relative, directory, status: "unreadable", error: loaded.error ?? loaded.status });
@@ -351,12 +394,23 @@ async function collectVerifications(reader, project, assignments, diagnostics) {
       verifications.push({ relative, directory, status: "unreadable", error: `verification evidence violates the Triad+ contract: ${contract.errors.join("; ")}` });
       continue;
     }
+    if (assignment) {
+      const issues = evidenceAssignmentMismatch(loaded.value, assignment);
+      if (issues.length) {
+        verifications.push({ relative, directory, status: "unreadable", error: `verification evidence does not bind to its assignment: ${issues.join("; ")}` });
+        continue;
+      }
+      authorizedRoots.push(directory);
+    }
     verifications.push({ relative, directory, status: "ok", value: loaded.value });
   }
   for (const verification of verifications) {
     if (verification.status === "unreadable") diagnostics.push({ source: projectFile(project, verification.relative), problem: verification.error });
   }
-  return verifications;
+  return {
+    verifications,
+    reader: reader.withAssignedEvidenceRoots(project.base, authorizedRoots),
+  };
 }
 
 async function collectEvaluations(reader, project) {
@@ -383,10 +437,10 @@ async function readWorkQueue(reader, project) {
 async function collectProject(reader, project) {
   const diagnostics = [];
   const assignments = await collectAssignments(reader, project, diagnostics);
-  const verifications = await collectVerifications(reader, project, assignments, diagnostics);
+  const collectedVerifications = await collectVerifications(reader, project, assignments, diagnostics);
   const evaluations = await collectEvaluations(reader, project);
   const workQueue = await readWorkQueue(reader, project);
-  return { diagnostics, assignments, verifications, evaluations, workQueue };
+  return { reader: collectedVerifications.reader, diagnostics, assignments, verifications: collectedVerifications.verifications, evaluations, workQueue };
 }
 
 // ---------------------------------------------------------------------------
@@ -841,6 +895,7 @@ async function reviewDocuments(reader, project, cardId, ids) {
 
 export async function readCard(reader, project, cardId) {
   const collected = await collectProject(reader, project);
+  const evidenceReader = collected.reader;
   const ids = cardIds(collected);
   if (!ids.includes(cardId)) return null;
   const verifications = collected.verifications.filter((verification) => verification.status === "ok" && verification.value.feature_id === cardId);
@@ -859,8 +914,8 @@ export async function readCard(reader, project, cardId) {
       const assignment = attemptAssignments.find((candidate) => candidate.relative === normalizedOrNull(verification.value.assignment_ref))
         ?? attemptAssignments.find((candidate) => candidate.value.assignment_id === verification.value.assignment_id)
         ?? null;
-      views.push(await verificationView(reader, project, verification, assignment, latest !== verification));
-      documents.push(...attemptDocuments(await reader.list(project.base, verification.directory), verification).map((document) => ({ ...document, source: projectFile(project, document.source) })));
+      views.push(await verificationView(evidenceReader, project, verification, assignment, latest !== verification));
+      documents.push(...attemptDocuments(await evidenceReader.list(project.base, verification.directory), verification).map((document) => ({ ...document, source: projectFile(project, document.source) })));
     }
     const assignmentViews = [];
     for (const assignment of attemptAssignments) {
@@ -874,19 +929,19 @@ export async function readCard(reader, project, cardId) {
         expected_branch: assignment.value.expected_branch ?? null,
         required_gate_ids: Array.isArray(assignment.value.required_gate_ids) ? assignment.value.required_gate_ids : [],
         verification_run_id: assignment.value.verification_run_id ?? null,
-        packet: await packetView(reader, project, assignment),
+        packet: await packetView(evidenceReader, project, assignment),
       });
     }
     attempts.push({ attempt: number, assignments: assignmentViews, verifications: views, documents });
   }
 
-  const review = await reviewDocuments(reader, project, cardId, ids);
+  const review = await reviewDocuments(evidenceReader, project, cardId, ids);
   return {
     project: project.id,
     id: cardId,
     declared: declaredCard(collected, cardId),
     attempts,
-    evaluations: await evaluatorViews(reader, project, collected, cardId, verifications, latestPass, ids),
+    evaluations: await evaluatorViews(evidenceReader, project, collected, cardId, verifications, latestPass, ids),
     reviewer: {
       provenance: PROVENANCE.derived,
       note: "Host-governed runs record Reviewer outcomes in agent-written files; only the deterministic driver persists a validated Reviewer contract.",
@@ -895,7 +950,7 @@ export async function readCard(reader, project, cardId) {
       documents: review.documents,
       ambiguous_documents: review.ambiguous,
     },
-    control_run: await controlRunView(reader, project, cardId),
+    control_run: await controlRunView(evidenceReader, project, cardId),
     limits: [
       "`assignments[].declared_status` is never updated by runtime code and does not indicate completion.",
       "`freshness.control_bindings` compares control-workspace hashes only; `freshness.candidate` is always `not_checked`.",
@@ -910,11 +965,12 @@ export async function readControlRun(reader, project) {
 
 /** Bounded raw read of one allowlisted file, returned inside a JSON envelope. */
 export async function readArtifact(reader, project, requested) {
+  const collected = await collectProject(reader, project);
   // Accept the `source` values the API returns (control-relative, so they carry
   // `projects/<id>/` for non-root projects) as well as project-relative paths.
   const prefix = project.base ? `${project.base}/` : "";
   const relative = prefix && typeof requested === "string" && requested.startsWith(prefix) ? requested.slice(prefix.length) : requested;
-  const text = await reader.readText(project.base, relative);
+  const text = await collected.reader.readText(project.base, relative);
   if (!text) return null;
   const binary = text.bytes.includes(0);
   return {
