@@ -160,6 +160,48 @@ function verification(feature, attempt, assignmentText, status, createdAt, cardT
   };
 }
 
+const assignedSuite = "ketchup2-first-field-trial-20261008";
+const assignedRoot1 = `test/results-triad-evidence/${assignedSuite}/attempt-001`;
+const assignedRoot2 = `test/results-triad-evidence/${assignedSuite}/attempt-002`;
+const assignedFile1 = `.loop/runtime/assignments/ASSIGNED-EXT-attempt-1.json`;
+const assignedText1 = await putJson(path.join(control, assignedFile1), assignment("ASSIGNED-EXT", 1, { evidence_directory: assignedRoot1 }));
+await putJson(path.join(control, assignedRoot1, "verification.json"), verification("ASSIGNED-EXT", 1, assignedText1, "pass", "2026-10-07T10:00:00.000Z", "# assigned evidence\n", "fp-assigned-1"));
+await put(path.join(control, assignedRoot1, "reviewer-note.md"), "Attempt one evidence note\n");
+const assignedText2 = await putJson(path.join(control, ".loop/runtime/assignments/ASSIGNED-EXT-attempt-2.json"), assignment("ASSIGNED-EXT", 2, { evidence_directory: assignedRoot2 }));
+await putJson(path.join(control, assignedRoot2, "verification.json"), verification("ASSIGNED-EXT", 2, assignedText2, "pass", "2026-10-08T10:00:00.000Z", "# assigned evidence\n", "fp-assigned-2"));
+await put(path.join(control, assignedRoot2, "reviewer-note.md"), "Attempt two evidence note\n");
+await symlink(path.join(control, assignedRoot2, "reviewer-note.md"), path.join(control, assignedRoot1, "cross-attempt-link.md"));
+await symlink(path.join(outside, "secret.txt"), path.join(control, assignedRoot1, "external-link.txt"));
+await put(path.join(control, "test/results-triad-evidence/unassigned/attempt-003/private.txt"), "Unassigned data\n");
+
+const staticAssignedRoot = "artifacts/custom-verification/attempt-001";
+const staticAssignedPath = ".loop/runtime/assignments/ASSIGNED-STATIC-attempt-1.json";
+const staticAssignedText = await putJson(path.join(control, staticAssignedPath), assignment("ASSIGNED-STATIC", 1, { evidence_directory: staticAssignedRoot }));
+await putJson(path.join(control, staticAssignedRoot, "verification.json"), verification("ASSIGNED-STATIC", 1, staticAssignedText, "pass", "2026-10-09T09:00:00.000Z", "# static assigned evidence\n", "fp-static-assigned"));
+
+const mismatchedEvidenceRoot = "test/results-triad-evidence/mismatched/attempt-001";
+const mismatchedAssignmentPath = ".loop/runtime/assignments/MISMATCH-FEATURE-attempt-1.json";
+const mismatchedAssignmentText = await putJson(path.join(control, mismatchedAssignmentPath), assignment("MISMATCH-FEATURE", 1, { evidence_directory: mismatchedEvidenceRoot }));
+await putJson(path.join(control, mismatchedEvidenceRoot, "verification.json"), {
+  ...verification("MISMATCH-FEATURE", 1, mismatchedAssignmentText, "pass", "2026-10-09T10:00:00.000Z", "# mismatch\n", "fp-mismatch"),
+  feature_id: "OTHER-FEATURE",
+});
+await put(path.join(control, mismatchedEvidenceRoot, "private.txt"), "Mismatched assignment data\n");
+
+const mismatchedHashRoot = "test/results-triad-evidence/hash-mismatch/attempt-001";
+const mismatchedHashAssignmentPath = ".loop/runtime/assignments/MISMATCH-HASH-attempt-1.json";
+const mismatchedHashAssignmentText = await putJson(path.join(control, mismatchedHashAssignmentPath), assignment("MISMATCH-HASH", 1, { evidence_directory: mismatchedHashRoot }));
+await putJson(path.join(control, mismatchedHashRoot, "verification.json"), {
+  ...verification("MISMATCH-HASH", 1, mismatchedHashAssignmentText, "pass", "2026-10-09T10:30:00.000Z", "# mismatch\n", "fp-mismatch-hash"),
+  assignment_sha256: "f".repeat(64),
+});
+await put(path.join(control, mismatchedHashRoot, "private.txt"), "Mismatched assignment hash data\n");
+
+const wrongAttemptRoot = "test/results-triad-evidence/wrong-attempt/attempt-002";
+const wrongAttemptText = await putJson(path.join(control, ".loop/runtime/assignments/MISMATCH-ATTEMPT-attempt-1.json"), assignment("MISMATCH-ATTEMPT", 1, { evidence_directory: wrongAttemptRoot }));
+await putJson(path.join(control, wrongAttemptRoot, "verification.json"), verification("MISMATCH-ATTEMPT", 1, wrongAttemptText, "pass", "2026-10-09T11:00:00.000Z", "# mismatch\n", "fp-wrong-attempt"));
+await put(path.join(control, wrongAttemptRoot, "private.txt"), "Wrong attempt data\n");
+
 const evidence11 = path.join(control, ".loop/evidence/1.1/attempt-001");
 await putJson(path.join(evidence11, "verification.json"), verification("1.1", 1, a11, "pass", "2026-10-02T10:00:00.000Z", card11, "fp-11"));
 const log11 = await put(path.join(evidence11, "logs/npm-test.stdout.log"), "ok 1 - greeting\n");
@@ -565,7 +607,7 @@ try {
   // Card list: queue declarations plus code-written evidence, kept separate.
   const cards = await request("/api/projects/root/cards");
   assert.equal(cards.status, 200);
-  assert.deepEqual(cards.body.cards.map((card) => card.id), ["1.1", "1.2", "1.3", "2.1", "2.2", "2.3", "2.4", "2.5", "11.1"]);
+  assert.deepEqual(cards.body.cards.map((card) => card.id).sort(), ["1.1", "1.2", "1.3", "2.1", "2.2", "2.3", "2.4", "2.5", "11.1", "ASSIGNED-EXT", "ASSIGNED-STATIC", "MISMATCH-ATTEMPT", "MISMATCH-FEATURE", "MISMATCH-HASH"].sort());
   const listed = Object.fromEntries(cards.body.cards.map((card) => [card.id, card]));
   assert.equal(listed["1.1"].declared.state, "approved");
   assert.equal(listed["1.1"].declared.provenance, "agent-declared");
@@ -581,6 +623,8 @@ try {
   assert.deepEqual(listed["1.3"].declared.unsupported_keys, ["owner"]);
   assert.equal(Object.hasOwn(listed["1.3"].declared, "owner"), false);
   assert.equal(listed["1.3"].declared.depends_on, null, "an absent list is null, not an invented []");
+  assert.equal(listed["ASSIGNED-EXT"].observed.verification_count, 2, "assigned external verifier roots are attributed to the matching feature");
+  assert.equal(listed["ASSIGNED-STATIC"].observed.verification_count, 1, "assigned verifier evidence in a statically allowlisted artifacts path remains discoverable");
   assert.ok(cards.body.work_queue.warnings.some((warning) => warning.includes("key owner not read")));
   assert.deepEqual(cards.body.unmatched_evaluations.map((entry) => entry.feature_id), ["1.1+1.2"]);
   const diagnosticSources = cards.body.diagnostics.map((entry) => entry.source);
@@ -726,6 +770,36 @@ try {
   assert.equal((await request(`/api/projects/root/files?path=.loop/run-state.yaml`)).body.content, "version: 1\nproject_decision: running\n");
   assert.equal((await request(`/api/projects/root/files?path=.loop/absent.json`)).status, 404);
   assert.equal((await request(`/api/projects/root/files`)).status, 400);
+
+  // External verifier evidence is available only inside roots bound to a
+  // matching assignment and verifier document.
+  const assignedCard = (await request("/api/projects/root/cards/ASSIGNED-EXT")).body;
+  assert.deepEqual(assignedCard.attempts.map((attempt) => attempt.attempt), [1, 2]);
+  assert.deepEqual(assignedCard.attempts.map((attempt) => attempt.verifications[0].status), ["pass", "pass"]);
+  assert.deepEqual(assignedCard.attempts.map((attempt) => attempt.documents.map((document) => document.source)), [
+    [`${assignedRoot1}/reviewer-note.md`],
+    [`${assignedRoot2}/reviewer-note.md`],
+  ]);
+  const assignedArtifact = await request(`/api/projects/root/files?path=${encodeURIComponent(`${assignedRoot1}/reviewer-note.md`)}`);
+  assert.equal(assignedArtifact.status, 200);
+  assert.equal(assignedArtifact.body.content, "Attempt one evidence note\n");
+  const assignedVerification = await request(`/api/projects/root/files?path=${encodeURIComponent(`${assignedRoot1}/verification.json`)}`);
+  assert.equal(assignedVerification.status, 200);
+  assert.equal(assignedVerification.body.provenance, "unclassified", "external verifier data is not given invented provenance");
+
+  const staticAssignedCard = (await request("/api/projects/root/cards/ASSIGNED-STATIC")).body;
+  assert.deepEqual(staticAssignedCard.attempts.map((attempt) => attempt.attempt), [1]);
+  assert.deepEqual(staticAssignedCard.attempts.map((attempt) => attempt.verifications.map((entry) => entry.status)), [["pass"]], "static allowlist evidence is attributed to its declared card and attempt");
+
+  assert.equal((await request(`/api/projects/root/cards/MISMATCH-FEATURE`)).body.attempts[0].verifications.length, 0, "a verifier with a different feature_id is not attributed");
+  assert.equal((await request(`/api/projects/root/files?path=${encodeURIComponent(`${mismatchedEvidenceRoot}/private.txt`)}`)).status, 403);
+  assert.equal((await request(`/api/projects/root/cards/MISMATCH-HASH`)).body.attempts[0].verifications.length, 0, "a verifier with a mismatched assignment_sha256 is not attributed");
+  assert.equal((await request(`/api/projects/root/files?path=${encodeURIComponent(`${mismatchedHashRoot}/private.txt`)}`)).status, 403, "a verifier with a mismatched assignment_sha256 does not authorize its root");
+  assert.equal((await request(`/api/projects/root/files?path=${encodeURIComponent(`${wrongAttemptRoot}/private.txt`)}`)).status, 403, "directory attempt suffix must match the assignment attempt");
+  assert.equal((await request(`/api/projects/root/files?path=${encodeURIComponent("test/results-triad-evidence/unassigned/attempt-003/private.txt")}`)).status, 403, "an unassigned evidence root is not exposed");
+  assert.equal((await request(`/api/projects/root/files?path=${encodeURIComponent(`${assignedRoot1}/../../.env`)}`)).status, 403, "assigned roots do not permit traversal");
+  assert.equal((await request(`/api/projects/root/files?path=${encodeURIComponent(`${assignedRoot1}/external-link.txt`)}`)).status, 403, "assigned roots do not permit symlink escape");
+  assert.equal((await request(`/api/projects/root/files?path=${encodeURIComponent(`${assignedRoot1}/cross-attempt-link.md`)}`)).status, 403, "an assigned root cannot follow a symlink into another attempt");
 
   // Traversal, symlink escape, and non-allowlisted files are refused.
   for (const target of [
