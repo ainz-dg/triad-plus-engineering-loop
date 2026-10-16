@@ -358,12 +358,20 @@ async function collectVerifications(reader, project, assignments, diagnostics) {
       if (attempt.directory) candidates.add(`.loop/evidence/${feature.name}/${attempt.name}`);
     }
   }
-  // Only a single valid assignment may bootstrap the verifier document in the
-  // narrow external evidence path family. Its contents must then bind back to
-  // that assignment before any other file in the root becomes readable.
+  // Preserve the legacy behavior for assignment-declared directories that are
+  // already covered by the static allowlist. The original reader remains the
+  // authority for those paths; assignment declarations do not expand it.
+  // Only the new external path family needs a verifier-only bootstrap and an
+  // assignment binding before the rest of its root becomes readable.
   const externalAssignments = new Map();
   const ambiguousRoots = new Set();
   for (const assignment of assignments) {
+    const normalized = normalizedOrNull(assignment.value.evidence_directory);
+    if (!normalized) continue;
+    if (!ASSIGNED_EVIDENCE_DIRECTORY.test(normalized)) {
+      candidates.add(normalized);
+      continue;
+    }
     const declared = assignedEvidenceDirectory(assignment);
     if (!declared) continue;
     if (externalAssignments.has(declared)) {
