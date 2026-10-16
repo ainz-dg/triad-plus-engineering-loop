@@ -72,22 +72,27 @@ blocked`. The Orchestrator governs the loop. When configured, Evaluator+ runs
 automatically after approval with a fresh packet; a `FAIL` is information for a
 future user-initiated run, never an automatic repair.
 
-## Try Triad+ in 5 minutes with OpenCode
+## Start with OpenCode
 
 OpenCode is the canonical tutorial because it is open source and makes the
-separate Triad roles easy to inspect.
+separate Triad roles easy to inspect. Setup and run time depend on your host and
+project; this guide does not promise that a full loop finishes in five minutes.
 
-### Project-local OpenCode with a root PRD
+### One quickstart: root Control Workspace and root PRD
 
-For a local Control Workspace, put the source PRD at its root and install only
-the project-scoped Triad assets. This does not write Triad commands, skills, or
-role assets to the user's OpenCode configuration:
+Start in a dedicated Control Workspace, separate from every product
+repository. Put the source PRD at the Control Workspace root and install only
+project-scoped Triad assets; this does not write Triad commands, skills, or role
+assets to the user's OpenCode configuration. Product repositories and their
+worktrees are separate and must be mapped explicitly in `project.yaml`; Triad+
+does not discover them by scanning folders.
 
 ```bash
 mkdir triad-control && cd triad-control
 ```
 
-Create `PRD.md` in `triad-control`, then run:
+Create `PRD.md` here with a small goal, one observable acceptance criterion,
+and a deterministic verification command such as a focused test. Then run:
 
 ```bash
 npx triad-plus init --host opencode --control .
@@ -95,68 +100,13 @@ npx triad-plus doctor --host opencode --control .
 opencode
 ```
 
-In the OpenCode TUI opened at that root, start with `/triad ./PRD.md` (or
-`/triad` to use the root `PRD.md` default). Bootstrap copies the selected source
-to the normal immutable `artifacts/prd.md` path and records its SHA-256; keep
-the root source unchanged. Map product repositories and their worktrees
-explicitly in `project.yaml`; folders are never imported by scanning. Keep the
-Control Workspace separate from every product repository. Do not pass
-`--global` for this path.
-
-1. Install OpenCode and configure a provider/model, following the
-   [OpenCode documentation](https://opencode.ai/docs).
-2. Create a small product folder and deterministic test command:
-
-   ```bash
-   mkdir triad-celsius && cd triad-celsius
-   npm init -y
-   npm pkg set type=module
-   npm pkg set scripts.test='node --test'
-   ```
-3. Create a separate control workspace and install the OpenCode adapter:
-
-   ```bash
-   npx triad-plus init --host opencode --control "$PWD/triad-control"
-   npx triad-plus doctor --host opencode --control "$PWD/triad-control"
-   ```
-
-   The setup asks for the Orchestrator, Developer, Reviewer, and optional
-   Evaluator+ names, personas, and models. Choose `yes` for Evaluator+ if you
-   want it automatically after approval.
-4. Save this tiny PRD as `celsius-prd.md` beside the product project:
-
-   ```md
-   # Goal
-   Create a `celsiusToFahrenheit` utility.
-
-   ## Acceptance criteria
-   - Export `celsiusToFahrenheit(value)`.
-   - `celsiusToFahrenheit(0)` returns `32`.
-   - `celsiusToFahrenheit(100)` returns `212`.
-   - Add automated tests.
-
-   ## Verification
-   npm test
-   ```
-5. Open `triad-control` **interactively** in the OpenCode TUI and run:
-
-   ```text
-   /triad /absolute/path/to/celsius-prd.md
-   ```
-
-Expected experience:
-
-```text
-Orchestrator
-      ↓
-Developer implements
-      ↓
-triad-verify produces evidence
-      ↓
-Reviewer inspects
-      ├─ approved → optional automatic Evaluator+
-      └─ rework → Developer
-```
+In the OpenCode TUI opened at the Control Workspace root, run `/triad ./PRD.md`
+or `/triad` to use the root `PRD.md` default. Bootstrap snapshots the selected
+source to immutable `artifacts/prd.md` and records its SHA-256; keep the root
+source unchanged. If preferred, pass an external PRD path instead, for example
+`/triad /absolute/path/to/PRD.md`. Do not pass `--global` for this project-local
+setup. For host support and limitations, see
+[`docs/npx-installation.md`](docs/npx-installation.md).
 
 The Orchestrator first shows the feature cards, then delegates the bounded work.
 If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencode)
