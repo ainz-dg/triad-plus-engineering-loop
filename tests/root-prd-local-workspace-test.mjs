@@ -87,7 +87,7 @@ try {
   const command = await readFile(path.join(controlRoot, '.opencode', 'commands', 'triad.md'), 'utf8');
   assert.match(command, /Resolve a relative PRD path from the opened Control Workspace root/);
   assert.match(command, /a readable `PRD\.md` is present at that root/);
-  assert.match(await readFile(path.join(repositoryRoot, 'README.md'), 'utf8'), /Project-local OpenCode with a root PRD/);
+  assert.match(await readFile(path.join(repositoryRoot, 'README.md'), 'utf8'), /One quickstart: root Control Workspace and root PRD/);
 
   console.log('Triad+ root PRD local Control Workspace fixture: PASS (installer/docs/static discovery boundary; agent bootstrap not invoked)');
 } finally {
