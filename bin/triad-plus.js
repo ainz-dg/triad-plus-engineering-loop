@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve, relative, sep } from 'node:path';
+import { basename, dirname, join, resolve, relative, sep } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { getAdapter, listAdapters, roleDefinitions, sharedSkillNames } from '../adapters/registry.mjs';
@@ -37,6 +37,21 @@ import {
   writeInstallationManifest
 } from '../runtime/lib/installation-manifest.mjs';
 import { interactiveAdapterManagement } from '../runtime/lib/interactive-adapter-menu.mjs';
+import {
+  assertNoSymlinkPath,
+  confirmAndApplySetup,
+  formatSetupPreview,
+  immediateGitChildren,
+  initializeGreenfieldRepositories,
+  inspectControlRoot,
+  parseAdapterSelection,
+  parsePositiveCount,
+  projectLaunchHint,
+  readProjectYamlPlan,
+  setupReadiness,
+  validateRepositoryPlan,
+  writeProjectYamlPlan,
+} from '../runtime/lib/interactive-project-setup.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageVersion = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
@@ -327,12 +342,17 @@ function managedBlockIn(source, startMarker = overlayStart, endMarker = overlayE
 
 async function overlayPlan(controlRoot, team) {
   const target = join(controlRoot, 'AGENTS.md');
+  await assertNoSymlinkPath(target);
   const overlay = instructionOverlay(team);
-  if (!(await exists(target))) return { target, action: 'create', content: `# Project instructions\n\n${overlay}\n` };
+  let info = null;
+  try { info = await lstat(target); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!info) return { target, action: 'create', before: null, content: `# Project instructions\n\n${overlay}\n` };
+  if (!info.isFile()) throw new Error(`Cannot safely add Triad+ instructions to a non-regular file: ${target}`);
   const source = await readFile(target, 'utf8');
   const managed = managedBlockIn(source);
-  if (!managed) return { target, action: 'append', content: `${source}${source.endsWith('\n') ? '\n' : '\n\n'}${overlay}\n` };
-  return { target, action: 'update', content: `${source.slice(0, managed.start)}${overlay}${source.slice(managed.blockEnd)}` };
+  if (!managed) return { target, action: 'append', before: source, content: `${source}${source.endsWith('\n') ? '\n' : '\n\n'}${overlay}\n` };
+  return { target, action: 'update', before: source, content: `${source.slice(0, managed.start)}${overlay}${source.slice(managed.blockEnd)}` };
 }
 
 async function applyOverlay(controlRoot, apply, team) {
@@ -370,6 +390,7 @@ async function loadTeamConfig(options) {
 
 async function writeTeamConfig(controlRoot, team) {
   const target = teamConfigPath(controlRoot);
+  await assertNoSymlinkPath(target);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, `${JSON.stringify(team, null, 2)}\n`, 'utf8');
 }
@@ -740,9 +761,14 @@ async function init(options) {
   const adapter = getAdapter(options.host);
   if (!adapter) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
-  const team = await loadTeamConfig(options);
   const controlRoot = resolve(options.control);
-  await requireDirectory(controlRoot);
+  const team = options.useExistingTeam ? await currentTeam(controlRoot) : await loadTeamConfig(options);
+  const writesTeam = Boolean(team && !options.useExistingTeam);
+  if (options.planOnly) await assertNoSymlinkPath(controlRoot);
+  else {
+    await requireDirectory(controlRoot);
+    await assertNoSymlinkPath(controlRoot, { allowMissing: false });
+  }
   if (!options.allowProductRepo && productRepositoryAt(controlRoot)) {
     throw new Error('Control path appears to be a product repository. Use a separate project-control workspace, or pass --allow-product-repo after reviewing the risk.');
   }
@@ -754,7 +780,7 @@ async function init(options) {
   const installContext = context(controlRoot);
   const projectPlanned = [
     ...adapter.projectPaths(controlRoot, installContext),
-    ...(team ? [teamConfigPath(controlRoot)] : [])
+    ...(writesTeam ? [teamConfigPath(controlRoot)] : [])
   ];
   const existingProject = await collisions(projectPlanned);
   if (existingProject.length > 0) throw new Error(`Installation aborted; existing paths would be overwritten:\n${existingProject.map((target) => `  ${target}`).join('\n')}`);
@@ -780,8 +806,19 @@ async function init(options) {
     }
     if (existingGlobal.length > 0) throw new Error(`Installation aborted; existing global paths would be overwritten:\n${existingGlobal.map((target) => `  ${target}`).join('\n')}`);
   }
+  if (options.planOnly) {
+    const pairs = await materializedAssetPairs(adapter.projectAssets, controlRoot, installContext);
+    const managedAssets = await plannedAdapterRecords(pairs, controlRoot);
+    return {
+      adapterId: adapter.id,
+      managedAssets,
+      created: managedAssets.map((asset) => asset.path),
+      global: Boolean(options.global),
+      teamMode: options.useExistingTeam ? 'reuse existing' : team ? 'create requested config' : 'unconfigured',
+    };
+  }
   await installAssets(adapter.projectAssets, controlRoot, installContext);
-  if (team) await writeTeamConfig(controlRoot, team);
+  if (writesTeam) await writeTeamConfig(controlRoot, team);
   if (team) await applyOverlay(controlRoot, true, team);
   if (options.global) await installAssets(adapter.globalAssets, controlRoot, installContext);
   if (team) await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
@@ -805,8 +842,13 @@ async function init(options) {
 async function currentTeam(controlRoot) {
   const target = teamConfigPath(controlRoot);
   if (!(await exists(target))) return null;
-  try { return validateTeamConfiguration(JSON.parse(await readFile(target, 'utf8'))); }
-  catch { throw new Error(`Cannot safely upgrade an invalid team config: ${target}`); }
+  try {
+    await assertNoSymlinkPath(target, { allowMissing: false });
+    const info = await lstat(target);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('team configuration is not a regular file');
+    return validateTeamConfiguration(JSON.parse(await readFile(target, 'utf8')));
+  }
+  catch { throw new Error(`Cannot safely read an invalid team config: ${target}`); }
 }
 
 const deliveryStateDefault = `
@@ -1020,7 +1062,7 @@ async function observedAdapterRecords(planned, pairs, controlRoot) {
   return records;
 }
 
-async function preflightAdapterAdd(controlRoot, pairs, planned, records) {
+async function preflightAdapterAdd(controlRoot, pairs, planned, records, { projectedAssets = new Set() } = {}) {
   const owners = new Map();
   for (const record of records) {
     for (const asset of record.managed_assets) {
@@ -1032,12 +1074,18 @@ async function preflightAdapterAdd(controlRoot, pairs, planned, records) {
   let create = 0;
   let reuse = 0;
   const actions = [];
+  const controlExists = await exists(controlRoot);
   for (const [index, asset] of planned.entries()) {
     const target = pairs[index].target;
-    const info = await safeProjectAssetInfo(controlRoot, target);
+    const info = controlExists ? await safeProjectAssetInfo(controlRoot, target) : null;
     const existingOwners = owners.get(assetIdentity(asset)) ?? [];
     if (!info) {
       if (existingOwners.some((owner) => owner.asset.sha256 !== asset.sha256)) throw new Error(`Shared managed asset requires upgrade before add: ${asset.path}`);
+      if (projectedAssets.has(assetIdentity(asset))) {
+        reuse += 1;
+        actions.push({ kind: 'reuse-shared', asset, owners: existingOwners.map((owner) => owner.adapter) });
+        continue;
+      }
       create += 1;
       actions.push({ kind: 'create', asset, owners: [] });
       continue;
@@ -1160,8 +1208,10 @@ async function adapterAdd(options) {
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   if (options.global) throw new Error('Multi-adapter add is project-local only; it never creates global Triad assets.');
   const controlRoot = resolve(options.control);
-  await requireExistingDirectory(controlRoot);
-  const { loaded, records } = await loadMultiMutationState(controlRoot);
+  if (options.planOnly) await assertNoSymlinkPath(controlRoot);
+  else await requireExistingDirectory(controlRoot);
+  const { loaded, records: installedRecords } = await loadMultiMutationState(controlRoot);
+  const records = options.planOnly ? [...installedRecords, ...(options.setupRecords ?? [])] : installedRecords;
   const existing = records.find((record) => record.id === adapter.id);
   const installContext = context(controlRoot);
   if (existing) {
@@ -1177,7 +1227,16 @@ async function adapterAdd(options) {
   }
   const pairs = await adapterAssetPairs(adapter, controlRoot, installContext, records);
   const planned = await plannedAdapterRecords(pairs, controlRoot);
-  const counts = await preflightAdapterAdd(controlRoot, pairs, planned, records);
+  const projectedAssets = new Set((options.setupRecords ?? []).flatMap((record) => record.managed_assets ?? []).map(assetIdentity));
+  const counts = await preflightAdapterAdd(controlRoot, pairs, planned, records, { projectedAssets });
+  if (options.planOnly) {
+    return {
+      adapterId: adapter.id,
+      managedAssets: planned,
+      created: counts.actions.filter((action) => action.kind === 'create').map((action) => action.asset.path),
+      reused: counts.actions.filter((action) => action.kind !== 'create').map((action) => action.asset.path),
+    };
+  }
   const migration = loaded?.manifest.schema_version === 1;
   process.stdout.write(`Adapter add ${options.apply ? 'applying' : 'plan'} — ${adapter.label}\n`);
   if (migration) process.stdout.write('  Explicit v1 → v2 migration will preserve the existing adapter record.\n');
@@ -1773,6 +1832,247 @@ async function cockpit(options) {
   await launchCockpit({ control: options.control, port: options.port });
 }
 
+async function chooseNewControlRoot(prompt, currentDirectory) {
+  const current = await inspectControlRoot(currentDirectory);
+  if (current.gitBoundary) {
+    process.stdout.write(`Current directory belongs to Git root ${current.gitBoundary}. It cannot be selected as a clean Control Workspace; choose a separate root explicitly. No sibling path will be generated.\n`);
+  }
+  while (true) {
+    const answer = (await prompt.question(current.gitBoundary
+      ? 'Separate Control Workspace absolute path (blank cancels): '
+      : `Control Workspace root to open in the IDE [${currentDirectory}] (absolute or relative; blank uses this path): `)).trim();
+    if (!answer && current.gitBoundary) return null;
+    const candidate = resolve(currentDirectory, answer || currentDirectory);
+    try {
+      const inspected = await inspectControlRoot(candidate);
+      if (inspected.gitBoundary) {
+        process.stdout.write(`Unsafe as a new Control Workspace: it is inside Git root ${inspected.gitBoundary}. Choose a separate path; no files were changed.\n`);
+        continue;
+      }
+      const loaded = await loadInstallationManifest(candidate);
+      if (loaded) {
+        const manage = (await prompt.question(`A Triad+ installation already exists at ${candidate}. Type manage to open its existing adapter menu; anything else chooses another root: `)).trim();
+        if (manage === 'manage') return { existing: candidate };
+        continue;
+      }
+      return inspected.path;
+    } catch (error) {
+      process.stdout.write(`Cannot safely use ${candidate}: ${error.message}\n`);
+    }
+  }
+}
+
+async function collectRepositoryPlan(prompt, controlRoot) {
+  process.stdout.write('\nRepository setup: 1) use explicitly selected existing local Git repositories  2) create local greenfield repositories after approval  3) defer repository configuration\n');
+  process.stdout.write('Clone-from-URL is not implemented in this version. No repository search or clone will run.\n');
+  let mode;
+  while (!mode) {
+    const answer = (await prompt.question('Choose repository mode [1-3] (blank cancels): ')).trim().toLowerCase();
+    if (!answer) return null;
+    if (['1', 'existing', 'a'].includes(answer)) mode = 'existing';
+    else if (['2', 'greenfield', 'c'].includes(answer)) mode = 'greenfield';
+    else if (['3', 'defer', 'd'].includes(answer)) mode = 'defer';
+    else process.stdout.write('Choose existing, greenfield, or defer.\n');
+  }
+  if (mode === 'defer') return { mode, repositories: [] };
+  let count = null;
+  while (!count) {
+    const answer = (await prompt.question('Number of repositories to map (1-20; blank cancels): ')).trim();
+    if (!answer) return null;
+    count = parsePositiveCount(answer, 20);
+    if (!count) process.stdout.write('Enter a whole number from 1 to 20.\n');
+  }
+  if (mode === 'existing') {
+    const suggestions = await immediateGitChildren(controlRoot);
+    process.stdout.write(`Read-only immediate-child Git-root suggestions (select explicitly; none are auto-added): ${suggestions.join(', ') || 'none'}\n`);
+  }
+  const repositories = [];
+  for (let index = 0; index < count; index += 1) {
+    const suggestedId = `repo-${index + 1}`;
+    const id = (await prompt.question(`Repository ${index + 1} stable ID [${suggestedId}]: `)).trim() || suggestedId;
+    const suggestedPath = `./${id}`;
+    const repoPath = (await prompt.question(`${id} repository path [${suggestedPath}]: `)).trim() || suggestedPath;
+    let suggestedBase = 'main';
+    if (mode === 'existing') {
+      const candidate = resolve(controlRoot, repoPath);
+      const branch = spawnSync('git', ['-C', candidate, 'branch', '--show-current'], { encoding: 'utf8', timeout: 10_000 });
+      if (branch.status === 0 && branch.stdout.trim()) suggestedBase = branch.stdout.trim();
+    }
+    const baseBranch = (await prompt.question(`${id} base branch [${suggestedBase}]: `)).trim() || suggestedBase;
+    const projectBranch = (await prompt.question(`${id} project branch [triad/${id}-feature]: `)).trim() || `triad/${id}-feature`;
+    const worktree = (await prompt.question(`${id} worktree mapping [worktrees/${id}-feature]: `)).trim() || `worktrees/${id}-feature`;
+    repositories.push({ id, path: repoPath, base_branch: baseBranch, project_branch: projectBranch, worktree });
+  }
+  return { mode, repositories };
+}
+
+async function collectAdapterSelection(prompt) {
+  const adapters = listAdapters();
+  process.stdout.write('\nAvailable harnesses (select one or more IDs/numbers, separated by commas):\n');
+  adapters.forEach((adapter, index) => process.stdout.write(`  ${index + 1}) ${adapter.label} (${adapter.id}) — project-local assets ${adapter.globalEntry ? '(global entry exists but will not be installed)' : '(local adapter assets)'}\n`));
+  process.stdout.write('The onboarding flow never writes user-level/global host files or settings.\n');
+  while (true) {
+    const answer = (await prompt.question('Harnesses to install (blank cancels): ')).trim();
+    if (!answer) return null;
+    const selected = parseAdapterSelection(answer, adapters);
+    if (selected) return selected;
+    process.stdout.write('Choose one or more listed adapter IDs/numbers without duplicates.\n');
+  }
+}
+
+async function preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam }) {
+  const adapterPlans = new Map();
+  const first = await init({ host: adapters[0].id, control: root, planOnly: true, team, useExistingTeam });
+  adapterPlans.set(adapters[0].id, first);
+  const simulatedRecords = [{ id: first.adapterId, managed_assets: first.managedAssets }];
+  for (const adapter of adapters.slice(1)) {
+    const plan = await adapterAdd({
+      adapterCommand: 'add',
+      host: adapter.id,
+      control: root,
+      planOnly: true,
+      setupRecords: simulatedRecords,
+    });
+    adapterPlans.set(adapter.id, plan);
+    simulatedRecords.push({ id: adapter.id, managed_assets: plan.managedAssets });
+  }
+  const readiness = await setupReadiness(root, repositories);
+  const roleOverlayPlan = team ? await overlayPlan(root, team) : null;
+  const roleBindingActions = team ? adapters.flatMap((adapter) => {
+    if (adapter.modelBinding !== 'project-frontmatter' || typeof adapter.roleModelPaths !== 'function') return [];
+    return adapter.roleModelPaths(root, context(root)).map((target) => ({ adapterId: adapter.id, target }));
+  }) : [];
+  return {
+    root, repositories, adapters, adapterPlans, projectYamlPlan, readiness,
+    roleOverlayPlan, roleBindingActions,
+    teamMode: useExistingTeam ? 'reuse existing without rewriting' : team ? 'create requested team config' : 'leave unconfigured',
+    team,
+    useExistingTeam,
+    currentVersion: packageVersion,
+  };
+}
+
+async function applyInteractiveSetup(plan) {
+  const createdRepos = [];
+  const installedAdapters = [];
+  let createdRoot = false;
+  let projectYamlWritten = false;
+  try {
+    await assertNoSymlinkPath(plan.root);
+    if (plan.roleOverlayPlan) {
+      const currentOverlay = await overlayPlan(plan.root, plan.team);
+      if (currentOverlay.before !== plan.roleOverlayPlan.before || currentOverlay.content !== plan.roleOverlayPlan.content) {
+        throw new Error('AGENTS.md changed after preview; no repository or adapter setup was started. Review the updated file and run the wizard again.');
+      }
+    }
+    createdRoot = !(await exists(plan.root));
+    await mkdir(plan.root, { recursive: true });
+    await assertNoSymlinkPath(plan.root, { allowMissing: false });
+    const recheckedRoot = await inspectControlRoot(plan.root);
+    if (recheckedRoot.gitBoundary) throw new Error(`Control Workspace became part of Git root ${recheckedRoot.gitBoundary}; no repository migration was attempted.`);
+    try { createdRepos.push(...await initializeGreenfieldRepositories(plan.repositories)); }
+    catch (error) {
+      createdRepos.push(...(error.createdRepositories ?? []));
+      throw error;
+    }
+    if (plan.projectYamlPlan.changed) {
+      await writeProjectYamlPlan(plan.projectYamlPlan);
+      projectYamlWritten = true;
+    }
+    await init({ host: plan.adapters[0].id, control: plan.root, team: plan.team, useExistingTeam: plan.useExistingTeam });
+    installedAdapters.push(plan.adapters[0].id);
+    for (const adapter of plan.adapters.slice(1)) {
+      await adapterAdd({ adapterCommand: 'add', host: adapter.id, control: plan.root, apply: true });
+      installedAdapters.push(adapter.id);
+    }
+  } catch (error) {
+    process.stderr.write(`Setup is incomplete; no successful step was removed.\n`);
+    process.stderr.write(`  Control Workspace: ${plan.root}\n`);
+    process.stderr.write(`  Control Workspace directory created: ${createdRoot ? 'yes' : 'no'}\n`);
+    process.stderr.write(`  Greenfield repositories initialized: ${createdRepos.join(', ') || 'none'}\n`);
+    process.stderr.write(`  project.yaml updated: ${projectYamlWritten ? 'yes' : 'no'}\n`);
+    process.stderr.write(`  Harnesses fully installed: ${installedAdapters.join(', ') || 'none'}\n`);
+    if (installedAdapters.length < plan.adapters.length) process.stderr.write('  The failing harness may have partial files; inspect with adapter doctor before retrying.\n');
+    process.stderr.write(`  Safe re-entry: run triad-plus from this root, choose Manage existing, then add only missing adapters.\n`);
+    throw error;
+  }
+
+  process.stdout.write('\nTriad+ setup completed.\n');
+  const readiness = await setupReadiness(plan.root, plan.repositories);
+  process.stdout.write(`Readiness: ${readiness.ready ? 'READY' : 'NOT READY'}${readiness.missing.length ? ` — missing: ${readiness.missing.join('; ')}` : ''}\n`);
+  for (const adapter of plan.adapters) await adapterDoctor({ adapterCommand: 'doctor', host: adapter.id, control: plan.root });
+  for (const adapter of plan.adapters) {
+    for (const line of projectLaunchHint(adapter, plan.root)) process.stdout.write(`${line}\n`);
+  }
+  process.stdout.write('No PRD, gate, branch baseline, worktree, remote, or successful verification was created implicitly.\n');
+}
+
+async function interactiveNewProjectSetup(prompt, currentDirectory) {
+  const root = await chooseNewControlRoot(prompt, currentDirectory);
+  if (!root) {
+    process.stdout.write('Cancelled. No files were changed.\n');
+    return;
+  }
+  if (typeof root === 'object' && root.existing) {
+    await interactiveAdapterManagement({
+      prompt,
+      control: root.existing,
+      adapters: listAdapters(),
+      getInstalledAdapterIds: async (controlRoot) => adapterRecords((await loadInstallationManifest(controlRoot))?.manifest ?? null).map((record) => record.id),
+      runCommand: adapterCommand,
+    });
+    return;
+  }
+
+  const repositorySelection = await collectRepositoryPlan(prompt, root);
+  if (!repositorySelection) {
+    process.stdout.write('Cancelled. No files were changed.\n');
+    return;
+  }
+  let repositories;
+  let adapters;
+  try {
+    repositories = await validateRepositoryPlan(root, repositorySelection.repositories, { mode: repositorySelection.mode });
+    adapters = await collectAdapterSelection(prompt);
+  } catch (error) {
+    process.stdout.write(`Preflight failed; nothing was changed: ${error.message}\n`);
+    return;
+  }
+  if (!adapters) {
+    process.stdout.write('Cancelled. No files were changed.\n');
+    return;
+  }
+  let team = null;
+  let useExistingTeam = false;
+  try {
+    if (await exists(teamConfigPath(root))) {
+      team = await currentTeam(root);
+      useExistingTeam = Boolean(team);
+    } else if (['y', 'yes'].includes((await prompt.question('Configure optional Triad+ team identities/models now? [y/N]: ')).trim().toLowerCase())) {
+      team = await collectTeamConfiguration(prompt, adapters[0]);
+    }
+  } catch (error) {
+    process.stdout.write(`Preflight failed; nothing was changed: ${error.message}\n`);
+    return;
+  }
+  let plan;
+  try {
+    const projectYamlPlan = await readProjectYamlPlan(root, repositories, {
+      projectId: basename(root),
+      title: basename(root),
+    });
+    plan = await preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam });
+  } catch (error) {
+    process.stdout.write(`Preflight failed; nothing was changed: ${error.message}\n`);
+    return;
+  }
+  await confirmAndApplySetup({
+    prompt,
+    preview: formatSetupPreview(plan),
+    apply: () => applyInteractiveSetup(plan),
+  });
+}
+
 async function interactiveInit() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The interactive wizard needs a terminal. Use init in a non-interactive shell.');
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
@@ -1834,22 +2134,8 @@ async function interactiveInit() {
       return;
     }
 
-    process.stdout.write('\nNew Control Workspace setup\n');
-    listAdapters().forEach((adapter, index) => process.stdout.write(`${index + 1}) ${adapter.label}\n`));
-    let adapter;
-    while (!adapter) {
-      const answer = (await prompt.question(`Choose the host [1-${listAdapters().length}]: `)).trim().toLowerCase();
-      adapter = listAdapters()[Number(answer) - 1] ?? getAdapter(answer);
-      if (!adapter) process.stdout.write('Choose a listed host.\n');
-    }
-    const control = (await prompt.question(`Project-control workspace [${join(process.cwd(), 'triad-control')}]: `)).trim() || join(process.cwd(), 'triad-control');
-    const global = ['y', 'yes'].includes((await prompt.question(`Also install user-level ${adapter.entry} assets? [y/N]: `)).trim().toLowerCase());
-    const team = await collectTeamConfiguration(prompt, adapter);
-    process.stdout.write(`\n${formatSetupSummary({ adapter, control, global, team })}`);
-    const confirm = (await prompt.question('Type install to continue: ')).trim().toLowerCase();
-    if (confirm !== 'install') return process.stdout.write('Cancelled. No files were changed.\n');
-    await init({ host: adapter.id, control, global, team });
-    await doctor({ host: adapter.id, control });
+    process.stdout.write('\nNew project setup\n');
+    await interactiveNewProjectSetup(prompt, currentDirectory);
   } finally { prompt.close(); }
 }
 
