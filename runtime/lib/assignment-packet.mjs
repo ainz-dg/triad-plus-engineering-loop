@@ -92,7 +92,12 @@ function assignmentRepositoryId(assignment) {
 }
 
 function scalarValue(value) {
-  return String(value ?? "").trim().replace(/^['"]|['"]$/g, "");
+  const scalar = String(value ?? "").trim();
+  if (scalar.startsWith('"') && scalar.endsWith('"')) {
+    try { return JSON.parse(scalar); } catch {}
+  }
+  if (scalar.startsWith("'") && scalar.endsWith("'")) return scalar.slice(1, -1).replaceAll("''", "'");
+  return scalar;
 }
 
 function normalizeRepositoryMappings(value) {
