@@ -398,12 +398,12 @@ export async function readProjectYamlPlan(controlRoot, repositories, { projectId
   return { path: target, before, after, mode, changed: before !== after };
 }
 
-export async function writeProjectYamlPlan(plan) {
+export async function writeProjectYamlPlan(plan, { beforePublishIfAbsent } = {}) {
   let current = null;
   try { current = await readFile(plan.path, 'utf8'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (current !== plan.before) fail(`project.yaml changed after preview; refusing to overwrite: ${plan.path}`);
-  const { open, rename, unlink } = await import('node:fs/promises');
+  const { open, link, rename, unlink } = await import('node:fs/promises');
   const temporary = `${plan.path}.triad-setup-${process.pid}-${Date.now()}.tmp`;
   let handle;
   try {
@@ -412,7 +412,8 @@ export async function writeProjectYamlPlan(plan) {
     await handle.close();
     handle = null;
     if (plan.before === null) {
-      try { await rename(temporary, plan.path); }
+      await beforePublishIfAbsent?.(plan.path);
+      try { await link(temporary, plan.path); }
       catch (error) { if (error.code === 'EEXIST') fail(`project.yaml appeared after preview; refusing to overwrite: ${plan.path}`); throw error; }
     } else {
       await rename(temporary, plan.path);

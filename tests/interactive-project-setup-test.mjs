@@ -141,6 +141,22 @@ try {
   const idempotentPlan = await readProjectYamlPlan(container, entries, { projectId: 'rites', title: 'RITES' });
   assert.equal(idempotentPlan.changed, false, 'reapplying an identical mapping does not rewrite project.yaml');
 
+  // A new project.yaml is published without replacing a file that appears at the publication boundary.
+  const publishSuccessRoot = path.join(root, 'publish-success');
+  await mkdir(publishSuccessRoot);
+  const publishSuccessPlan = await readProjectYamlPlan(publishSuccessRoot, entries, { projectId: 'rites', title: 'RITES' });
+  await writeProjectYamlPlan(publishSuccessPlan);
+  assert.equal(await readFile(publishSuccessPlan.path, 'utf8'), publishSuccessPlan.after, 'a missing project.yaml is published atomically');
+
+  const publishConflictRoot = path.join(root, 'publish-conflict');
+  await mkdir(publishConflictRoot);
+  const publishConflictPlan = await readProjectYamlPlan(publishConflictRoot, entries, { projectId: 'rites', title: 'RITES' });
+  const ownerBytes = Buffer.from('# created by the owner after preview\nowner_note: preserve these bytes\n');
+  await assert.rejects(() => writeProjectYamlPlan(publishConflictPlan, {
+    beforePublishIfAbsent: async (target) => writeFile(target, ownerBytes, { flag: 'wx' }),
+  }), /project\.yaml appeared after preview; refusing to overwrite/);
+  assert.deepEqual(await readFile(publishConflictPlan.path), ownerBytes, 'a publication-boundary conflict preserves owner bytes exactly');
+
   // A05: readiness is honest when PRD/gates/baseline/worktree are absent.
   const emptyRoot = path.join(root, 'greenfield-control');
   await mkdir(emptyRoot);
