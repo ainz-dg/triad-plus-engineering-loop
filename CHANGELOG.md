@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.19.0 — candidate (not published)
+
+- Add an explicit first-run terminal setup flow for choosing a separate
+  Control Workspace and mapping one or more product repositories. The
+  Control Workspace may remain non-Git while each mapped product repository
+  has its own Git root and declared worktree.
+- Offer explicit repository modes: map selected existing local Git
+  repositories, initialize selected empty greenfield paths as local Git
+  repositories only after confirmation, or defer mapping. The wizard does not
+  clone repositories or search sibling directories for a workspace.
+- Allow one or more of the six registered adapters to be selected in a single
+  first-run setup, with a complete local-only preview and exact confirmation.
+  The integrated smoke verifies the six-adapter project-local installation
+  and schema-v2 ownership manifest.
+- Extend read-only Cockpit views to show assigned attempt evidence only when
+  its declared path and assignment/evidence bindings validate; this does not
+  authorize general evidence browsing. Refresh the OpenCode quickstart around
+  a separate Control Workspace and explicitly mapped product repositories.
+- Setup reports readiness separately from installation and does not create a
+  PRD, quality-gate catalog, initial repository commit, mapped worktree, or
+  successful verification implicitly. Adapter inventory still does not select
+  a host for an Attempt; native host discovery and multi-harness dispatch are
+  not claimed.
+
 ## 1.18.0
 
 - Make attempt-local Reviewer documents easier to find in the Cockpit while

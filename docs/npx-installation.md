@@ -11,10 +11,61 @@ The terminal wizard is the normal setup and management path. If the current
 directory contains a valid Control Workspace manifest, it defaults to managing
 that workspace. Otherwise it defaults to creating a new workspace; selecting
 management then requires an explicit existing path. It never searches sibling
-directories. For a new workspace, the existing setup questions and `install`
-confirmation remain unchanged.
+directories.
 
-The management menu offers list, add, doctor/status, upgrade, remove, and exit.
+### New-workspace onboarding
+
+For a new workspace, the wizard asks for a Control Workspace root. The default
+is the current directory when it is outside a Git repository; if the current
+directory is inside a Git root, the wizard requires a separate path and does
+not generate a sibling path or migrate the product repository. A valid
+installation already present at the chosen root is not overwritten: the
+wizard asks whether to manage it or choose another root.
+
+Repository configuration is explicit. Choose one of these modes:
+
+1. Map selected existing local Git repositories. Immediate-child Git roots may
+   be shown as read-only suggestions, but none are added automatically.
+2. Initialize selected empty paths as local greenfield Git repositories after
+   approval. This does not create a remote or push anything.
+3. Defer repository mapping; setup can complete, but readiness remains
+   **NOT READY** until mappings and required project inputs are present.
+
+For modes 1 and 2, enter the number of repositories (1–20), then confirm each
+repository ID, path, base branch, project branch, and worktree mapping. The
+wizard does not clone from URLs or search for repositories. It writes only the
+repository mapping portion of `project.yaml`, preserving unrelated content.
+
+Select one or more of the six listed adapters in the same setup session. An
+optional team-identity/model configuration may also be requested. Before
+writing, the wizard shows a complete preview of the Control Workspace, mapping
+changes, selected project-local adapter assets, and initial readiness. Type
+`install` to apply that exact plan; any other answer cancels. The first-run
+flow does not write global/user-level host files, credentials, or account
+settings.
+
+Preflight refuses a Control Workspace inside a product Git root, unsafe paths,
+and asset conflicts. Before applying, setup rechecks relevant root, role
+configuration, and mapping state; the adapter commands also retain their
+ownership and collision checks. A change detected after preview is not
+silently overwritten.
+Successful steps are not automatically rolled back if a later adapter install
+fails; the wizard reports the partial result and directs the owner to inspect
+it before re-entry. Installation itself does not imply project readiness:
+the status separately checks for the root `PRD.md`,
+`.loop/quality-gates.yaml`, an initial Git commit per repository, and each
+mapped worktree. It does not create those inputs implicitly.
+
+### Existing-workspace management
+
+Launching the wizard in a registered workspace defaults to its management
+menu. To manage a workspace elsewhere, choose **Manage existing** and provide
+its path explicitly. The menu offers list, add, doctor/status, upgrade,
+remove, and exit. These are distinct from first-run onboarding:
+`init` refuses to overwrite an existing installation, while
+`upgrade --apply` is the managed update/repair path for an already
+registered workspace.
+
 List and doctor are read-only. Upgrade and remove are limited to adapters
 recorded in that Control Workspace; add offers the registered adapters not
 already recorded. Each mutation first runs the existing CLI dry-run/preflight,
