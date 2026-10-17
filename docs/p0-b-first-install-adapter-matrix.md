@@ -1,7 +1,7 @@
 # PR B / P0 — first-install adapter smoke matrix
 
 **Documentation checked:** 2026-10-17 (official vendor documentation)  
-**Fixture:** one pseudo-TTY new-project session; non-Git `RITES/` Control Workspace; its only direct-child Git repository is the committed `rites/`; all six adapters selected together and installed project-only.  
+**Fixture:** one pseudo-TTY new-project session; non-Git `sample-workspace/` Control Workspace; its only direct-child Git repository is the committed `sample-app/`; all six adapters selected together and installed project-only. These names are arbitrary fixture examples, not defaults, conventions, or a required layout.
 **Out of scope:** launching an adapter binary, testing native discovery/invocation, model dispatch, or Attempt cross-harness dispatch.
 
 `ARTIFACTS PASS` means the integrated fixture verifies schema-v2 membership, project-only scopes, all registry `projectAssets` materialized with manifest hashes, all `projectPaths` present, the six adapter metadata records, exact shared-asset ownership, `project.yaml` mapping, preserved owner/repository state, and no global writes. The pack check separately verifies every registry `projectAssets`/`globalAssets` source exists, is readable, and is included in the npm package. Global assets are **NOT INSTALLED BY DESIGN** in this local-only smoke.

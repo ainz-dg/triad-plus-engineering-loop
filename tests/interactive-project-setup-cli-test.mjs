@@ -161,7 +161,7 @@ try {
   } else {
     // Single integrated first-install smoke: one non-Git Control Workspace,
     // one direct-child Git repository, and all six adapters selected at once.
-    const root = path.join(fixture, 'RITES');
+    const root = path.join(fixture, 'sample-workspace');
     const home = path.join(fixture, 'home-existing');
     const xdgHome = path.join(fixture, 'xdg-config');
     const codexHome = path.join(fixture, 'codex-home');
@@ -176,10 +176,10 @@ try {
       assert.equal(executable.status, 0, `the local ${command} fixture executable is available`);
       await symlink(executable.stdout.trim(), path.join(hostlessPath, command));
     }
-    const prd = '# RITES source PRD\nOwner-authored; must remain unchanged.\n';
+    const prd = '# Sample Workspace source PRD\nOwner-authored; must remain unchanged.\n';
     await writeFile(path.join(root, 'PRD.md'), prd);
-    const rites = path.join(root, 'rites');
-    await makeRepo(rites, 'rites source\n');
+    const sampleApp = path.join(root, 'sample-app');
+    await makeRepo(sampleApp, 'sample app source\n');
     const loopRoot = path.join(root, '.loop');
     await mkdir(path.join(loopRoot, 'evidence'), { recursive: true });
     await writeFile(path.join(loopRoot, 'run-state.yaml'), 'version: 1\nproject_decision: owner-state\n');
@@ -188,12 +188,12 @@ try {
     await mkdir(path.join(root, '.triad-plus'), { recursive: true });
     await writeFile(path.join(root, '.triad-plus', 'team.json'), teamBytes);
     const loopBefore = await treeSnapshot(loopRoot);
-    const repoBefore = await treeSnapshot(rites);
-    const repoHeadBefore = git(rites, ['rev-parse', 'HEAD']);
-    const repoStatusBefore = git(rites, ['status', '--porcelain']);
+    const repoBefore = await treeSnapshot(sampleApp);
+    const repoHeadBefore = git(sampleApp, ['rev-parse', 'HEAD']);
+    const repoStatusBefore = git(sampleApp, ['status', '--porcelain']);
     const answers = [
       '', '', '1', '1',
-      'rites', '', '', '', '',
+      'sample-app', '', '', '', '',
       'opencode,codex,claude-code,copilot,antigravity,hermes', 'install',
     ];
     const setup = terminalInput(root, answers, {
@@ -216,16 +216,16 @@ try {
     assert.match(setup.stdout, /Readiness: NOT READY/);
     assert.match(setup.stdout, /\/triad/);
     assert.equal(await readFile(path.join(root, 'PRD.md'), 'utf8'), prd);
-    assert.equal(git(rites, ['remote']), '');
-    assert.equal(git(rites, ['show', 'HEAD:README.md']), 'rites source');
-    assert.equal(git(rites, ['rev-parse', 'HEAD']), repoHeadBefore, 'the fixture commit is preserved');
-    assert.equal(git(rites, ['status', '--porcelain']), repoStatusBefore, 'product repository contents remain unchanged');
-    assert.deepEqual(await treeSnapshot(rites), repoBefore, 'all committed repository files remain byte-identical');
+    assert.equal(git(sampleApp, ['remote']), '');
+    assert.equal(git(sampleApp, ['show', 'HEAD:README.md']), 'sample app source');
+    assert.equal(git(sampleApp, ['rev-parse', 'HEAD']), repoHeadBefore, 'the fixture commit is preserved');
+    assert.equal(git(sampleApp, ['status', '--porcelain']), repoStatusBefore, 'product repository contents remain unchanged');
+    assert.deepEqual(await treeSnapshot(sampleApp), repoBefore, 'all committed repository files remain byte-identical');
     assert.deepEqual(await treeSnapshot(loopRoot), loopBefore, '.loop owner state and evidence remain byte-identical');
     assert.deepEqual(await readFile(path.join(root, '.triad-plus', 'team.json')), teamBytes, 'existing team owner data is reused unchanged');
     const projectYaml = await readFile(path.join(root, 'project.yaml'), 'utf8');
     assert.equal((projectYaml.match(/^  - id:/gm) ?? []).length, 1, 'exactly one repository is mapped');
-    assert.match(projectYaml, /path: "\.\/rites"/, 'the direct child repository mapping is explicit');
+    assert.match(projectYaml, /path: "\.\/sample-app"/, 'the direct child repository mapping is explicit');
     const controlGit = run('git', ['-C', root, 'rev-parse', '--show-toplevel'], root);
     assert.notEqual(controlGit.status, 0, 'Control Workspace stays non-Git');
     const manifestPath = path.join(root, '.triad-plus', 'installation.json');
@@ -291,14 +291,14 @@ try {
     await mkdir(greenRoot);
     const greenHome = path.join(fixture, 'home-green');
     await mkdir(greenHome);
-    const greenAnswers = ['', '', '2', '1', 'rites', '', '', '', '', 'opencode', '', 'install'];
+    const greenAnswers = ['', '', '2', '1', 'sample-app', '', '', '', '', 'opencode', '', 'install'];
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
     await saveTranscript('greenfield-not-ready', green);
     assert.match(green.stdout, /INIT local Git only \(after approval; no remote\/push\)/);
     assert.match(green.stdout, /root PRD\.md/);
     assert.match(green.stdout, /quality-gates\.yaml/);
-    const greenRepo = path.join(greenRoot, 'rites');
+    const greenRepo = path.join(greenRoot, 'sample-app');
     assert.equal(git(greenRepo, ['branch', '--show-current']), 'main');
     assert.equal(git(greenRepo, ['remote']), '');
     const head = run('git', ['-C', greenRepo, 'rev-parse', '--verify', 'HEAD'], greenRepo);
