@@ -61,7 +61,7 @@ const packedInfo = JSON.parse(packed.stdout);
 const tarball = path.join(work, (Array.isArray(packedInfo) ? packedInfo[0] : Object.values(packedInfo)[0]).filename);
 const app = path.join(work, "clean-app");
 await mkdir(app);
-const install = spawnSync(npm, ["install", "--offline", "--no-audit", "--no-fund", "--ignore-scripts", tarball], { cwd: app, encoding: "utf8" });
+const install = spawnSync(npm, ["install", "--prefix", app, "--offline", "--no-audit", "--no-fund", "--ignore-scripts", tarball], { cwd: app, encoding: "utf8" });
 assert.equal(install.status, 0, install.stderr);
 const installedRoot = path.join(app, "node_modules", "triad-plus");
 const installedEntries = await readdir(path.join(app, "node_modules"));
