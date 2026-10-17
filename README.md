@@ -72,7 +72,7 @@ blocked`. The Orchestrator governs the loop. When configured, Evaluator+ runs
 automatically after approval with a fresh packet; a `FAIL` is information for a
 future user-initiated run, never an automatic repair.
 
-## Start with OpenCode
+## Get started
 
 OpenCode is the canonical tutorial because it is open source and makes the
 separate Triad roles easy to inspect. Setup and run time depend on your host and
@@ -80,33 +80,32 @@ project; this guide does not promise that a full loop finishes in five minutes.
 
 ### One quickstart: root Control Workspace and root PRD
 
-Start in a dedicated Control Workspace, separate from every product
-repository. Put the source PRD at the Control Workspace root and install only
-project-scoped Triad assets; this does not write Triad commands, skills, or role
-assets to the user's OpenCode configuration. Product repositories and their
-worktrees are separate and must be mapped explicitly in `project.yaml`; Triad+
-does not discover them by scanning folders.
+Start outside the product repository. The wizard asks you to choose a dedicated
+Control Workspace, map local product repositories/worktrees explicitly, select
+adapters, and review a preview before the exact `install` confirmation. It
+does not clone repositories, push changes, or write global host configuration.
+For the step-by-step path, see [Getting started](docs/getting-started.md).
 
 ```bash
-mkdir triad-control && cd triad-control
+npx triad-plus
 ```
 
-Create `PRD.md` here with a small goal, one observable acceptance criterion,
-and a deterministic verification command such as a focused test. Then run:
+After setup, create root `PRD.md` and `.loop/quality-gates.yaml`, commit the
+mapped repositories, and create their declared worktrees; the wizard does not
+create these inputs. Check readiness and then start OpenCode:
 
 ```bash
-npx triad-plus init --host opencode --control .
 npx triad-plus doctor --host opencode --control .
 opencode
 ```
 
-In the OpenCode TUI opened at the Control Workspace root, run `/triad ./PRD.md`
-or `/triad` to use the root `PRD.md` default. Bootstrap snapshots the selected
-source to immutable `artifacts/prd.md` and records its SHA-256; keep the root
-source unchanged. If preferred, pass an external PRD path instead, for example
-`/triad /absolute/path/to/PRD.md`. Do not pass `--global` for this project-local
-setup. For host support and limitations, see
-[`docs/npx-installation.md`](docs/npx-installation.md).
+In OpenCode, run `/triad ./PRD.md` (or `/triad` to use the root default).
+`init` remains the scriptable alternative to the first-run wizard:
+
+```bash
+npx triad-plus init --host opencode --control .
+npx triad-plus doctor --host opencode --control .
+```
 
 The Orchestrator first shows the feature cards, then delegates the bounded work.
 If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencode)
@@ -196,9 +195,11 @@ BMAD workflow. See the [BMAD integration guide](docs/bmad-integration.md).
 
 Triad+ can materialize deterministic Markdown views from canonical control-plane
 records: one report for each terminal Card and a human-first final handoff. The
-views include baseline-attributed changed paths, attempts, verifier gates,
+Orchestrator must explicitly invoke the renderer with derived context; the
+renderer being available does not mean a report has been generated. The views
+include baseline-attributed changed paths, attempts, verifier gates,
 independent review, provenance, residual risks, and practical-test links. They
-never replace the JSON/YAML evidence or add an LLM reporting call. See the
+never replace JSON/YAML evidence or add an LLM reporting call. See the
 [human-readable reports guide](docs/human-readable-reports.md).
 
 ## Triad Cockpit (read-only web view)
@@ -207,10 +208,12 @@ never replace the JSON/YAML evidence or add an LLM reporting call. See the
 npx triad-plus cockpit --control /absolute/path/to/triad-control
 ```
 
-The command starts a local web view on `127.0.0.1` and prints a one-time
-link. It shows cards, attempts, verifier evidence, review documents,
-Evaluator+ results, and artifacts. Every item says who wrote it: Triad+ code,
-a Triad+ validator, or an agent's declaration.
+Run this after project/Card/attempt records exist. The command starts a local
+web view on `127.0.0.1` and prints a one-time link. It shows persisted cards,
+attempts, verifier evidence, review documents, Evaluator+ results, and
+artifacts. Every item says who wrote it: Triad+ code, a Triad+ validator, or
+an agent's declaration. A declared `in_progress` state does not show that an
+agent is currently active; Triad+ does not record agent liveness.
 
 It is read-only. It never starts agents, approves work, or writes to the
 workspace. The compiled UI ships in this package, so there is nothing more to

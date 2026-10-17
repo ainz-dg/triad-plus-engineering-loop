@@ -17,6 +17,14 @@ replayed. Ctrl+C stops the server.
 
 `npx triad-plus` with no arguments is still the setup wizard.
 
+Open Cockpit after the Control Workspace has project, Card, and attempt data
+to inspect; an empty workspace has no run history to display. The one-time URL
+is loopback-only. A declared `in_progress` state is not proof of a live agent:
+Triad+ does not record agent liveness. Cockpit reads persisted records and does
+not materialize `card-reports/<card-id>.md` or `handoff.md`; the Orchestrator
+must invoke the [human-readable report renderer](../docs/human-readable-reports.md)
+explicitly when those Markdown views are needed.
+
 What it is not:
 - It does not orchestrate, approve, start or stop agents, or record
   transitions.
