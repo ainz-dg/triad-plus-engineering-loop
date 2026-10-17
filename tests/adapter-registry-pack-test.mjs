@@ -51,7 +51,9 @@ const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--silent'], {
 });
 assert.equal(packed.status, 0, `${packed.stdout}\n${packed.stderr}`);
 const packageRecords = JSON.parse(packed.stdout);
-const packageRecord = packageRecords['triad-plus'];
+const packageRecord = Array.isArray(packageRecords)
+  ? packageRecords.find((record) => record.name === 'triad-plus' || record.id?.startsWith('triad-plus@'))
+  : packageRecords['triad-plus'] ?? packageRecords;
 assert.ok(packageRecord && Array.isArray(packageRecord.files), 'npm pack dry-run produces a triad-plus package record');
 const packedFiles = new Set(packageRecord.files.map((entry) => entry.path));
 for (const source of requiredSources.keys()) {
