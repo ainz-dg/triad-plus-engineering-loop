@@ -48,22 +48,22 @@ function prompt(answers) {
 
 try {
   // A01: a safe current directory is itself the proposed root; no sibling convention exists.
-  const container = path.join(root, 'RITES');
+  const container = path.join(root, 'sample-workspace');
   await mkdir(container);
   const classified = await inspectControlRoot(container);
   assert.equal(classified.path, container);
   assert.equal(classified.gitBoundary, null);
-  assert.equal(await readdir(root).then((entries) => entries.includes('RITES-control')), false);
+  assert.equal(await readdir(root).then((entries) => entries.includes('sample-workspace-control')), false);
 
   // A02/A03: map two independently committed Git roots and preserve their bytes.
-  const one = path.join(container, 'rites');
+  const one = path.join(container, 'sample-app');
   const two = path.join(container, 'other-repo');
   await gitRepo(one, 'product one\n');
   await gitRepo(two, 'product two\n');
   const oneBefore = await readFile(path.join(one, 'README.md'), 'utf8');
   const twoBefore = await readFile(path.join(two, 'README.md'), 'utf8');
   const entries = await validateRepositoryPlan(container, [
-    { id: 'rites', path: './rites', base_branch: 'main', project_branch: 'triad/rites-feature', worktree: 'worktrees/rites-feature' },
+    { id: 'sample-app', path: './sample-app', base_branch: 'main', project_branch: 'triad/sample-app-feature', worktree: 'worktrees/sample-app-feature' },
     { id: 'other', path: './other-repo', base_branch: 'main', project_branch: 'triad/other-feature', worktree: 'worktrees/other-feature' },
   ]);
   assert.equal(entries.length, 2);
@@ -86,7 +86,7 @@ try {
   const addForeignWorktree = spawnSync('git', ['-C', two, 'worktree', 'add', '--detach', foreignWorktree, 'HEAD'], { encoding: 'utf8' });
   assert.equal(addForeignWorktree.status, 0, addForeignWorktree.stderr);
   await assert.rejects(() => validateRepositoryPlan(container, [{
-    id: 'rites', path: './rites', base_branch: 'main', project_branch: 'triad/rites-feature',
+    id: 'sample-app', path: './sample-app', base_branch: 'main', project_branch: 'triad/sample-app-feature',
     worktree: foreignWorktree,
   }]), /Mapped worktree belongs to a different Git repository/);
 
@@ -94,21 +94,21 @@ try {
   const yaml = [
     'version: 2',
     'project:',
-    '  id: rites',
-    '  title: RITES',
+    '  id: sample-app',
+    '  title: Sample App',
     '  owner: Ainz',
     'repositories:',
     '  # owner comment must remain',
-    '  - id: rites',
-    '    path: ./rites',
+    '  - id: sample-app',
+    '    path: ./sample-app',
     '    base_branch: main',
-    '    project_branch: triad/rites-feature',
-    '    worktree: worktrees/rites-feature',
+    '    project_branch: triad/sample-app-feature',
+    '    worktree: worktrees/sample-app-feature',
     '    instructions: owner-notes.md',
     'owner_note: keep this byte-for-byte',
     '',
   ].join('\n');
-  const merged = mergeProjectYaml(yaml, entries, { projectId: 'rites', title: 'RITES' });
+  const merged = mergeProjectYaml(yaml, entries, { projectId: 'sample-app', title: 'Sample App' });
   assert.match(merged, /id: "other"/);
   assert.match(merged, /owner_note: keep this byte-for-byte/);
   assert.match(merged, /# owner comment must remain/);
@@ -116,11 +116,11 @@ try {
   const jsonSource = JSON.stringify({ project: { id: 'old', owner: 'Ainz' }, repositories: [] }, null, 2);
   const jsonMerged = JSON.parse(mergeProjectYaml(jsonSource, [entries[0]]));
   assert.equal(jsonMerged.project.owner, 'Ainz');
-  assert.equal(jsonMerged.repositories[0].id, 'rites');
+  assert.equal(jsonMerged.repositories[0].id, 'sample-app');
   assert.equal(mergeProjectYaml(jsonSource, [], { projectId: 'old' }), jsonSource);
 
   // A project config plan is read-only until the caller applies it after confirmation.
-  const configPlan = await readProjectYamlPlan(container, entries, { projectId: 'rites', title: 'RITES' });
+  const configPlan = await readProjectYamlPlan(container, entries, { projectId: 'sample-app', title: 'Sample App' });
   assert.equal(configPlan.changed, true);
   assert.equal(await readFile(configPlan.path).then(() => true, () => false), false);
   const cancelled = prompt(['install ']);
@@ -138,19 +138,19 @@ try {
   await writeProjectYamlPlan(configPlan);
   assert.match(await readFile(configPlan.path, 'utf8'), /owner: "Owner"|owner: Ainz/);
   assert.match(await readFile(configPlan.path, 'utf8'), /id: "other"/);
-  const idempotentPlan = await readProjectYamlPlan(container, entries, { projectId: 'rites', title: 'RITES' });
+  const idempotentPlan = await readProjectYamlPlan(container, entries, { projectId: 'sample-app', title: 'Sample App' });
   assert.equal(idempotentPlan.changed, false, 'reapplying an identical mapping does not rewrite project.yaml');
 
   // A new project.yaml is published without replacing a file that appears at the publication boundary.
   const publishSuccessRoot = path.join(root, 'publish-success');
   await mkdir(publishSuccessRoot);
-  const publishSuccessPlan = await readProjectYamlPlan(publishSuccessRoot, entries, { projectId: 'rites', title: 'RITES' });
+  const publishSuccessPlan = await readProjectYamlPlan(publishSuccessRoot, entries, { projectId: 'sample-app', title: 'Sample App' });
   await writeProjectYamlPlan(publishSuccessPlan);
   assert.equal(await readFile(publishSuccessPlan.path, 'utf8'), publishSuccessPlan.after, 'a missing project.yaml is published atomically');
 
   const publishConflictRoot = path.join(root, 'publish-conflict');
   await mkdir(publishConflictRoot);
-  const publishConflictPlan = await readProjectYamlPlan(publishConflictRoot, entries, { projectId: 'rites', title: 'RITES' });
+  const publishConflictPlan = await readProjectYamlPlan(publishConflictRoot, entries, { projectId: 'sample-app', title: 'Sample App' });
   const ownerBytes = Buffer.from('# created by the owner after preview\nowner_note: preserve these bytes\n');
   await assert.rejects(() => writeProjectYamlPlan(publishConflictPlan, {
     beforePublishIfAbsent: async (target) => writeFile(target, ownerBytes, { flag: 'wx' }),
@@ -210,11 +210,11 @@ try {
     { id: 'escape', path: '../outside', base_branch: 'main', project_branch: 'triad/escape-feature', worktree: 'worktrees/escape' },
   ]), /traversal/);
   await assert.rejects(() => validateRepositoryPlan(container, [
-    { id: 'rites', path: './rites', base_branch: 'main', project_branch: 'triad/rites-feature', worktree: 'worktrees/rites-feature' },
-    { id: 'rites', path: './other-repo', base_branch: 'main', project_branch: 'triad/other-feature', worktree: 'worktrees/other-feature' },
+    { id: 'sample-app', path: './sample-app', base_branch: 'main', project_branch: 'triad/sample-app-feature', worktree: 'worktrees/sample-app-feature' },
+    { id: 'sample-app', path: './other-repo', base_branch: 'main', project_branch: 'triad/other-feature', worktree: 'worktrees/other-feature' },
   ]), /duplicated/);
   await assert.rejects(() => validateRepositoryPlan(container, [
-    { id: 'dup-a', path: './rites', base_branch: 'main', project_branch: 'triad/dup-a', worktree: 'worktrees/shared' },
+    { id: 'dup-a', path: './sample-app', base_branch: 'main', project_branch: 'triad/dup-a', worktree: 'worktrees/shared' },
     { id: 'dup-b', path: './other-repo', base_branch: 'main', project_branch: 'triad/dup-b', worktree: 'worktrees/shared' },
   ]), /overlap/);
   const symlinkPath = path.join(root, 'repo-link');

@@ -1,24 +1,35 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { listAdapters, sharedSkillNames } from '../adapters/registry.mjs';
 import { validateInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repositoryRoot, 'bin', 'triad-plus.js');
 const fixture = await mkdtemp(path.join(os.tmpdir(), 'triad-setup-cli-'));
+const digest = (value) => createHash('sha256').update(value).digest('hex');
 const pseudoTerminalAvailable = ['darwin', 'linux'].includes(process.platform)
   && spawnSync('python3', ['--version'], { encoding: 'utf8' }).status === 0;
 
 function run(command, args, cwd, env = {}) {
   return spawnSync(command, args, {
     cwd,
-    env: { ...process.env, ...env },
+    env: { ...safeParentEnvironment(), ...env },
     encoding: 'utf8',
     timeout: 90_000,
   });
+}
+
+function safeParentEnvironment() {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|COOKIE)/i.test(name)));
+}
+
+function runCli(args, cwd, env = {}) {
+  return run(process.execPath, [cli, ...args], cwd, env);
 }
 
 function terminalInput(cwd, answers, env) {
@@ -64,7 +75,7 @@ function terminalInput(cwd, answers, env) {
     'sys.exit(os.waitstatus_to_exitcode(status))',
   ].join('\n');
   return spawnSync('python3', ['-c', pythonPty, process.execPath, cli], {
-    cwd, env: { ...process.env, ...env }, input, encoding: 'utf8', timeout: 95_000,
+    cwd, env: { ...safeParentEnvironment(), ...env }, input, encoding: 'utf8', timeout: 95_000,
     maxBuffer: 4 * 1024 * 1024,
   });
 }
@@ -93,31 +104,111 @@ async function makeRepo(directory, contents) {
   git(directory, ['commit', '-m', 'fixture baseline']);
 }
 
+async function filesUnder(directory) {
+  const files = [];
+  async function walk(current) {
+    for (const entry of (await readdir(current, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) await walk(target);
+      else if (entry.isFile()) files.push(path.relative(directory, target).split(path.sep).join('/'));
+    }
+  }
+  try { await walk(directory); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return files.sort();
+}
+
+async function treeSnapshot(directory) {
+  return Promise.all((await filesUnder(directory)).map(async (relative) => ({
+    path: relative,
+    sha256: digest(await readFile(path.join(directory, relative))),
+  })));
+}
+
+async function registryProjectAssetPaths(adapter) {
+  const paths = new Set();
+  for (const asset of adapter.projectAssets) {
+    if (asset.source === 'shared-skills') {
+      for (const name of sharedSkillNames) {
+        for (const relative of await filesUnder(path.join(repositoryRoot, 'skills', name))) {
+          paths.add(path.join(asset.destination, name, relative).split(path.sep).join('/'));
+        }
+      }
+      continue;
+    }
+    const source = path.join(repositoryRoot, asset.source);
+    const info = await lstat(source);
+    const destination = asset.source === `adapters/${adapter.id}/runtime.json` && adapter.id !== 'opencode'
+      ? `.triad-runtime/adapters/${adapter.id}/adapter.json`
+      : asset.destination;
+    if (asset.file || !info.isDirectory()) paths.add(destination.split(path.sep).join('/'));
+    else for (const relative of await filesUnder(source)) paths.add(path.join(destination, relative).split(path.sep).join('/'));
+  }
+  return paths;
+}
+
+function teamConfiguration() {
+  const roles = {};
+  for (const id of ['orchestrator', 'developer', 'reviewer', 'evaluator']) {
+    roles[id] = { displayName: id, persona: `${id} persona`, model: null, reasoning_effort: null, enabled: id !== 'evaluator' };
+  }
+  return { schema_version: 1, interaction: { language: 'English', owner_name: 'Test Owner', communication_style: 'concise' }, roles };
+}
+
 try {
   if (!pseudoTerminalAvailable) {
     process.stdout.write('Interactive setup CLI transcript: SKIPPED (no supported pseudo-terminal runner).\n');
   } else {
-    // Actual TTY transcript for A01-A03/A07/A13: root folder, two existing repos, and two adapters.
-    const root = path.join(fixture, 'RITES');
+    // Single integrated first-install smoke: one non-Git Control Workspace,
+    // one direct-child Git repository, and all six adapters selected at once.
+    const root = path.join(fixture, 'sample-workspace');
     const home = path.join(fixture, 'home-existing');
-    const codexHome = path.join(home, '.codex');
+    const xdgHome = path.join(fixture, 'xdg-config');
+    const codexHome = path.join(fixture, 'codex-home');
+    const hermesHome = path.join(fixture, 'hermes-home');
+    const hostlessPath = path.join(fixture, 'hostless-bin');
+    const isolatedTmp = path.join(fixture, 'tmp');
     await mkdir(root, { recursive: true });
     await mkdir(home, { recursive: true });
-    const prd = '# RITES source PRD\nOwner-authored; must remain unchanged.\n';
+    for (const directory of [xdgHome, codexHome, hermesHome, hostlessPath, isolatedTmp]) await mkdir(directory, { recursive: true });
+    for (const command of ['git', 'python3']) {
+      const executable = spawnSync('which', [command], { encoding: 'utf8' });
+      assert.equal(executable.status, 0, `the local ${command} fixture executable is available`);
+      await symlink(executable.stdout.trim(), path.join(hostlessPath, command));
+    }
+    const prd = '# Sample Workspace source PRD\nOwner-authored; must remain unchanged.\n';
     await writeFile(path.join(root, 'PRD.md'), prd);
-    const rites = path.join(root, 'rites');
-    const other = path.join(root, 'other-repo');
-    await makeRepo(rites, 'rites source\n');
-    await makeRepo(other, 'other source\n');
+    const sampleApp = path.join(root, 'sample-app');
+    await makeRepo(sampleApp, 'sample app source\n');
+    const loopRoot = path.join(root, '.loop');
+    await mkdir(path.join(loopRoot, 'evidence'), { recursive: true });
+    await writeFile(path.join(loopRoot, 'run-state.yaml'), 'version: 1\nproject_decision: owner-state\n');
+    await writeFile(path.join(loopRoot, 'evidence', 'attempt.json'), '{"status":"owner-evidence"}\n');
+    const teamBytes = Buffer.from(`${JSON.stringify(teamConfiguration(), null, 2)}\n`);
+    await mkdir(path.join(root, '.triad-plus'), { recursive: true });
+    await writeFile(path.join(root, '.triad-plus', 'team.json'), teamBytes);
+    const loopBefore = await treeSnapshot(loopRoot);
+    const repoBefore = await treeSnapshot(sampleApp);
+    const repoHeadBefore = git(sampleApp, ['rev-parse', 'HEAD']);
+    const repoStatusBefore = git(sampleApp, ['status', '--porcelain']);
     const answers = [
-      '', '', '1', '2',
-      'rites', '', '', '', '',
-      'other', './other-repo', '', '', '',
-      'opencode,codex', '', 'install',
+      '', '', '1', '1',
+      'sample-app', '', '', '', '',
+      'opencode,codex,claude-code,copilot,antigravity,hermes', 'install',
     ];
-    const setup = terminalInput(root, answers, { HOME: home, CODEX_HOME: codexHome });
+    const setup = terminalInput(root, answers, {
+      HOME: home,
+      XDG_CONFIG_HOME: xdgHome,
+      CODEX_HOME: codexHome,
+      HERMES_HOME: hermesHome,
+      PATH: hostlessPath,
+      TMPDIR: isolatedTmp,
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    });
     assert.equal(setup.status, 0, `${setup.stderr}\n${setup.stdout}`);
-    await saveTranscript('two-repo-two-harness', setup);
+    await saveTranscript('single-tty-six-adapter-first-install', setup);
     const realRoot = await realpath(root);
     assert.ok(setup.stdout.includes(`Control Workspace (open this path): ${realRoot}`), setup.stdout);
     assert.match(setup.stdout, /Triad\+ setup completed\./);
@@ -125,35 +216,89 @@ try {
     assert.match(setup.stdout, /Readiness: NOT READY/);
     assert.match(setup.stdout, /\/triad/);
     assert.equal(await readFile(path.join(root, 'PRD.md'), 'utf8'), prd);
-    assert.equal(git(rites, ['remote']), '');
-    assert.equal(git(other, ['remote']), '');
-    assert.equal(git(rites, ['show', 'HEAD:README.md']), 'rites source');
-    assert.equal(git(other, ['show', 'HEAD:README.md']), 'other source');
-    assert.equal(await readFile(path.join(root, 'project.yaml'), 'utf8').then((yaml) => (yaml.match(/^  - id:/gm) ?? []).length), 2);
+    assert.equal(git(sampleApp, ['remote']), '');
+    assert.equal(git(sampleApp, ['show', 'HEAD:README.md']), 'sample app source');
+    assert.equal(git(sampleApp, ['rev-parse', 'HEAD']), repoHeadBefore, 'the fixture commit is preserved');
+    assert.equal(git(sampleApp, ['status', '--porcelain']), repoStatusBefore, 'product repository contents remain unchanged');
+    assert.deepEqual(await treeSnapshot(sampleApp), repoBefore, 'all committed repository files remain byte-identical');
+    assert.deepEqual(await treeSnapshot(loopRoot), loopBefore, '.loop owner state and evidence remain byte-identical');
+    assert.deepEqual(await readFile(path.join(root, '.triad-plus', 'team.json')), teamBytes, 'existing team owner data is reused unchanged');
+    const projectYaml = await readFile(path.join(root, 'project.yaml'), 'utf8');
+    assert.equal((projectYaml.match(/^  - id:/gm) ?? []).length, 1, 'exactly one repository is mapped');
+    assert.match(projectYaml, /path: "\.\/sample-app"/, 'the direct child repository mapping is explicit');
+    const controlGit = run('git', ['-C', root, 'rev-parse', '--show-toplevel'], root);
+    assert.notEqual(controlGit.status, 0, 'Control Workspace stays non-Git');
     const manifestPath = path.join(root, '.triad-plus', 'installation.json');
     const multi = JSON.parse(await readFile(manifestPath, 'utf8'));
     validateInstallationManifest(multi);
     assert.equal(multi.schema_version, 2);
-    assert.deepEqual(multi.adapters.map((adapter) => adapter.id), ['codex', 'opencode']);
-    assert.equal(await stat(path.join(root, '.opencode', 'commands', 'triad.md')).then(() => true), true);
-    assert.equal(await stat(path.join(root, '.agents', 'skills', 'triad-loop-bootstrap', 'SKILL.md')).then(() => true), true);
-    assert.equal(await readFile(path.join(root, '.triad-runtime', 'adapter.json'), 'utf8').then((text) => JSON.parse(text).id), 'opencode');
-    assert.equal(await readFile(path.join(root, '.triad-runtime', 'adapters', 'codex', 'adapter.json'), 'utf8').then((text) => JSON.parse(text).id), 'codex');
-    assert.equal(await readFile(path.join(home, '.codex', 'prompts', 'triad.md'), 'utf8').then(() => true, () => false), false, 'global Codex prompt was not installed');
+    const adapters = listAdapters();
+    const expectedIds = adapters.map((adapter) => adapter.id).sort();
+    assert.deepEqual(expectedIds, ['antigravity', 'claude-code', 'codex', 'copilot', 'hermes', 'opencode']);
+    assert.deepEqual(multi.adapters.map((adapter) => adapter.id), expectedIds, 'all six selected adapters are recorded once');
+    assert.equal(new Set(multi.adapters.map((adapter) => adapter.id)).size, expectedIds.length, 'adapter membership contains no duplicates');
+    assert.equal(await readFile(path.join(root, '.triad-runtime', 'adapter.json'), 'utf8').then((text) => JSON.parse(text).id), 'opencode', 'the first selected adapter retains the singleton runtime metadata');
+    for (const adapter of adapters) {
+      const record = multi.adapters.find((entry) => entry.id === adapter.id);
+      assert.deepEqual(record.scopes, { project: true, global: false }, `${adapter.id} is installed project-only`);
+      const owned = new Map(record.managed_assets.filter((asset) => asset.scope === 'project').map((asset) => [asset.path, asset]));
+      for (const target of await registryProjectAssetPaths(adapter)) {
+        const asset = owned.get(target);
+        assert.ok(asset, `${adapter.id} registry project asset is in schema-v2 manifest: ${target}`);
+        const bytes = await readFile(path.join(root, target));
+        assert.ok(bytes.length > 0, `${adapter.id} project asset is readable: ${target}`);
+        assert.equal(digest(bytes), asset.sha256, `${adapter.id} manifest hash matches its materialized asset: ${target}`);
+      }
+      for (const projectPath of adapter.projectPaths(root)) {
+        const relative = path.relative(root, projectPath).split(path.sep).join('/');
+        assert.ok(relative && !relative.startsWith('../'), `${adapter.id} project path stays within the Control Workspace: ${relative}`);
+        const metadata = await lstat(projectPath).catch((error) => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        assert.ok(metadata?.isDirectory() || metadata?.isFile(), `${adapter.id} registry projectPath exists: ${relative}`);
+      }
+      const runtimePath = adapter.id === 'opencode'
+        ? '.triad-runtime/adapter.json'
+        : `.triad-runtime/adapters/${adapter.id}/adapter.json`;
+      assert.equal(JSON.parse(await readFile(path.join(root, runtimePath), 'utf8')).id, adapter.id, `${adapter.id} has distinct runtime metadata`);
+    }
+    assert.ok(multi.shared_assets.length > 0, 'shared assets have an ownership index');
+    for (const shared of multi.shared_assets) {
+      const owners = multi.adapters.filter((entry) => entry.managed_assets.some((asset) => asset.scope === shared.scope && asset.path === shared.path && asset.sha256 === shared.sha256)).map((entry) => entry.id).sort();
+      assert.deepEqual(shared.owners, owners, `shared-asset owners are exact: ${shared.path}`);
+      assert.equal(digest(await readFile(path.join(root, shared.path))), shared.sha256, `shared bytes match manifest: ${shared.path}`);
+    }
+    for (const directory of [home, xdgHome, codexHome, hermesHome, isolatedTmp]) {
+      assert.deepEqual(await filesUnder(directory), [], `local-only setup wrote no global files under ${directory}`);
+    }
+    const isolatedHostEnv = { HOME: home, XDG_CONFIG_HOME: xdgHome, CODEX_HOME: codexHome, HERMES_HOME: hermesHome, PATH: hostlessPath };
+    const fixtureBeforeDiagnostics = await treeSnapshot(fixture);
+    const list = runCli(['adapter', 'list', '--control', root], root, isolatedHostEnv);
+    assert.equal(list.status, 0, `${list.stderr}\n${list.stdout}`);
+    for (const id of expectedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=not_configured host=unavailable`), `${id} keeps installed assets distinct from its absent host binary`);
+    assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter list and isolated global locations are read-only');
+    const manifestBytesBeforeDoctor = await readFile(manifestPath);
+    const doctor = runCli(['adapter', 'doctor', '--control', root], root, isolatedHostEnv);
+    assert.equal(doctor.status, 0, `${doctor.stderr}\n${doctor.stdout}`);
+    assert.match(doctor.stdout, /attempt dispatch=unsupported/);
+    assert.match(doctor.stdout, /host=unavailable/);
+    assert.deepEqual(await readFile(manifestPath), manifestBytesBeforeDoctor, 'adapter doctor is read-only');
+    assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter doctor and isolated global locations leave all fixture files unchanged');
 
     // A04-A05: actual greenfield setup initializes local Git only after exact approval and reports missing readiness inputs.
     const greenRoot = path.join(fixture, 'GREENFIELD');
     await mkdir(greenRoot);
     const greenHome = path.join(fixture, 'home-green');
     await mkdir(greenHome);
-    const greenAnswers = ['', '', '2', '1', 'rites', '', '', '', '', 'opencode', '', 'install'];
+    const greenAnswers = ['', '', '2', '1', 'sample-app', '', '', '', '', 'opencode', '', 'install'];
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
     await saveTranscript('greenfield-not-ready', green);
     assert.match(green.stdout, /INIT local Git only \(after approval; no remote\/push\)/);
     assert.match(green.stdout, /root PRD\.md/);
     assert.match(green.stdout, /quality-gates\.yaml/);
-    const greenRepo = path.join(greenRoot, 'rites');
+    const greenRepo = path.join(greenRoot, 'sample-app');
     assert.equal(git(greenRepo, ['branch', '--show-current']), 'main');
     assert.equal(git(greenRepo, ['remote']), '');
     const head = run('git', ['-C', greenRepo, 'rev-parse', '--verify', 'HEAD'], greenRepo);
