@@ -15,7 +15,14 @@ function run(args, { home, pathValue = '', timeout = 30_000 } = {}) {
     cwd: repositoryRoot,
     encoding: 'utf8',
     timeout,
-    env: { ...process.env, HOME: home, CODEX_HOME: path.join(home, '.codex'), PATH: pathValue },
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, '.config'),
+      CODEX_HOME: path.join(home, '.codex'),
+      HERMES_HOME: path.join(home, '.hermes'),
+      PATH: pathValue,
+    },
   });
 }
 
