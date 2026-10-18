@@ -3,6 +3,9 @@
 Triad+ installs a project-control workspace, not application code. Keep it
 outside product repositories whenever possible.
 
+For the recommended first-run journey from wizard through PRD, evidence,
+Markdown reports, and Cockpit, see [Getting started](getting-started.md).
+
 ```bash
 npx triad-plus
 ```
@@ -160,14 +163,14 @@ Workspace; the first add is a dry run, and `--apply` performs the reviewed
 project-local change:
 
 ```bash
-npx triad-plus@1.17.0 adapter list --control .
-npx triad-plus@1.17.0 adapter add copilot --control .
-npx triad-plus@1.17.0 adapter add copilot --control . --apply
-npx triad-plus@1.17.0 adapter doctor copilot --control .
-npx triad-plus@1.17.0 adapter upgrade copilot --control .
-npx triad-plus@1.17.0 adapter upgrade copilot --control . --apply
-npx triad-plus@1.17.0 adapter remove copilot --control .
-npx triad-plus@1.17.0 adapter remove copilot --control . --apply
+npx triad-plus@1.19.0 adapter list --control .
+npx triad-plus@1.19.0 adapter add copilot --control .
+npx triad-plus@1.19.0 adapter add copilot --control . --apply
+npx triad-plus@1.19.0 adapter doctor copilot --control .
+npx triad-plus@1.19.0 adapter upgrade copilot --control .
+npx triad-plus@1.19.0 adapter upgrade copilot --control . --apply
+npx triad-plus@1.19.0 adapter remove copilot --control .
+npx triad-plus@1.19.0 adapter remove copilot --control . --apply
 ```
 
 `list`, `doctor`, and `version` are read-only. Add is a dry run without

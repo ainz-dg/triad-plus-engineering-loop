@@ -101,8 +101,19 @@ Reviewer records. The renderer attributes the complete changed-path delta to the
 Card baseline, including rework, renames, and deletions. The final handoff opens
 with a human-readable summary and links to those reports while retaining the
 technical delivery evidence. Reports are atomic, repeatable, relative-path
-views; they are not a new source of truth or an additional agent call. See the
-[human-readable reports guide](human-readable-reports.md).
+views; they are not a new source of truth or an additional agent call. The
+renderer must be explicitly invoked with derived context: an available
+renderer does not mean `card-reports/<card-id>.md` or `handoff.md` has been
+materialized. See the [human-readable reports guide](human-readable-reports.md).
+
+## Cockpit (read-only)
+
+Once a Control Workspace contains project, Card, and attempt records, start the
+local view with `npx triad-plus cockpit --control <control-workspace>`. It
+shows persisted records and linked evidence; it neither starts agents nor
+generates the human-readable reports. The state `in_progress` is a declared
+workflow value, not proof that an agent is active. Triad+ does not record agent
+liveness. See the [Cockpit guide](../cockpit/README.md).
 
 For a configured demo service, record its command, local URL, remote-access mode,
 and remote URL in the project and handoff. `localhost` is local-only; do not give

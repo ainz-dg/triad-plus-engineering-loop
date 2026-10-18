@@ -103,7 +103,19 @@ path modificati, inclusi rework, rinomina e cancellazione. L’handoff finale si
 apre con un riepilogo leggibile e collega questi report, mantenendo anche le
 evidence tecniche di delivery. I report sono scritti atomicamente, sono
 ripetibili e usano riferimenti relativi: non sono una nuova source of truth né
-una chiamata aggiuntiva a un agente. Vedi la [guida ai report leggibili](human-readable-reports.md).
+una chiamata aggiuntiva a un agente. Il renderer va invocato esplicitamente con
+il contesto derivato: la sua disponibilità non significa che
+`card-reports/<card-id>.md` o `handoff.md` siano già stati materializzati.
+Vedi la [guida ai report leggibili](human-readable-reports.md).
+
+## Cockpit (sola lettura)
+
+Quando il Control Workspace contiene già record di progetto, Card e attempt,
+avvia la vista locale con `npx triad-plus cockpit --control <control-workspace>`.
+Mostra record persistiti ed evidence collegate; non avvia agenti e non genera i
+report human-readable. Lo stato dichiarato `in_progress` non dimostra che un
+agente sia attivo: Triad+ non registra la liveness degli agenti. Vedi la
+[guida del Cockpit](../cockpit/README.md).
 
 Per ogni demo configurata, registra nel progetto e nell’handoff comando, URL
 locale, modalità di accesso remoto e URL remoto. `localhost` è solo locale: non

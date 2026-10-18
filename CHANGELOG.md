@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.19.0 — candidate (not published)
+## 1.19.0 — 2026-10-17
+
+Published to [npm](https://www.npmjs.com/package/triad-plus/v/1.19.0) and as a
+[GitHub Release](https://github.com/ainz-dg/triad-plus-engineering-loop/releases/tag/v1.19.0).
+The release tag and `main` point to
+`f3833e071fe03c5396babc3117529987368522e3`.
 
 - Add an explicit first-run terminal setup flow for choosing a separate
   Control Workspace and mapping one or more product repositories. The
