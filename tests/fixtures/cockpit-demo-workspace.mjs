@@ -293,6 +293,10 @@ items:
     },
   });
   await put(path.join(control, ".loop/reviews/NOTE-102-review.md"), "# Review — NOTE-102\n\nIn progress. Waiting for the updated acceptance criteria (`Esc` behaviour).\n");
+  await put(path.join(control, "card-reports/NOTE-102.md"), "# Card report — NOTE-102\n\nDeclared outcome: approved. This summary is not a validated verdict.\n");
+  await put(path.join(control, "card-reports/NOTE-101-vs-NOTE-102.md"), "# Unattributed Card summary\n");
+  await put(path.join(control, "handoff.md"), "# Delivery handoff — Lumen Notes\n\nDerived delivery view, not a new delivery decision.\n");
+  await put(path.join(control, ".loop/evidence/NOTE-102/attempt-001/preview.json"), "{}\n");
 
   // NOTE-103: assignment issued, no verifier evidence yet.
   await writeAssignment("NOTE-103", 1);

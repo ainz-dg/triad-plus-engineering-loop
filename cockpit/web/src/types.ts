@@ -69,6 +69,7 @@ export interface CardSummary {
 
 export interface CardList {
   project: string;
+  handoff?: DocumentRef | null;
   work_queue: { status: "ok" | "partial" | "unreadable" | "missing"; source: string; provenance: Provenance; warnings: string[] };
   cards: CardSummary[];
   unmatched_evaluations: Array<{ source: string; provenance: Provenance; feature_id: string | null; readable: boolean }>;
@@ -188,6 +189,8 @@ export interface CardDetail {
   project: string;
   id: string;
   declared: Declared;
+  card_report?: DocumentRef | null;
+  ambiguous_reports?: DocumentRef[];
   attempts: Attempt[];
   evaluations: Evaluation[];
   reviewer: { provenance: Provenance; note: string; documents: DocumentRef[]; ambiguous_documents: DocumentRef[] };

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,6 +32,10 @@ async function writeQueue(control: string, project: string) {
   await mkdir(directory, { recursive: true });
   const items = Object.entries(TITLES[project]).map(([id, title]) => `  - id: ${id}\n    title: ${title}\n    state: ready\n`).join("");
   await writeFile(path.join(directory, "work-queue.yaml"), `items:\n${items}`, "utf8");
+  const base = path.dirname(directory);
+  await mkdir(path.join(base, "card-reports"));
+  await writeFile(path.join(base, "card-reports/SHARED-1.md"), `# ${project} Card report\n`, "utf8");
+  await writeFile(path.join(base, "handoff.md"), `# ${project} handoff\n`, "utf8");
 }
 
 function installFetch() {
@@ -113,6 +117,28 @@ afterEach(() => {
 });
 
 describe("F4: project isolation with a shared card ID", () => {
+  it("opens only the selected project's Card report and delivery handoff", async () => {
+    go("#/p/alpha/c/SHARED-1");
+    render(<App />);
+    for (const project of ["alpha", "beta"]) {
+      if (project === "beta") go("#/p/beta/c/SHARED-1");
+      await screen.findByRole("heading", { level: 1, name: TITLES[project]["SHARED-1"] });
+      fireEvent.click(screen.getByRole("button", { name: "Card report" }));
+      const report = await screen.findByRole("dialog", { name: "SHARED-1.md" });
+      await within(report).findByRole("heading", { name: `${project} Card report` });
+      expect(window.location.hash).toContain(`file=projects%2F${project}%2Fcard-reports%2FSHARED-1.md`);
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      fireEvent.click(screen.getByRole("button", { name: "Delivery handoff" }));
+      const handoff = await screen.findByRole("dialog", { name: "handoff.md" });
+      await within(handoff).findByRole("heading", { name: `${project} handoff` });
+      expect(window.location.hash).toContain(`file=projects%2F${project}%2Fhandoff.md`);
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    }
+    expect(violations).toEqual([]);
+  });
+
   it("never shows beta's card while alpha's same-ID card is loading", async () => {
     go("#/p/beta/c/SHARED-1");
     render(<App />);
