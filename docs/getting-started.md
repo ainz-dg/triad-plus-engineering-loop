@@ -5,6 +5,10 @@ separate from product repositories. The terminal wizard is the normal
 first-run path; it does not scan sibling folders or create a PRD, quality
 gates, repository commits, or worktrees for you.
 
+For a single procedural OpenCode journey from an empty Control Workspace to
+reading the reports and Cockpit, follow the
+[OpenCode first-loop tutorial](tutorials/opencode-first-loop.md).
+
 ## 1. Install and onboard
 
 Start from a directory outside the product repository, then launch the wizard:

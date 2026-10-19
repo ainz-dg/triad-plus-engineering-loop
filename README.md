@@ -85,6 +85,9 @@ Control Workspace, map local product repositories/worktrees explicitly, select
 adapters, and review a preview before the exact `install` confirmation. It
 does not clone repositories, push changes, or write global host configuration.
 For the step-by-step path, see [Getting started](docs/getting-started.md).
+For the complete OpenCode walkthrough—from setup and readiness through a first
+loop, its evidence, human-readable reports, and the read-only Cockpit—see the
+[OpenCode first-loop tutorial](docs/tutorials/opencode-first-loop.md).
 
 ```bash
 npx triad-plus
