@@ -496,7 +496,9 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .j-num { color: var(--j-num); }
 .j-lit { color: var(--j-lit); }
 
-.markdown { max-width: 72ch; font-size: 14.5px; line-height: 1.65; display: grid; gap: 12px; color: var(--text); }
+.markdown { width: 100%; min-width: 0; max-width: 72ch; grid-template-columns: minmax(0, 1fr); font-size: 14.5px; line-height: 1.65; display: grid; gap: 12px; color: var(--text); }
+.markdown > * { min-width: 0; max-width: 100%; }
+.markdown > :not(.table-scroll):not(.code-block) { overflow-wrap: anywhere; }
 .markdown h3 { font-size: 20px; }
 .markdown h4 { font-size: 16px; }
 .markdown h5, .markdown h6 { font-size: 14px; }
