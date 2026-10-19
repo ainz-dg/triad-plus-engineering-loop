@@ -59,6 +59,22 @@ function projectFile(project, relative) {
   return project.base ? `${project.base}/${relative}` : relative;
 }
 
+// A discoverable, readable file is not proof of how its contents were produced.
+// Reuse the bounded reader, including its allowlist and project containment.
+function documentUnavailable(error) {
+  return error instanceof AccessError || ["EACCES", "EPERM", "ELOOP", "ENOENT", "ENOTDIR"].includes(error?.code);
+}
+
+async function documentRef(reader, project, relative) {
+  try {
+    const file = await reader.readText(project.base, relative, { maxBytes: 1 });
+    return file ? { source: projectFile(project, file.path), provenance: PROVENANCE.derived } : null;
+  } catch (error) {
+    if (documentUnavailable(error)) return null;
+    throw error;
+  }
+}
+
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -667,6 +683,7 @@ export async function listCards(reader, project) {
   });
   return {
     project: project.id,
+    handoff: await documentRef(collected.reader, project, "handoff.md"),
     work_queue: {
       status: collected.workQueue.status,
       source: collected.workQueue.source,
@@ -889,16 +906,36 @@ function attributedCard(name, ids) {
 async function reviewDocuments(reader, project, cardId, ids) {
   const documents = [];
   const ambiguous = [];
-  for (const directory of [".loop/reviews", "card-reports"]) {
-    for (const entry of await reader.list(project.base, directory)) {
-      if (!entry.file) continue;
-      const attribution = attributedCard(entry.name, ids);
-      const document = { source: projectFile(project, `${directory}/${entry.name}`), provenance: directory === "card-reports" ? PROVENANCE.code : PROVENANCE.declared };
-      if (attribution.card === cardId) documents.push(document);
-      else if (attribution.ambiguous?.includes(cardId)) ambiguous.push({ ...document, matches: attribution.ambiguous });
-    }
+  for (const entry of await reader.list(project.base, ".loop/reviews")) {
+    if (!entry.file) continue;
+    const attribution = attributedCard(entry.name, ids);
+    const document = { source: projectFile(project, `.loop/reviews/${entry.name}`), provenance: PROVENANCE.declared };
+    if (attribution.card === cardId) documents.push(document);
+    else if (attribution.ambiguous?.includes(cardId)) ambiguous.push({ ...document, matches: attribution.ambiguous });
   }
   return { documents, ambiguous };
+}
+
+async function cardReport(reader, project, cardId, ids) {
+  let report = null;
+  const ambiguous = [];
+  let entries;
+  try { entries = await reader.list(project.base, "card-reports"); }
+  catch (error) {
+    if (documentUnavailable(error)) return { report, ambiguous };
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.file || !entry.name.endsWith(".md")) continue;
+    const attribution = attributedCard(entry.name, ids);
+    if (attribution.ambiguous?.includes(cardId)) {
+      const document = await documentRef(reader, project, `card-reports/${entry.name}`);
+      if (document) ambiguous.push({ ...document, matches: attribution.ambiguous });
+    } else if (attribution.card === cardId && entry.name === `${cardId}.md`) {
+      report = await documentRef(reader, project, `card-reports/${entry.name}`);
+    }
+  }
+  return { report, ambiguous };
 }
 
 export async function readCard(reader, project, cardId) {
@@ -944,10 +981,13 @@ export async function readCard(reader, project, cardId) {
   }
 
   const review = await reviewDocuments(evidenceReader, project, cardId, ids);
+  const report = await cardReport(evidenceReader, project, cardId, ids);
   return {
     project: project.id,
     id: cardId,
     declared: declaredCard(collected, cardId),
+    card_report: report.report,
+    ambiguous_reports: report.ambiguous,
     attempts,
     evaluations: await evaluatorViews(evidenceReader, project, collected, cardId, verifications, latestPass, ids),
     reviewer: {

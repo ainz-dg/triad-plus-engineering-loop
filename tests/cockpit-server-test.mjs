@@ -683,7 +683,9 @@ try {
   assert.deepEqual(card12View.reviewer.documents.map((document) => document.source), [".loop/reviews/1.2-review.md"]);
 
   // F3: documents are attributed by whole-token ID match to exactly one card.
-  assert.deepEqual(card11View.reviewer.documents.map((document) => document.source), [".loop/reviews/1.1-review.md", "card-reports/1.1.md"]);
+  assert.deepEqual(card11View.reviewer.documents.map((document) => document.source), [".loop/reviews/1.1-review.md"]);
+  assert.deepEqual(card11View.card_report, { source: "card-reports/1.1.md", provenance: "cockpit-derived" });
+  assert.equal(card12View.card_report, null, "a passing verification does not materialize a report");
   const card111View = (await request("/api/projects/root/cards/11.1")).body;
   assert.deepEqual(card111View.reviewer.documents.map((document) => document.source), [".loop/reviews/11.1-review.md"]);
   for (const view of [card11View, card111View]) {
@@ -926,6 +928,101 @@ try {
   assert.equal((await request(`/api/projects/alpha/files?path=${encodeURIComponent("projects/alpha/../../control/.env")}`)).status, 403);
 } finally {
   await cockpit.close();
+}
+
+// Human-readable views are discovered independently of declarations/verdicts,
+// through the same session-protected, project-contained file reader.
+{
+  const fixture = await mkdtemp(path.join(tmpdir(), "triad-cockpit-reports-"));
+  const reportControl = path.join(fixture, "control");
+  const queue = "items:\n  - id: R-1\n    state: approved\n  - id: R-2\n    state: approved\n";
+  for (const project of ["", "projects/alpha", "projects/root", "projects/missing", "projects/denied", "projects/cross", "projects/cycle", "projects/not-file"]) {
+    await put(path.join(reportControl, project, ".loop/work-queue.yaml"), queue);
+  }
+  await put(path.join(reportControl, "card-reports/R-1.md"), "# Root Card report\n\napproved\n");
+  await put(path.join(reportControl, "card-reports/R-1-vs-R-2.md"), "# Ambiguous summary\n");
+  await put(path.join(reportControl, "card-reports/R-2.json"), "{}\n");
+  await put(path.join(reportControl, "card-reports/R-2-summary.md"), "# Non-canonical report name\n");
+  await put(path.join(reportControl, ".loop/reviews/R-1-review.md"), "# Reviewer notes\n");
+  await put(path.join(reportControl, "handoff.md"), "# Root handoff\n");
+  await put(path.join(reportControl, "projects/alpha/card-reports/R-1.md"), "# Alpha Card report\n");
+  await put(path.join(reportControl, "projects/root/card-reports/R-1.md"), "# Nested root Card report\n");
+  await put(path.join(reportControl, "projects/root/handoff.md"), "# Nested root handoff\n");
+  // Empty Markdown is still a real materialized file.
+  await put(path.join(reportControl, "projects/alpha/handoff.md"), "");
+  const outsideReports = path.join(fixture, "outside");
+  await put(path.join(outsideReports, "R-1.md"), "PRIVATE OUTSIDE REPORT\n");
+  await symlink(path.join(outsideReports, "R-1.md"), path.join(reportControl, "card-reports/R-2.md"));
+  await symlink(outsideReports, path.join(reportControl, "projects/denied/card-reports"));
+  await symlink(path.join(outsideReports, "R-1.md"), path.join(reportControl, "projects/denied/handoff.md"));
+  await symlink(path.join(reportControl, "card-reports"), path.join(reportControl, "projects/cross/card-reports"));
+  await symlink(path.join(reportControl, "handoff.md"), path.join(reportControl, "projects/cross/handoff.md"));
+  await symlink("card-reports", path.join(reportControl, "projects/cycle/card-reports"));
+  await symlink("handoff.md", path.join(reportControl, "projects/cycle/handoff.md"));
+  await mkdir(path.join(reportControl, "projects/not-file/handoff.md"));
+  await mkdir(path.join(reportControl, "projects/not-file/card-reports/R-1.md"), { recursive: true });
+  await put(path.join(reportControl, "projects/overlap/.loop/work-queue.yaml"), "items:\n  - id: DOC\n  - id: DOC-1\n");
+  await put(path.join(reportControl, "projects/overlap/card-reports/DOC-1.md"), "# Ambiguous even at the canonical name\n");
+  const initial = await snapshot(fixture);
+  const reports = await startCockpitServer({ controlRoot: reportControl });
+  const get = async (route) => {
+    const response = await fetch(`http://127.0.0.1:${reports.port}${route}`, { headers: { authorization: `Bearer ${reports.token}` } });
+    return { status: response.status, body: await response.json() };
+  };
+  try {
+    const rootList = (await get("/api/projects/root/cards")).body;
+    assert.deepEqual(rootList.handoff, { source: "handoff.md", provenance: "cockpit-derived" });
+    const rootCard = (await get("/api/projects/root/cards/R-1")).body;
+    assert.deepEqual(rootCard.card_report, { source: "card-reports/R-1.md", provenance: "cockpit-derived" });
+    assert.deepEqual(rootCard.reviewer.documents.map((document) => document.source), [".loop/reviews/R-1-review.md"]);
+    assert.deepEqual(rootCard.reviewer.ambiguous_documents, []);
+    assert.equal(rootCard.control_run, null, "an approved Markdown report is not a validated Reviewer verdict");
+    for (const id of ["R-1", "R-2"]) {
+      const card = (await get(`/api/projects/root/cards/${id}`)).body;
+      assert.deepEqual(card.ambiguous_reports.map((document) => [document.source, document.matches]), [["card-reports/R-1-vs-R-2.md", ["R-1", "R-2"]]]);
+    }
+    assert.equal((await get("/api/projects/root/cards/R-2")).body.card_report, null, "approved state, a JSON file and an escaping symlink do not produce a report link");
+    assert.equal((await get("/api/projects/root/files?path=card-reports%2FR-2.md")).status, 403);
+    const alphaList = (await get("/api/projects/alpha/cards")).body;
+    const alphaCard = (await get("/api/projects/alpha/cards/R-1")).body;
+    assert.equal(alphaList.handoff.source, "projects/alpha/handoff.md");
+    assert.equal(alphaCard.card_report.source, "projects/alpha/card-reports/R-1.md");
+    const alphaReport = await get(`/api/projects/alpha/files?path=${encodeURIComponent(alphaCard.card_report.source)}`);
+    assert.equal(alphaReport.status, 200);
+    assert.equal(alphaReport.body.content, "# Alpha Card report\n");
+    assert.equal((await get(`/api/projects/alpha/files?path=${encodeURIComponent(alphaList.handoff.source)}`)).body.content, "");
+    const nestedRoot = (await get("/api/projects/projects-root/cards/R-1")).body;
+    assert.equal(nestedRoot.card_report.source, "projects/root/card-reports/R-1.md");
+    assert.equal((await get("/api/projects/projects-root/cards")).body.handoff.source, "projects/root/handoff.md");
+    assert.equal((await get(`/api/projects/projects-root/files?path=${encodeURIComponent(nestedRoot.card_report.source)}`)).body.content, "# Nested root Card report\n");
+    for (const project of ["missing", "denied", "cross", "cycle", "not-file"]) {
+      const list = await get(`/api/projects/${project}/cards`);
+      const card = await get(`/api/projects/${project}/cards/R-1`);
+      assert.equal(list.status, 200, "unavailable human-readable files must not break the project view");
+      assert.equal(card.status, 200, "unavailable human-readable files must not break the Card view");
+      assert.equal(list.body.handoff, null, `${project}: never fall back to the control-root handoff`);
+      assert.equal(card.body.card_report, null, `${project}: no absent, unsafe or non-file report link`);
+    }
+    for (const project of ["denied", "cross"]) {
+      assert.equal((await get(`/api/projects/${project}/files?path=handoff.md`)).status, 403);
+      assert.equal((await get(`/api/projects/${project}/files?path=card-reports%2FR-1.md`)).status, 403);
+    }
+    for (const id of ["DOC", "DOC-1"]) {
+      const card = (await get(`/api/projects/overlap/cards/${id}`)).body;
+      assert.equal(card.card_report, null);
+      assert.equal(card.ambiguous_reports[0].source, "projects/overlap/card-reports/DOC-1.md");
+      assert.deepEqual(card.reviewer.documents, []);
+    }
+    assert.equal((await get("/api/projects/alpha/files?path=AGENTS.md")).status, 403);
+    const unauthorized = await fetch(`http://127.0.0.1:${reports.port}/api/projects/root/cards`);
+    assert.equal(unauthorized.status, 401);
+    const mutation = await fetch(`http://127.0.0.1:${reports.port}/api/projects/root/files?path=handoff.md`, { method: "POST", headers: { authorization: `Bearer ${reports.token}` } });
+    assert.equal(mutation.status, 405);
+    assert.equal(await snapshot(fixture), initial, "report discovery and viewing must not mutate control files");
+  } finally {
+    await reports.close();
+    await rm(fixture, { recursive: true, force: true });
+  }
 }
 
 // Without a UI build the API keeps working and the shell reports it plainly.

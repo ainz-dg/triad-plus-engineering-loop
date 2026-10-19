@@ -162,7 +162,8 @@ describe("meaning is preserved", () => {
     expect(screen.getByText(/Card-level documents are not bound to an Attempt by filename/)).toBeTruthy();
     const attempt = document.querySelector("details.attempt") as HTMLElement;
     expect(attempt.textContent).not.toContain(".loop/reviews/NOTE-102-review.md");
-    expect(screen.getByText(/Not attributed — the name matches several cards/)).toBeTruthy();
+    const reviewSection = screen.getByRole("heading", { name: "Review", level: 2 }).closest("section")!;
+    expect(within(reviewSection).getByText(/Not attributed — the name matches several cards/)).toBeTruthy();
     expect(document.body.textContent).toContain("NOTE-101, NOTE-102");
   });
 
@@ -183,6 +184,68 @@ describe("meaning is preserved", () => {
     expect(screen.getByText(".loop/evidence/NOTE-199/attempt-001/verification.json")).toBeTruthy();
     expect(screen.getByText(/violates the Triad\+ contract/)).toBeTruthy();
     expect(screen.getByText("artifacts/evaluator-plus/release-candidate.json")).toBeTruthy();
+  });
+});
+
+describe("human-readable delivery views", () => {
+  it("opens materialized handoff and Card report as inert Markdown, then closes with Escape and Back", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delivery handoff" }));
+    const handoff = await screen.findByRole("dialog", { name: "handoff.md" });
+    await within(handoff).findByRole("heading", { name: "Delivery handoff — Lumen Notes" });
+    expect(window.location.hash).toBe("#/p/root?file=handoff.md");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("link", { name: /NOTE-102/ }));
+    const entry = await screen.findByRole("region", { name: "Card report" });
+    const reportButton = within(entry).getByRole("button", { name: "Card report" });
+    expect(entry.textContent).toContain("Derived human-readable view; not a new approval or verification.");
+    expect(entry.compareDocumentPosition(document.querySelector(".signals")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(reportButton);
+    const report = await screen.findByRole("dialog", { name: "NOTE-102.md" });
+    await within(report).findByRole("heading", { name: "Card report — NOTE-102" });
+    expect(report.querySelector("a, img, iframe, script")).toBeNull();
+    expect(window.location.hash).toBe("#/p/root/c/NOTE-102?file=card-reports%2FNOTE-102.md");
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("region", { name: "Reviewer" }).textContent).toContain("No validated verdict");
+    expect(screen.getByText("Read-only")).toBeTruthy();
+  });
+
+  it("does not invent report links from approval or fall back to the root project's handoff", async () => {
+    go("#/p/root/c/NOTE-101");
+    render(<App />);
+    const entry = await screen.findByRole("region", { name: "Card report" });
+    expect(document.querySelector(".detail-declared")?.textContent).toContain("approved");
+    expect(within(entry).queryByRole("button")).toBeNull();
+    expect(entry.textContent).toContain("No unambiguous Card report available");
+    go("#/p/mobile-shell/c/MOB-1");
+    await screen.findByRole("heading", { level: 1, name: "Wrap the web app in a native shell" });
+    expect(screen.queryByRole("button", { name: "Card report" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delivery handoff" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Delivery handoff" }).textContent).toContain("Not available in this project.");
+    expect(document.body.textContent).not.toContain("DELIVERED");
+  });
+
+  it("keeps Card summaries and ambiguous summaries out of Reviewer documents and counts", async () => {
+    go("#/p/root/c/NOTE-102");
+    render(<App />);
+    await screen.findByRole("button", { name: "Card report" });
+    const reviewer = screen.getByRole("region", { name: "Reviewer" });
+    expect(reviewer.textContent).toContain("No validated verdict");
+    expect(reviewer.textContent).toContain("1 review document (agent-declared)");
+    const reviewSection = screen.getByRole("heading", { name: "Review", level: 2 }).closest("section")!;
+    expect(reviewSection.textContent).not.toContain("card-reports/");
+    const ambiguous = screen.getByRole("heading", { name: "Unattributed Card reports" }).closest("section")!;
+    expect(ambiguous.textContent).toContain("Not attributed");
+    expect(ambiguous.textContent).toContain("card-reports/NOTE-101-vs-NOTE-102.md");
+    expect(ambiguous.textContent).toContain("NOTE-101, NOTE-102");
+  });
+
+  it("still refuses non-allowlisted paths in the existing viewer", async () => {
+    go("#/p/root/c/NOTE-102?file=AGENTS.md");
+    render(<App />);
+    expect(await screen.findByText("Not exposed by the Cockpit")).toBeTruthy();
   });
 });
 

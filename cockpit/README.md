@@ -50,6 +50,14 @@ The UI follows Workspace → Project → Card → Attempt → Evidence. Navigati
 uses URL hashes (`#/p/<project>/c/<card>?file=<path>`), so refresh, deep links,
 and the Back button work and the server needs no fallback routes.
 
+The human-reading path starts with the declared Card state, then **Card
+report**, then the separate verification/review evidence below. **Delivery
+handoff** is available in the Project header. Both entries open the existing
+inert Markdown viewer, close with Back or Escape, and are shown as actions
+only when the corresponding project-scoped file is readable. Missing files
+have a neutral “not available” state, not a delivery/approval result.
+These are derived human-readable views, not new approvals or verifications.
+
 From a Card, open the matching Attempt to find its evidence and any
 attempt-local document whose filename identifies it as a review. The Cockpit
 shows that file inside the Attempt with its path and `agent-declared`
@@ -77,12 +85,15 @@ project's cards, one card, or one file.
     "Updated" with the time the oldest data on screen actually arrived;
   - a System / Light / Dark theme switch.
 - **Project:**
+  - an entry to its materialized `handoff.md`, never another project's file;
   - cards with their *declared* state, observed attempt count, and latest
     recorded verifier result;
   - search and a declared-state filter;
   - workspace notices: work-queue warnings, ignored evidence, unmatched
     Evaluator+ results.
 - **Card:**
+  - a prominent entry to its materialized `card-reports/<card-id>.md`, separate
+    from Reviewer documents and their counts;
   - three separate signals: Verifier, Reviewer, and Evaluator+, each with its
     meaning and provenance;
   - "Worth a look": observations derived from the artifacts, never a verdict;
@@ -215,6 +226,11 @@ and ambiguous filename matches are not moved or rebound to an Attempt. The
 viewer opens their contents as inert text/Markdown; the Cockpit never derives
 `REWORK` or `APPROVED` from the file contents.
 
+Card reports are not Reviewer reports. Their presence, filename and Markdown
+contents do not validate a verdict, attest a renderer invocation or change the
+declared state. A host-governed run still shows **No validated verdict**;
+its original attempt-local review files remain available inside the Attempt.
+
 ## Verifier evidence contract
 
 A `verification.json` is attributed to a card only if it satisfies the
@@ -267,7 +283,7 @@ them.
 
 ## Document attribution
 
-Review documents (`.loop/reviews/*`, `card-reports/*`) carry no card ID
+Review documents (`.loop/reviews/*`) carry no card ID
 field, so they are matched by file name.
 - A document belongs to a card only if exactly one known card ID appears in
   the name as a whole token.
@@ -276,6 +292,23 @@ field, so they are matched by file name.
   `1.1.2-draft.md`.
 - A name that matches several known cards is assigned to none of them. It is
   listed under `reviewer.ambiguous_documents` of each card involved.
+
+Card reports use the same conservative filename attribution, but are returned
+separately: `card_report` is a discoverable canonical
+`card-reports/<card-id>.md` reference or `null`; `ambiguous_reports` preserves
+multi-card matches without assigning them or counting them as reviews. A
+canonical filename that matches multiple known IDs is still ambiguous.
+The Project list response includes `handoff`, a reference or `null`.
+These references are `cockpit-derived` facts about readable files, not claims
+that their contents were generated or validated by Triad+ code.
+
+Discovery reuses the bounded, allowlisted file reader. Each path remains
+relative to its own project (`root` or `projects/<id>`); a child project never
+falls back to the control root. Escaping/cross-project symlinks and non-files
+produce no action; unavailable optional reports (including circular symlinks)
+do not break the Project/Card view. No new endpoint or persistence is involved. A file removed
+after discovery is handled by the viewer's existing unavailable state; manual
+Refresh discovers the latest presence/absence.
 
 ## Freshness of verifier evidence
 

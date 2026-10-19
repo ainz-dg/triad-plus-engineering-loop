@@ -3,6 +3,7 @@ import { fileName, formatDate, formatDuration, humanize, shortHash } from "../fo
 import type { Attempt, CardDetail as CardDetailData, Evaluation, Gate, Verification } from "../types";
 import { Chip, DeclaredState, FreshnessRow, GateStatus, ProvenanceBadge, VerifierStatus } from "./Badges";
 import { Icon, type IconName } from "./Icon";
+import { HumanReport } from "./HumanReport";
 import { EmptyState } from "./States";
 
 type Open = (path: string) => void;
@@ -10,6 +11,10 @@ type Open = (path: string) => void;
 function latestVerification(card: CardDetailData): Verification | null {
   const all = card.attempts.flatMap((attempt) => attempt.verifications).filter((verification) => verification.freshness);
   return all.find((verification) => verification.freshness?.recency.status === "latest_for_card") ?? null;
+}
+
+function isReviewerDocument(source: string): boolean {
+  return /(?:^|[-_.\s])review(?:er)?(?:[-_.\s]|$)/i.test(fileName(source));
 }
 
 // ---------------------------------------------------------------------------
@@ -31,7 +36,7 @@ function Signal({ title, icon, meaning, children }: { title: string; icon: IconN
 function Signals({ card }: { card: CardDetailData }) {
   const latest = latestVerification(card);
   const reviewer = card.control_run?.reviewer;
-  const reviewDocs = card.reviewer.documents.length + card.attempts.reduce((total, attempt) => total + attempt.documents.filter((document) => /review/i.test(document.source)).length, 0);
+  const reviewDocs = card.reviewer.documents.length + card.attempts.reduce((total, attempt) => total + attempt.documents.filter((document) => isReviewerDocument(document.source)).length, 0);
   const evaluations = [...card.evaluations].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
   const evaluation = evaluations[0];
   return (
@@ -197,7 +202,7 @@ function VerificationBlock({ verification, onOpen }: { verification: Verificatio
 
 function AttemptBlock({ attempt, open, onOpen }: { attempt: Attempt; open: boolean; onOpen: Open }) {
   const statuses = attempt.verifications.map((verification) => verification.status);
-  const reviewerDocuments = attempt.documents.filter((document) => /(?:^|[-_.\s])review(?:er)?(?:[-_.\s]|$)/i.test(fileName(document.source)));
+  const reviewerDocuments = attempt.documents.filter((document) => isReviewerDocument(document.source));
   const otherDocuments = attempt.documents.filter((document) => !reviewerDocuments.includes(document));
   return (
     <details className="attempt" open={open}>
@@ -303,6 +308,21 @@ export function CardDetail({ card, onOpen, onBack }: { card: CardDetailData; onO
           <p className="hint"><Icon name="info" size={14} /> “In progress” is the Orchestrator’s declaration. Triad+ records no liveness, so it does not mean an agent is running now.</p>
         )}
       </header>
+
+      <HumanReport title="Card report" document={card.card_report} missing="No unambiguous Card report available for this card." onOpen={onOpen} />
+      {(card.ambiguous_reports?.length ?? 0) > 0 && (
+        <Section title="Unattributed Card reports" aside={<ProvenanceBadge kind="cockpit-derived" compact />}>
+          <p className="muted small">Not attributed — the name matches several cards. These are not Reviewer documents.</p>
+          <ul className="doc-list">
+            {card.ambiguous_reports!.map((document) => (
+              <li key={document.source}>
+                <button type="button" className="link-btn" onClick={() => onOpen(document.source)}>{document.source}</button>
+                <span className="muted small">{document.matches?.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
 
       <Signals card={card} />
 

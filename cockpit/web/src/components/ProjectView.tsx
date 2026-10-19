@@ -4,6 +4,7 @@ import { routeHref } from "../route";
 import type { CardList } from "../types";
 import { DeclaredState, ProvenanceBadge, VerifierStatus } from "./Badges";
 import { Icon } from "./Icon";
+import { HumanReport } from "./HumanReport";
 import { EmptyState } from "./States";
 
 const QUEUE_STATUS = {
@@ -41,6 +42,7 @@ export function ProjectView({ project, data, selectedCard, onOpenFile }: {
           <h1 id="project-title" className="pane-title">{project === "root" ? "Control root" : project}</h1>
           <span className="count" aria-label={`${data.cards.length} cards`}>{data.cards.length}</span>
         </div>
+        <HumanReport title="Delivery handoff" document={data.handoff} missing="Not available in this project." onOpen={onOpenFile} />
         <div className="queue-row">
           <span className={`queue-status tone-${queue.tone}`}>
             <Icon name={queue.tone === "warn" ? "alert" : "layers"} size={14} /> {queue.label}
