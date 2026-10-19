@@ -26,8 +26,6 @@ review. No v1.20.0 package or GitHub Release is being claimed here.
 
 Candidate notes: [Triad+ 1.20.0](docs/releases/1.20.0.md).
 
-Candidate notes: [Triad+ 1.20.0](docs/releases/1.20.0.md).
-
 ## 1.19.0 — 2026-10-17
 
 Published to [npm](https://www.npmjs.com/package/triad-plus/v/1.19.0) and as a
