@@ -1,5 +1,20 @@
 # Troubleshooting
 
+When the new-workspace wizard lists an existing Git repository, select it
+explicitly by its numbered suggestion or path. A generated repository ID such
+as `repo-1` is not a filesystem path and must not silently become one.
+A mistyped repository path can be corrected in place. If branch/mapping
+validation fails, retry the repository mapping from the same Control
+Workspace; no repository or installation files are changed before approval.
+
+Successful `npx triad-plus init --host opencode --control .` installs the
+adapter assets only. It does **not** configure product-repository mappings,
+quality gates, PRD, or worktrees. Check the project plan and readiness before
+running `/triad`. When `doctor --control .` is run without `--host`, it
+inspects all six adapters; `incomplete` for unused adapters is not evidence
+that your chosen adapter is broken. Use `--host opencode` to inspect OpenCode
+alone. Command errors are concise; run `npx triad-plus --help` for full syntax.
+
 Run doctor first:
 
 ```bash
