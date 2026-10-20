@@ -832,7 +832,8 @@ async function init(options) {
     previous: previousManifest
   });
   await writeInstallationManifest(controlRoot, manifest);
-  process.stdout.write(`Triad+ installed for ${adapter.label} in ${controlRoot}\n`);
+  process.stdout.write(`Triad+ adapter assets installed for ${adapter.label} in ${controlRoot}\n`);
+  process.stdout.write('This init command does not configure repository mappings, PRD, quality gates, or worktrees. Verify project readiness separately before invoking /triad.\n');
   if (adapter.globalEntry) {
     process.stdout.write(`Install user-level assets with --global to expose ${adapter.entry}.\n`);
   }
@@ -1689,6 +1690,7 @@ async function doctor(options) {
   const controlRoot = resolve(options.control);
   const requested = options.host ? [getAdapter(options.host)] : listAdapters();
   if (requested.some((adapter) => !adapter)) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
+  if (!options.host) process.stdout.write('No --host specified: inspecting all six adapters. An incomplete adapter does not mean it was selected for installation; use --host <adapter-id> to focus the diagnosis.\n');
   let team = null;
   if (await exists(teamConfigPath(controlRoot))) {
     try { team = validateTeamConfiguration(JSON.parse(await readFile(teamConfigPath(controlRoot), 'utf8'))); }
@@ -1882,16 +1884,41 @@ async function collectRepositoryPlan(prompt, controlRoot) {
     count = parsePositiveCount(answer, 20);
     if (!count) process.stdout.write('Enter a whole number from 1 to 20.\n');
   }
+  const suggestions = mode === 'existing' ? await immediateGitChildren(controlRoot) : [];
   if (mode === 'existing') {
-    const suggestions = await immediateGitChildren(controlRoot);
-    process.stdout.write(`Read-only immediate-child Git-root suggestions (select explicitly; none are auto-added): ${suggestions.join(', ') || 'none'}\n`);
+    process.stdout.write('Available immediate-child Git repositories (read-only; never added automatically):\n');
+    if (!suggestions.length) process.stdout.write('  none — enter a Git repository root path explicitly.\n');
+    suggestions.forEach((suggestion, index) => process.stdout.write(`  ${index + 1}) ${suggestion}\n`));
   }
   const repositories = [];
   for (let index = 0; index < count; index += 1) {
     const suggestedId = `repo-${index + 1}`;
     const id = (await prompt.question(`Repository ${index + 1} stable ID [${suggestedId}]: `)).trim() || suggestedId;
-    const suggestedPath = `./${id}`;
-    const repoPath = (await prompt.question(`${id} repository path [${suggestedPath}]: `)).trim() || suggestedPath;
+    let repoPath;
+    if (mode === 'existing') {
+      // Selection is explicit even for a single candidate. Blank never silently
+      // assigns a repository; invalid paths can be corrected in place.
+      while (!repoPath) {
+        const answer = (await prompt.question(`${id} repository path (suggestion number or explicit path; blank cancels): `)).trim();
+        if (!answer) return null;
+        const numbered = /^\\d+$/.test(answer);
+        const selected = numbered ? suggestions[Number(answer) - 1] : answer;
+        if (!selected) {
+          process.stdout.write('Unknown suggestion number. Select a listed number or type a repository path.\n');
+          continue;
+        }
+        const candidate = resolve(controlRoot, selected);
+        const top = spawnSync('git', ['-C', candidate, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 10_000 });
+        if (top.status !== 0 || resolve(top.stdout.trim()) !== candidate) {
+          process.stdout.write(`Not an existing Git repository root: ${candidate}. Choose another path (blank cancels).\n`);
+          continue;
+        }
+        repoPath = selected;
+      }
+    } else {
+      const suggestedPath = `./${id}`;
+      repoPath = (await prompt.question(`${id} repository path [${suggestedPath}]: `)).trim() || suggestedPath;
+    }
     let suggestedBase = 'main';
     if (mode === 'existing') {
       const candidate = resolve(controlRoot, repoPath);
@@ -2024,20 +2051,25 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
     return;
   }
 
-  const repositorySelection = await collectRepositoryPlan(prompt, root);
-  if (!repositorySelection) {
-    process.stdout.write('Cancelled. No files were changed.\n');
-    return;
-  }
   let repositories;
-  let adapters;
-  try {
-    repositories = await validateRepositoryPlan(root, repositorySelection.repositories, { mode: repositorySelection.mode });
-    adapters = await collectAdapterSelection(prompt);
-  } catch (error) {
-    process.stdout.write(`Preflight failed; nothing was changed: ${error.message}\n`);
-    return;
+  while (!repositories) {
+    const selection = await collectRepositoryPlan(prompt, root);
+    if (!selection) {
+      process.stdout.write('Cancelled. No files were changed.\n');
+      return;
+    }
+    try {
+      repositories = await validateRepositoryPlan(root, selection.repositories, { mode: selection.mode });
+    } catch (error) {
+      process.stdout.write(`Repository preflight failed; nothing was changed: ${error.message}\n`);
+      const answer = (await prompt.question('Correct repository mapping and retry from this workspace? [Y/n]: ')).trim().toLowerCase();
+      if (answer === 'n' || answer === 'no') {
+        process.stdout.write('Cancelled. No files were changed.\n');
+        return;
+      }
+    }
   }
+  const adapters = await collectAdapterSelection(prompt);
   if (!adapters) {
     process.stdout.write('Cancelled. No files were changed.\n');
     return;
@@ -2159,5 +2191,6 @@ try {
   else throw new Error(`Unknown command: ${options.command}`);
 } catch (error) {
   process.stderr.write(`${error.code ? `${error.code}: ` : ''}${error.message}\n`);
-  usage(2);
+  process.stderr.write('Run npx triad-plus --help for command syntax.\n');
+  process.exitCode = 2;
 }
