@@ -18,9 +18,14 @@ mkdir triad-control && cd triad-control
 npx triad-plus
 ```
 
-Choose **New workspace**, confirm this separate Control Workspace root, map
-the existing local product repository and its branch/worktree details, and
-select the OpenCode adapter. Review the complete preview and type exactly
+Choose **New workspace** and confirm this separate Control Workspace root.
+For existing local Git repositories, the wizard lists read-only numbered
+suggestions such as `1) ./ketchup2`: enter the number explicitly or type
+a repository path. Pressing Enter does not silently select a product
+repository. Invalid paths can be corrected at the prompt; if a later
+repository preflight fails, retry the repository mapping without restarting
+the wizard. Choose branch/worktree mappings and the OpenCode adapter,
+then review the complete preview and type exactly
 `install` to apply it. The wizard does not clone repositories, push changes, or
 write global host configuration. For the full setup behavior and limitations,
 see [npx installation](npx-installation.md). Selecting an adapter installs its
@@ -44,7 +49,10 @@ the Control Workspace and start the loop with `/triad ./PRD.md` (or `/triad`
 to use the root PRD). Bootstrap snapshots the source to immutable
 `artifacts/prd.md` and records its SHA-256; keep the source unchanged. Direct
 `init` remains available for scripts and advanced setup, but is not the
-first-run wizard path.
+first-run wizard path. A successful `init --host ... --control ...`
+confirms installation of adapter assets, **not** creation of `project.yaml`,
+root `PRD.md`, quality gates, or mapped Git worktrees. Do not infer loop
+readiness from adapter installation alone.
 
 ## 3. Follow the Card and evidence
 
