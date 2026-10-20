@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.20.0 — UNRELEASED / CANDIDATE
+
+This is a release candidate, not a published release. The candidate is based
+on the current `main` after `v1.19.0`; it includes the human-first Cockpit
+report entries from PR #18 and the mobile Markdown containment from PR #19.
+The release documentation also brings the OpenCode first-loop walkthrough,
+report-generation boundaries, and demonstrative screenshots together without
+claiming that the Cockpit runs agents or verifies liveness.
+
+- Add a procedural OpenCode tutorial covering a separate Control Workspace,
+  prerequisites the wizard does not create, a first `/triad` loop, evidence,
+  explicitly materialized reports, and reading the Cockpit safely.
+- Document the Project-level **Delivery handoff** and Card-level **Card
+  report** as shortcuts to existing derived Markdown, distinct from approval
+  and verification records.
+- Keep Markdown prose readable on narrow viewports while wide tables and code
+  blocks remain independently scrollable.
+- No package API, workspace schema, or runtime dependency change is introduced
+  by this release-preparation tranche. This statement is limited to the
+  candidate diff; it is not a general compatibility guarantee.
+
+Publication remains gated on the release-candidate checks and independent
+review. No v1.20.0 package or GitHub Release is being claimed here.
+
+Candidate notes: [Triad+ 1.20.0](docs/releases/1.20.0.md).
+
 ## 1.19.0 — 2026-10-17
 
 Published to [npm](https://www.npmjs.com/package/triad-plus/v/1.19.0) and as a

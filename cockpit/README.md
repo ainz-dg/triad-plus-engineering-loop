@@ -58,6 +58,15 @@ only when the corresponding project-scoped file is readable. Missing files
 have a neutral “not available” state, not a delivery/approval result.
 These are derived human-readable views, not new approvals or verifications.
 
+These are navigation shortcuts into files the Orchestrator has already
+materialized; opening them does not generate a report or change project state.
+The Card report is separate from Reviewer documents, while the project-level
+Delivery handoff is not a verdict on any one Card. On narrow screens, prose
+stays in a readable column and wide Markdown tables and code blocks scroll in
+their own containers instead of widening the entire viewer. The viewer treats
+Markdown as inert text: links and images are not fetched, and embedded HTML is
+shown rather than executed.
+
 From a Card, open the matching Attempt to find its evidence and any
 attempt-local document whose filename identifies it as a review. The Cockpit
 shows that file inside the Attempt with its path and `agent-declared`
