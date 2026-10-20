@@ -1,13 +1,13 @@
 # Changelog
 
-## 1.20.0 — UNRELEASED / CANDIDATE
+## 1.20.0
 
-This is a release candidate, not a published release. The candidate is based
-on the current `main` after `v1.19.0`; it includes the human-first Cockpit
-report entries from PR #18 and the mobile Markdown containment from PR #19.
-The release documentation also brings the OpenCode first-loop walkthrough,
-report-generation boundaries, and demonstrative screenshots together without
-claiming that the Cockpit runs agents or verifies liveness.
+The 1.20.0 change set follows `v1.19.0` and covers the documentation
+alignment in PR #17, human-first Cockpit Card report and Delivery handoff
+entries in PR #18, mobile Markdown containment in PR #19, and the OpenCode
+first-loop walkthrough plus synthetic screenshots in PR #20. The walkthrough
+documents a host interaction; it does not claim that Cockpit runs agents or
+verifies liveness.
 
 - Add a procedural OpenCode tutorial covering a separate Control Workspace,
   prerequisites the wizard does not create, a first `/triad` loop, evidence,
@@ -17,14 +17,9 @@ claiming that the Cockpit runs agents or verifies liveness.
   and verification records.
 - Keep Markdown prose readable on narrow viewports while wide tables and code
   blocks remain independently scrollable.
-- No package API, workspace schema, or runtime dependency change is introduced
-  by this release-preparation tranche. This statement is limited to the
-  candidate diff; it is not a general compatibility guarantee.
-
-Publication remains gated on the release-candidate checks and independent
-review. No v1.20.0 package or GitHub Release is being claimed here.
-
-Candidate notes: [Triad+ 1.20.0](docs/releases/1.20.0.md).
+- No new Triad+ Core/runtime capability is introduced in this tranche;
+  Cockpit remains a read-only surface.
+- Release notes: [Triad+ 1.20.0](docs/releases/1.20.0.md).
 
 ## 1.19.0 — 2026-10-17
 
