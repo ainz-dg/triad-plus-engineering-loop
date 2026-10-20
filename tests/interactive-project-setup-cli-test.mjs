@@ -292,6 +292,7 @@ try {
     // a later preflight failure can retry repository mapping in the same Control Workspace.
     const retryRoot = path.join(fixture, 'PATH-RECOVERY');
     await mkdir(retryRoot);
+    await mkdir(path.join(fixture, 'home-path-recovery'));
     const retryRepo = path.join(retryRoot, 'ketchup2');
     await makeRepo(retryRepo, 'do not change product contents\n');
     const retryBefore = await treeSnapshot(retryRepo);
@@ -317,7 +318,7 @@ try {
     assert.match(missingControl.stderr, /Provide --control/);
     assert.match(missingControl.stderr, /npx triad-plus --help/);
     assert.doesNotMatch(missingControl.stderr, /Usage:/, 'parameter errors no longer dump the full help');
-    
+
     // A04-A05: actual greenfield setup initializes local Git only after exact approval and reports missing readiness inputs.
     const greenRoot = path.join(fixture, 'GREENFIELD');
     await mkdir(greenRoot);
