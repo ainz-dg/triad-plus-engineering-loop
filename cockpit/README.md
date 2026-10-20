@@ -6,14 +6,26 @@ agent declared, what Triad+ code wrote or validated, and what the Cockpit
 cannot know.
 
 ```bash
-npx triad-plus cockpit --control <project-control-path> [--port <n>]
+npx triad-plus cockpit [--control <project-control-path>] [--port <n>] [--no-open]
 ```
 
-The command validates the workspace and starts a server on `127.0.0.1` (port
-`0` picks a free port). It prints a launch URL carrying a **one-time login
-code**. Opening it sets an `HttpOnly`, `SameSite=Strict` session cookie and
-redirects (`303`) to the UI, so the code leaves the address bar and cannot be
-replayed. Ctrl+C stops the server.
+When `--control` is omitted, the command validates the current directory as
+the Control Workspace; it does not search parent or sibling directories. An
+explicit `--control` continues to select a path directly. The command starts a
+server on `127.0.0.1` (`--port 0` picks a free port) and always prints a launch
+URL carrying a **one-time login code**. Opening it sets an `HttpOnly`,
+`SameSite=Strict` session cookie and redirects (`303`) to the UI, so the code
+is consumed and cannot be replayed. Ctrl+C stops the server.
+
+On a local interactive macOS or Linux desktop, the command also asks the
+system browser opener to open the URL. It passes the URL as one argument
+without a shell; on Linux it requires a desktop display. It does not auto-open
+in CI, an SSH session, a headless terminal, or unsupported platforms. The
+opener receives the URL briefly in its process arguments, and the browser may
+retain the initial URL in history; the login code is one-time, but use
+`--no-open` if you do not want it passed to another process. The fallback URL
+is still printed. Opener failures leave the server running and do not repeat
+the code in error output.
 
 `npx triad-plus` with no arguments is still the setup wizard.
 

@@ -35,6 +35,7 @@ for (const file of distFiles) assert.ok(files.has(file), `${file} must be in the
 for (const file of ["server.mjs", "launch.mjs", "model.mjs", "safe-fs.mjs", "static.mjs", "work-queue.mjs", "evidence-contract.mjs"]) {
   assert.ok(files.has(`cockpit/server/${file}`), `cockpit/server/${file} must be in the tarball`);
 }
+assert.ok(files.has("cockpit/launcher/open-browser.mjs"), "the safe CLI browser launcher must be in the tarball");
 for (const file of files.keys()) {
   assert.ok(!file.startsWith("cockpit/web/"), `UI sources must not ship: ${file}`);
   assert.ok(!file.includes("node_modules/"), `node_modules must not ship: ${file}`);
@@ -68,7 +69,7 @@ const installedEntries = await readdir(path.join(app, "node_modules"));
 assert.deepEqual(installedEntries.filter((name) => !name.startsWith(".")), ["triad-plus"], "installing triad-plus pulls in no other package");
 
 const control = await createDemoWorkspace(path.join(work, "workspace"));
-const child = spawn(process.execPath, [path.join(installedRoot, "bin", "triad-plus.js"), "cockpit", "--control", control, "--port", "0"], { cwd: app, stdio: ["ignore", "pipe", "pipe"] });
+const child = spawn(process.execPath, [path.join(installedRoot, "bin", "triad-plus.js"), "cockpit", "--port", "0", "--no-open"], { cwd: control, stdio: ["ignore", "pipe", "pipe"] });
 let stdout = "";
 child.stdout.on("data", (chunk) => { stdout += chunk; });
 const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));

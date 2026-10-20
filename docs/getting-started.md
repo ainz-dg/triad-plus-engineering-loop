@@ -75,9 +75,12 @@ After the Control Workspace contains project/Card/attempt data, open the local
 read-only Cockpit:
 
 ```bash
-npx triad-plus cockpit --control .
+npx triad-plus cockpit
 ```
 
-Open the one-time loopback URL printed in the terminal. Cockpit shows persisted
+From the Control Workspace, Cockpit validates the current directory and opens
+the one-time loopback URL in a local interactive browser when safe. The URL is
+always printed; use `--no-open` to disable automatic opening or
+`--control <path>` to select a workspace explicitly. Cockpit shows persisted
 records and evidence; it does not start agents or provide liveness monitoring.
 For its security and data interpretation details, see the [Cockpit guide](../cockpit/README.md).
