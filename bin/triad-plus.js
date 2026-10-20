@@ -10,6 +10,7 @@ import { basename, dirname, join, resolve, relative, sep } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { getAdapter, listAdapters, roleDefinitions, sharedSkillNames } from '../adapters/registry.mjs';
+import { selectChecklist } from '../runtime/lib/interactive-tui.mjs';
 import { writeImportedCard } from '../integrations/bmad/story-importer.mjs';
 import {
   hostModelField,
@@ -42,9 +43,9 @@ import {
   confirmAndApplySetup,
   formatSetupPreview,
   immediateGitChildren,
+  inspectExistingRepositoryRoot,
   initializeGreenfieldRepositories,
   inspectControlRoot,
-  parseAdapterSelection,
   parsePositiveCount,
   projectLaunchHint,
   readProjectYamlPlan,
@@ -1835,7 +1836,46 @@ async function cockpit(options) {
   await launchCockpit({ control: options.control, port: options.port, noOpen: options.noOpen });
 }
 
+function interactivePrompt() {
+  let readline = createInterface({ input: process.stdin, output: process.stdout });
+  return {
+    question(message) { return readline.question(message); },
+    async checklist(options) {
+      readline.close();
+      try {
+        return await selectChecklist({ ...options, input: process.stdin, output: process.stdout });
+      } finally {
+        readline = createInterface({ input: process.stdin, output: process.stdout });
+      }
+    },
+    close() { readline.close(); },
+  };
+}
+
+function slugFromRepositoryPath(repositoryPath) {
+  const raw = basename(repositoryPath).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+  const slug = raw.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64).replace(/-+$/g, '');
+  return /^[a-z0-9]/.test(slug) ? slug : 'repository';
+}
+
+function uniqueRepositoryIds(repositories) {
+  const used = new Set();
+  return repositories.map((repository) => {
+    const base = slugFromRepositoryPath(repository.path);
+    let id = base;
+    let suffix = 2;
+    while (used.has(id)) {
+      const ending = `-${suffix}`;
+      id = `${base.slice(0, 64 - ending.length).replace(/-+$/g, '')}${ending}`;
+      suffix += 1;
+    }
+    used.add(id);
+    return id;
+  });
+}
+
 async function chooseNewControlRoot(prompt, currentDirectory) {
+  process.stdout.write('Triad+ / 1 of 5 — Control Workspace\n');
   const current = await inspectControlRoot(currentDirectory);
   if (current.gitBoundary) {
     process.stdout.write(`Current directory belongs to Git root ${current.gitBoundary}. It cannot be selected as a clean Control Workspace; choose a separate root explicitly. No sibling path will be generated.\n`);
@@ -1865,87 +1905,208 @@ async function chooseNewControlRoot(prompt, currentDirectory) {
   }
 }
 
-async function collectRepositoryPlan(prompt, controlRoot) {
-  process.stdout.write('\nRepository setup: 1) use explicitly selected existing local Git repositories  2) create local greenfield repositories after approval  3) defer repository configuration\n');
-  process.stdout.write('Clone-from-URL is not implemented in this version. No repository search or clone will run.\n');
-  let mode;
-  while (!mode) {
-    const answer = (await prompt.question('Choose repository mode [1-3] (blank cancels): ')).trim().toLowerCase();
-    if (!answer) return null;
-    if (['1', 'existing', 'a'].includes(answer)) mode = 'existing';
-    else if (['2', 'greenfield', 'c'].includes(answer)) mode = 'greenfield';
-    else if (['3', 'defer', 'd'].includes(answer)) mode = 'defer';
-    else process.stdout.write('Choose existing, greenfield, or defer.\n');
-  }
-  if (mode === 'defer') return { mode, repositories: [] };
+async function collectGreenfieldRepositoryPlan(prompt, controlRoot, previousPlan = null) {
+  process.stdout.write('\nGreenfield repository setup remains a text-entry flow in this P0 prototype; candidate discovery never creates a repository.\n');
   let count = null;
+  const previous = previousPlan?.mode === 'greenfield' ? previousPlan.repositories : [];
   while (!count) {
-    const answer = (await prompt.question('Number of repositories to map (1-20; blank cancels): ')).trim();
-    if (!answer) return null;
-    count = parsePositiveCount(answer, 20);
+    const suggested = String(previous.length || 1);
+    const answer = (await prompt.question(`Number of greenfield repositories (1-20) [${suggested}]: `)).trim();
+    count = parsePositiveCount(answer || suggested, 20);
     if (!count) process.stdout.write('Enter a whole number from 1 to 20.\n');
-  }
-  const suggestions = mode === 'existing' ? await immediateGitChildren(controlRoot) : [];
-  if (mode === 'existing') {
-    process.stdout.write('Available immediate-child Git repositories (read-only; never added automatically):\n');
-    if (!suggestions.length) process.stdout.write('  none — enter a Git repository root path explicitly.\n');
-    suggestions.forEach((suggestion, index) => process.stdout.write(`  ${index + 1}) ${suggestion}\n`));
   }
   const repositories = [];
   for (let index = 0; index < count; index += 1) {
-    const suggestedId = `repo-${index + 1}`;
-    const id = (await prompt.question(`Repository ${index + 1} stable ID [${suggestedId}]: `)).trim() || suggestedId;
-    let repoPath;
-    if (mode === 'existing') {
-      // Selection is explicit even for a single candidate. Blank never silently
-      // assigns a repository; invalid paths can be corrected in place.
-      while (!repoPath) {
-        const answer = (await prompt.question(`${id} repository path (suggestion number or explicit path; blank cancels): `)).trim();
-        if (!answer) return null;
-        const numbered = /^\d+$/.test(answer);
-        const selected = numbered ? suggestions[Number(answer) - 1] : answer;
-        if (!selected) {
-          process.stdout.write('Unknown suggestion number. Select a listed number or type a repository path.\n');
-          continue;
-        }
-        const candidate = resolve(controlRoot, selected);
-        const top = spawnSync('git', ['-C', candidate, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 10_000 });
-        if (top.status !== 0 || resolve(top.stdout.trim()) !== candidate) {
-          process.stdout.write(`Not an existing Git repository root: ${candidate}. Choose another path (blank cancels).\n`);
-          continue;
-        }
-        repoPath = selected;
-      }
-    } else {
-      const suggestedPath = `./${id}`;
-      repoPath = (await prompt.question(`${id} repository path [${suggestedPath}]: `)).trim() || suggestedPath;
-    }
-    let suggestedBase = 'main';
-    if (mode === 'existing') {
-      const candidate = resolve(controlRoot, repoPath);
-      const branch = spawnSync('git', ['-C', candidate, 'branch', '--show-current'], { encoding: 'utf8', timeout: 10_000 });
-      if (branch.status === 0 && branch.stdout.trim()) suggestedBase = branch.stdout.trim();
-    }
+    const prior = previous[index];
+    const suggestedId = prior?.id ?? `repo-${index + 1}`;
+    const id = (await prompt.question(`Greenfield repository ${index + 1} stable ID [${suggestedId}]: `)).trim() || suggestedId;
+    const suggestedPath = prior?.path ?? `./${id}`;
+    const repoPath = (await prompt.question(`${id} repository path [${suggestedPath}]: `)).trim() || suggestedPath;
+    const suggestedBase = prior?.base_branch ?? 'main';
     const baseBranch = (await prompt.question(`${id} base branch [${suggestedBase}]: `)).trim() || suggestedBase;
-    const projectBranch = (await prompt.question(`${id} project branch [triad/${id}-feature]: `)).trim() || `triad/${id}-feature`;
-    const worktree = (await prompt.question(`${id} worktree mapping [worktrees/${id}-feature]: `)).trim() || `worktrees/${id}-feature`;
-    repositories.push({ id, path: repoPath, base_branch: baseBranch, project_branch: projectBranch, worktree });
+    const branchDefault = prior?.projectBranchEdited ? prior.project_branch : `triad/${id}-feature`;
+    const branchAnswer = (await prompt.question(`${id} project branch [${branchDefault}]: `)).trim();
+    const projectBranch = branchAnswer || branchDefault;
+    const worktreeDefault = prior?.worktreeEdited ? prior.worktree : `worktrees/${id}-feature`;
+    const worktreeAnswer = (await prompt.question(`${id} worktree mapping [${worktreeDefault}]: `)).trim();
+    const worktree = worktreeAnswer || worktreeDefault;
+    repositories.push({
+      id,
+      path: repoPath,
+      base_branch: baseBranch,
+      project_branch: projectBranch,
+      worktree,
+      projectBranchEdited: Boolean(branchAnswer) || Boolean(prior?.projectBranchEdited),
+      worktreeEdited: Boolean(worktreeAnswer) || Boolean(prior?.worktreeEdited),
+    });
   }
-  return { mode, repositories };
+  return { mode: 'greenfield', repositories };
 }
 
-async function collectAdapterSelection(prompt) {
-  const adapters = listAdapters();
-  process.stdout.write('\nAvailable harnesses (select one or more IDs/numbers, separated by commas):\n');
-  adapters.forEach((adapter, index) => process.stdout.write(`  ${index + 1}) ${adapter.label} (${adapter.id}) — project-local assets ${adapter.globalEntry ? '(global entry exists but will not be installed)' : '(local adapter assets)'}\n`));
-  process.stdout.write('The onboarding flow never writes user-level/global host files or settings.\n');
-  while (true) {
-    const answer = (await prompt.question('Harnesses to install (blank cancels): ')).trim();
-    if (!answer) return null;
-    const selected = parseAdapterSelection(answer, adapters);
-    if (selected) return selected;
-    process.stdout.write('Choose one or more listed adapter IDs/numbers without duplicates.\n');
+async function collectRepositoryPlan(prompt, controlRoot, previousPlan = null) {
+  let candidates = [];
+  const paths = new Set();
+  for (const candidatePath of await immediateGitChildren(controlRoot)) {
+    try {
+      const candidate = await inspectExistingRepositoryRoot(controlRoot, candidatePath);
+      candidates.push(candidate);
+      paths.add(candidate.absolutePath);
+    } catch (error) {
+      process.stdout.write(`A direct-child candidate could not be safely inspected and is not selectable: ${candidatePath} — ${error.message}\n`);
+    }
   }
+
+  if (previousPlan?.mode === 'existing') {
+    for (const repository of previousPlan.repositories) {
+      try {
+        const candidate = await inspectExistingRepositoryRoot(controlRoot, repository.path);
+        if (!paths.has(candidate.absolutePath)) {
+          candidates.push(candidate);
+          paths.add(candidate.absolutePath);
+        }
+      } catch (error) {
+        process.stdout.write(`Previously selected repository is no longer valid: ${repository.path} — ${error.message}\n`);
+      }
+    }
+  }
+  candidates.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+
+  const previousMode = previousPlan?.mode;
+  const priorByPath = new Map((previousPlan?.mode === 'existing' ? previousPlan.repositories : [])
+    .map((repository) => [resolve(controlRoot, repository.path), repository]));
+  const generatedIds = uniqueRepositoryIds(candidates);
+  const generatedIdByPath = new Map(candidates.map((candidate, index) => [candidate.absolutePath, generatedIds[index]]));
+  let selectedPaths = previousPlan?.mode === 'existing'
+    ? previousPlan.repositories.map((repository) => resolve(controlRoot, repository.path)).filter((candidate) => paths.has(candidate))
+    : [];
+  let focusId = selectedPaths[0] ?? (previousMode === 'greenfield' ? 'greenfield' : previousMode === 'defer' ? 'defer' : undefined);
+  let initialMessage = '';
+
+  while (true) {
+    const items = candidates.map((candidate) => ({
+      kind: 'checkbox',
+      id: candidate.absolutePath,
+      label: candidate.path,
+      description: candidate.currentBranch ? `current branch ${candidate.currentBranch}` : 'current branch detached HEAD',
+    }));
+    items.push(
+      { kind: 'action', id: 'add-repository', action: 'add-path', label: 'Add repository by path', description: 'explicit existing local Git root' },
+      { kind: 'action', id: 'greenfield', action: 'greenfield', label: previousMode === 'greenfield' ? 'Continue greenfield setup' : 'Create greenfield repository', description: 'text-based paths; created only after approval' },
+      { kind: 'action', id: 'defer', action: 'defer', label: 'Defer repository configuration', description: 'explicitly leave mappings empty' },
+    );
+    const result = await prompt.checklist({
+      step: 'Triad+ / 2 of 5 — Product repositories',
+      title: 'Select product repositories',
+      context: [`Control Workspace: ${controlRoot}`],
+      description: 'Only immediate-child Git roots are suggested. No ancestor/sibling search, clone, or implicit selection.',
+      items,
+      initialSelection: selectedPaths,
+      initialFocus: focusId,
+      minimum: 1,
+      maximum: 20,
+      escapeBehavior: 'cancel',
+      selectionSummary: (selection) => `${selection.length} selected / 20 max`,
+      hint: '↑↓ move · Space check a repository · Enter confirm selection / open action · Esc cancel',
+      initialMessage,
+    });
+    initialMessage = '';
+    if (result.kind === 'interrupt') return { kind: 'interrupt' };
+    if (result.kind === 'cancel') return null;
+    if (result.kind === 'selected') {
+      selectedPaths = result.selected;
+      const selectedCandidates = selectedPaths.map((id) => candidates.find((candidate) => candidate.absolutePath === id)).filter(Boolean);
+      const suggestedIds = uniqueRepositoryIds(selectedCandidates);
+      const repositories = [];
+      for (const [index, candidate] of selectedCandidates.entries()) {
+        const prior = priorByPath.get(candidate.absolutePath);
+        const suggestedId = prior?.id ?? generatedIdByPath.get(candidate.absolutePath) ?? suggestedIds[index];
+        const idAnswer = (await prompt.question(`${candidate.path} stable ID [${suggestedId}]: `)).trim();
+        const id = idAnswer || suggestedId;
+        const baseDefault = prior?.base_branch ?? candidate.currentBranch ?? 'main';
+        const baseBranch = (await prompt.question(`${id} detected base branch ${candidate.currentBranch ?? '(detached HEAD)'} [${baseDefault}]: `)).trim() || baseDefault;
+        const branchDefault = prior?.projectBranchEdited ? prior.project_branch : `triad/${id}-feature`;
+        const branchAnswer = (await prompt.question(`${id} project branch [${branchDefault}]: `)).trim();
+        const projectBranch = branchAnswer || branchDefault;
+        const worktreeDefault = prior?.worktreeEdited ? prior.worktree : `worktrees/${id}-feature`;
+        const worktreeAnswer = (await prompt.question(`${id} worktree mapping [${worktreeDefault}]: `)).trim();
+        const worktree = worktreeAnswer || worktreeDefault;
+        repositories.push({
+          id,
+          path: candidate.path,
+          base_branch: baseBranch,
+          project_branch: projectBranch,
+          worktree,
+          projectBranchEdited: Boolean(branchAnswer) || Boolean(prior?.projectBranchEdited),
+          worktreeEdited: Boolean(worktreeAnswer) || Boolean(prior?.worktreeEdited),
+        });
+      }
+      return { mode: 'existing', repositories, selectedPaths };
+    }
+
+    selectedPaths = result.selected;
+    if (result.action === 'defer') return { mode: 'defer', repositories: [], selectedPaths: [] };
+    if (result.action === 'greenfield') return await collectGreenfieldRepositoryPlan(prompt, controlRoot, previousPlan);
+    if (result.action === 'add-path') {
+      const rawPath = (await prompt.question('Existing Git repository root path to add (absolute or relative; blank returns to selection): ')).trim();
+      if (!rawPath) {
+        focusId = 'add-repository';
+        continue;
+      }
+      try {
+        const candidate = await inspectExistingRepositoryRoot(controlRoot, rawPath);
+        const already = candidates.find((item) => item.absolutePath === candidate.absolutePath);
+        if (!already && selectedPaths.length >= 20) {
+          initialMessage = 'You can select at most 20 repositories.';
+          focusId = 'add-repository';
+          continue;
+        }
+        if (!already) candidates.push(candidate);
+        if (!selectedPaths.includes(candidate.absolutePath)) selectedPaths.push(candidate.absolutePath);
+        candidates.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+        focusId = candidate.absolutePath;
+        initialMessage = already ? 'That Git root is now explicitly selected.' : 'Repository path validated and explicitly selected.';
+      } catch (error) {
+        initialMessage = `Path was not added; no workspace changes were made: ${error.message}`;
+        focusId = 'add-repository';
+      }
+    }
+  }
+}
+
+async function collectAdapterSelection(prompt, initialSelection = []) {
+  const adapters = listAdapters();
+  const explanations = {
+    opencode: 'project-local agents and /triad command',
+    codex: 'project-local skills and role launcher',
+    'claude-code': 'project-local agents and commands',
+    copilot: 'project-local agent and instructions',
+    antigravity: 'project-local rules and workflow assets',
+    hermes: 'project-local skills and runtime assets',
+  };
+  const result = await prompt.checklist({
+    step: 'Triad+ / 3 of 5 — Harnesses',
+    title: 'Select coding harnesses',
+    context: ['Control Workspace project-local install only; no host/global files or settings.'],
+    description: 'Multi-adapter installation is supported. Per-Attempt cross-harness dispatch is not.',
+    items: adapters.map((adapter) => ({
+      kind: 'checkbox',
+      id: adapter.id,
+      label: `${adapter.label} (${adapter.id})`,
+      description: explanations[adapter.id] ?? 'project-local adapter assets',
+    })),
+    initialSelection,
+    initialFocus: initialSelection[0],
+    minimum: 1,
+    maximum: adapters.length,
+    escapeBehavior: 'back',
+    selectionSummary: (selection) => {
+      const primary = adapters.find((adapter) => adapter.id === selection[0]);
+      return `${selection.length} selected${primary ? ` · primary ${primary.label} (${primary.id})` : ''}`;
+    },
+    hint: '↑↓ move · Space toggle · Enter confirm · Esc Back',
+  });
+  if (result.kind === 'interrupt' || result.kind === 'back') return result;
+  return { ...result, adapters: result.selected.map((id) => adapters.find((adapter) => adapter.id === id)).filter(Boolean) };
 }
 
 async function preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam }) {
@@ -2052,15 +2213,20 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
     return;
   }
 
-  let repositories;
-  while (!repositories) {
-    const selection = await collectRepositoryPlan(prompt, root);
+  let repositoryPlan = null;
+  let repositories = null;
+  let adapters = null;
+  let initialAdapters = [];
+  while (!adapters) {
+    const selection = await collectRepositoryPlan(prompt, root, repositoryPlan);
+    if (selection?.kind === 'interrupt') return 'interrupt';
     if (!selection) {
       process.stdout.write('Cancelled. No files were changed.\n');
       return;
     }
     try {
       repositories = await validateRepositoryPlan(root, selection.repositories, { mode: selection.mode });
+      repositoryPlan = selection;
     } catch (error) {
       process.stdout.write(`Repository preflight failed; nothing was changed: ${error.message}\n`);
       const answer = (await prompt.question('Correct repository mapping and retry from this workspace? [Y/n]: ')).trim().toLowerCase();
@@ -2068,15 +2234,20 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
         process.stdout.write('Cancelled. No files were changed.\n');
         return;
       }
+      repositoryPlan = selection;
+      continue;
     }
-  }
-  const adapters = await collectAdapterSelection(prompt);
-  if (!adapters) {
-    process.stdout.write('Cancelled. No files were changed.\n');
-    return;
+    const adapterSelection = await collectAdapterSelection(prompt, initialAdapters);
+    if (adapterSelection.kind === 'interrupt') return 'interrupt';
+    if (adapterSelection.kind === 'back') {
+      initialAdapters = adapterSelection.selected;
+      continue;
+    }
+    adapters = adapterSelection.adapters;
   }
   let team = null;
   let useExistingTeam = false;
+  process.stdout.write('\nTriad+ / 4 of 5 — Optional team setup\n');
   try {
     if (await exists(teamConfigPath(root))) {
       team = await currentTeam(root);
@@ -2101,14 +2272,14 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
   }
   await confirmAndApplySetup({
     prompt,
-    preview: formatSetupPreview(plan),
+    preview: `Triad+ / 5 of 5 — Review exact plan\n${formatSetupPreview(plan)}`,
     apply: () => applyInteractiveSetup(plan),
   });
 }
 
 async function interactiveInit() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The interactive wizard needs a terminal. Use init in a non-interactive shell.');
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  const prompt = interactivePrompt();
   try {
     const currentDirectory = resolve(process.cwd());
     let currentManifest = null;
@@ -2168,7 +2339,11 @@ async function interactiveInit() {
     }
 
     process.stdout.write('\nNew project setup\n');
-    await interactiveNewProjectSetup(prompt, currentDirectory);
+    const result = await interactiveNewProjectSetup(prompt, currentDirectory);
+    if (result === 'interrupt') {
+      process.stdout.write('Cancelled by Ctrl+C. No workspace or repository changes were applied.\n');
+      process.exitCode = 130;
+    }
   } finally { prompt.close(); }
 }
 

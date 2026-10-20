@@ -19,13 +19,22 @@ npx triad-plus
 ```
 
 Choose **New workspace** and confirm this separate Control Workspace root.
-For existing local Git repositories, the wizard lists read-only numbered
-suggestions such as `1) ./ketchup2`: enter the number explicitly or type
-a repository path. Pressing Enter does not silently select a product
-repository. Invalid paths can be corrected at the prompt; if a later
-repository preflight fails, retry the repository mapping without restarting
-the wizard. Choose branch/worktree mappings and the OpenCode adapter,
-then review the complete preview and type exactly
+The product-repository screen lists read-only immediate-child Git roots with
+their current branches. Use Up/Down to focus, Space to select, and Enter to
+confirm one or more repositories; Enter with none selected explains the
+required action. Use **Add repository by path** for an explicitly supplied
+existing local Git root outside that list, or choose **Create greenfield
+repository** / **Defer repository configuration**. Greenfield paths remain a
+text-entry flow in this prototype. A selected repository's directory name
+suggests its stable ID, project branch, and worktree mapping; these remain
+editable and pass the existing safety validation.
+
+Select one or more harnesses on the next checkbox screen with the same keys.
+The first harness selected is visibly marked as primary because it supplies
+the current singleton runtime metadata; multi-harness installation does not
+provide per-Attempt cross-harness dispatch. Escape cancels from repository
+selection and goes back from harness selection. Ctrl+C exits without applying
+the plan. Review the complete preview and type exactly
 `install` to apply it. The wizard does not clone repositories, push changes, or
 write global host configuration. For the full setup behavior and limitations,
 see [npx installation](npx-installation.md). Selecting an adapter installs its

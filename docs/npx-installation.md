@@ -25,27 +25,39 @@ not generate a sibling path or migrate the product repository. A valid
 installation already present at the chosen root is not overwritten: the
 wizard asks whether to manage it or choose another root.
 
-Repository configuration is explicit. Choose one of these modes:
+Repository configuration is explicit. The keyboard checklist suggests only
+immediate-child Git roots, with their current branches; use Up/Down to focus,
+Space to select, and Enter to confirm up to 20 repositories. Nothing is added
+without an explicit selection. **Add repository by path** accepts an explicitly
+provided existing local Git root without widening discovery. **Create
+greenfield repository** initializes selected empty paths only after approval;
+that path collection remains text-based in this prototype. **Defer repository
+configuration** leaves mappings empty and readiness **NOT READY** until the
+owner adds them later.
 
-1. Map selected existing local Git repositories. Immediate-child Git roots may
-   be shown as read-only suggestions, but none are added automatically.
-2. Initialize selected empty paths as local greenfield Git repositories after
-   approval. This does not create a remote or push anything.
-3. Defer repository mapping; setup can complete, but readiness remains
-   **NOT READY** until mappings and required project inputs are present.
+For an existing selected Git root, the directory name suggests a stable ID,
+project branch, and worktree mapping; the selected path and detected base
+branch are shown. Each value remains editable and goes through the same
+deterministic path, branch, symlink, overlap, and preflight validation. No
+repository is inferred from the numeric keyboard or prompt position. The
+wizard does not clone URLs, create worktrees, or change a product repository.
+It writes only the repository mapping portion of `project.yaml`, preserving
+unrelated content.
 
-For modes 1 and 2, enter the number of repositories (1–20), then confirm each
-repository ID, path, base branch, project branch, and worktree mapping. The
-wizard does not clone from URLs or search for repositories. It writes only the
-repository mapping portion of `project.yaml`, preserving unrelated content.
+The next keyboard checklist shows all six registered adapters. Use Space to
+toggle and Enter to confirm one or more. The first adapter selected is visibly
+marked primary and continues to determine singleton runtime metadata and the
+existing team/model setup behavior; the manifest's adapter membership is
+normalized independently. Installing several adapters does **not** enable
+per-Attempt cross-harness dispatch. Escape cancels repository selection and
+backs out from adapter selection; Ctrl+C exits without applying the plan.
 
-Select one or more of the six listed adapters in the same setup session. An
-optional team-identity/model configuration may also be requested. Before
+An optional team-identity/model configuration may also be requested. Before
 writing, the wizard shows a complete preview of the Control Workspace, mapping
-changes, selected project-local adapter assets, and initial readiness. Type
-`install` to apply that exact plan; any other answer cancels. The first-run
-flow does not write global/user-level host files, credentials, or account
-settings.
+changes, selected project-local adapter assets, primary runtime adapter, and
+initial readiness. Type `install` to apply that exact plan; any other answer
+cancels. The first-run flow does not write global/user-level host files,
+credentials, or account settings.
 
 Preflight refuses a Control Workspace inside a product Git root, unsafe paths,
 and asset conflicts. Before applying, setup rechecks relevant root, role

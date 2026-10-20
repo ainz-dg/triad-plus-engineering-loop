@@ -32,8 +32,11 @@ function runCli(args, cwd, env = {}) {
   return run(process.execPath, [cli, ...args], cwd, env);
 }
 
-function terminalInput(cwd, answers, env) {
-  const input = `${answers.join('\n')}\n`;
+const line = (value = '') => `L${value}`;
+const key = (value) => `K${value}`;
+
+function terminalInput(cwd, actions, env) {
+  const input = `${actions.join('\n')}\n`;
   if (!pseudoTerminalAvailable) {
     return { status: 77, stdout: '', stderr: 'No supported local pseudo-terminal runner.' };
   }
@@ -42,10 +45,12 @@ function terminalInput(cwd, answers, env) {
     'argv = sys.argv[1:]',
     'pid, fd = pty.fork()',
     'if pid == 0: os.execvpe(argv[0], argv, os.environ)',
-    'fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 48, 220, 0, 0))',
+    'rows = int(os.environ.get("TRIAD_TEST_PTY_ROWS", "48"))',
+    'cols = int(os.environ.get("TRIAD_TEST_PTY_COLS", "220"))',
+    'fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))',
     'payload = sys.stdin.buffer.read().splitlines(keepends=True)',
     'output = bytearray()',
-    'deadline = time.monotonic() + 90',
+    'deadline = time.monotonic() + 20',
     'def drain(seconds):',
     '  end = time.monotonic() + seconds',
     '  while time.monotonic() < end:',
@@ -56,10 +61,15 @@ function terminalInput(cwd, answers, env) {
     'injected = False',
     'inject = os.environ.get("TRIAD_TEST_INJECT_CONFLICT")',
     'status = None',
-    'for line in payload:',
+    'keys = {b"up": b"\\x1b[A", b"down": b"\\x1b[B", b"space": b" ", b"enter": b"\\r", b"escape": b"\\x1b", b"ctrl-c": b"\\x03"}',
+    'for token in payload:',
     '  if time.monotonic() >= deadline: break',
     '  drain(0.15)',
-    '  try: os.write(fd, line)',
+    '  token = token.rstrip(b"\\r\\n")',
+    '  if token.startswith(b"L"): data = token[1:] + b"\\r"',
+    '  elif token.startswith(b"K"): data = keys[token[1:]]',
+    '  else: raise ValueError("PTY input actions must start with L or K")',
+    '  try: os.write(fd, data)',
     '  except OSError: break',
     '  drain(0.15)',
     '  if inject and not injected and b"Type install to apply this exact plan" in output:',
@@ -75,7 +85,7 @@ function terminalInput(cwd, answers, env) {
     'sys.exit(os.waitstatus_to_exitcode(status))',
   ].join('\n');
   return spawnSync('python3', ['-c', pythonPty, process.execPath, cli], {
-    cwd, env: { ...safeParentEnvironment(), ...env }, input, encoding: 'utf8', timeout: 95_000,
+    cwd, env: { ...safeParentEnvironment(), ...env }, input, encoding: 'utf8', timeout: 25_000,
     maxBuffer: 4 * 1024 * 1024,
   });
 }
@@ -84,7 +94,11 @@ async function saveTranscript(name, result) {
   const directory = process.env.TRIAD_SETUP_TRANSCRIPT_DIR;
   if (!directory) return;
   await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, `${name}.txt`), result.stdout.replaceAll('\r\n', '\n'));
+  const transcript = result.stdout
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replaceAll('\r\n', '\n')
+    .replaceAll('\r', '');
+  await writeFile(path.join(directory, `${name}.txt`), transcript);
 }
 
 function git(cwd, args) {
@@ -160,7 +174,7 @@ try {
     process.stdout.write('Interactive setup CLI transcript: SKIPPED (no supported pseudo-terminal runner).\n');
   } else {
     // Single integrated first-install smoke: one non-Git Control Workspace,
-    // one direct-child Git repository, and all six adapters selected at once.
+    // one direct-child Git repository, and a real two-harness keyboard selection.
     const root = path.join(fixture, 'sample-workspace');
     const home = path.join(fixture, 'home-existing');
     const xdgHome = path.join(fixture, 'xdg-config');
@@ -180,6 +194,7 @@ try {
     await writeFile(path.join(root, 'PRD.md'), prd);
     const sampleApp = path.join(root, 'sample-app');
     await makeRepo(sampleApp, 'sample app source\n');
+    git(sampleApp, ['branch', '-m', 'develop']);
     const loopRoot = path.join(root, '.loop');
     await mkdir(path.join(loopRoot, 'evidence'), { recursive: true });
     await writeFile(path.join(loopRoot, 'run-state.yaml'), 'version: 1\nproject_decision: owner-state\n');
@@ -192,9 +207,10 @@ try {
     const repoHeadBefore = git(sampleApp, ['rev-parse', 'HEAD']);
     const repoStatusBefore = git(sampleApp, ['status', '--porcelain']);
     const answers = [
-      '', '', '1', '1',
-      'sample-app', '1', '', '', '',
-      'opencode,codex,claude-code,copilot,antigravity,hermes', 'install',
+      line(''), line(''), key('space'), key('enter'),
+      line('ketchup2'), line(''), line(''), line(''),
+      key('down'), key('space'), key('up'), key('space'), key('enter'),
+      line('install'),
     ];
     const setup = terminalInput(root, answers, {
       HOME: home,
@@ -208,12 +224,16 @@ try {
       GIT_TERMINAL_PROMPT: '0',
     });
     assert.equal(setup.status, 0, `${setup.stderr}\n${setup.stdout}`);
-    await saveTranscript('single-tty-six-adapter-first-install', setup);
+    await saveTranscript('single-tty-two-harness-first-install', setup);
     const realRoot = await realpath(root);
     assert.ok(setup.stdout.includes(`Control Workspace (open this path): ${realRoot}`), setup.stdout);
     assert.match(setup.stdout, /Triad\+ setup completed\./);
-    assert.match(setup.stdout, /1\) \.\/sample-app/, 'Git root appears as an explicit numbered suggestion');
-    assert.match(setup.stdout, /repository path \(suggestion number or explicit path; blank cancels\)/);
+    assert.match(setup.stdout, /Select product repositories/);
+    assert.match(setup.stdout, /current branch develop/);
+    assert.match(setup.stdout, /Only immediate-child Git roots are suggested/);
+    assert.match(setup.stdout, /Select coding harnesses/);
+    assert.match(setup.stdout, /primary OpenCode \(opencode\)/);
+    assert.doesNotMatch(setup.stdout, /repo-1/);
     assert.match(setup.stdout, /Attempt-bound multi-harness dispatch remains unsupported/);
     assert.match(setup.stdout, /Readiness: NOT READY/);
     assert.match(setup.stdout, /\/triad/);
@@ -227,7 +247,11 @@ try {
     assert.deepEqual(await readFile(path.join(root, '.triad-plus', 'team.json')), teamBytes, 'existing team owner data is reused unchanged');
     const projectYaml = await readFile(path.join(root, 'project.yaml'), 'utf8');
     assert.equal((projectYaml.match(/^  - id:/gm) ?? []).length, 1, 'exactly one repository is mapped');
+    assert.match(projectYaml, /id: "ketchup2"/, 'stable repo ID comes from the selected repository rather than a generic placeholder');
     assert.match(projectYaml, /path: "\.\/sample-app"/, 'the direct child repository mapping is explicit');
+    assert.match(projectYaml, /base_branch: "develop"/, 'the observed branch becomes the base suggestion');
+    assert.match(projectYaml, /project_branch: "triad\/ketchup2-feature"/);
+    assert.match(projectYaml, /worktree: "\.\/worktrees\/ketchup2-feature"/);
     const controlGit = run('git', ['-C', root, 'rev-parse', '--show-toplevel'], root);
     assert.notEqual(controlGit.status, 0, 'Control Workspace stays non-Git');
     const manifestPath = path.join(root, '.triad-plus', 'installation.json');
@@ -235,12 +259,16 @@ try {
     validateInstallationManifest(multi);
     assert.equal(multi.schema_version, 2);
     const adapters = listAdapters();
-    const expectedIds = adapters.map((adapter) => adapter.id).sort();
-    assert.deepEqual(expectedIds, ['antigravity', 'claude-code', 'codex', 'copilot', 'hermes', 'opencode']);
-    assert.deepEqual(multi.adapters.map((adapter) => adapter.id), expectedIds, 'all six selected adapters are recorded once');
-    assert.equal(new Set(multi.adapters.map((adapter) => adapter.id)).size, expectedIds.length, 'adapter membership contains no duplicates');
+    const registryIds = adapters.map((adapter) => adapter.id).sort();
+    const selectedIds = ['opencode', 'codex'];
+    assert.deepEqual(registryIds, ['antigravity', 'claude-code', 'codex', 'copilot', 'hermes', 'opencode']);
+    for (const adapter of adapters) assert.ok(setup.stdout.includes(`${adapter.label} (${adapter.id})`), `${adapter.id} is present in the six-adapter keyboard screen`);
+    assert.match(setup.stdout, /Initial runtime metadata: opencode writes/);
+    const recordedIds = multi.adapters.map((adapter) => adapter.id);
+    assert.deepEqual(recordedIds, [...selectedIds].sort(), 'exactly the selected harness memberships are recorded once');
+    assert.equal(new Set(multi.adapters.map((adapter) => adapter.id)).size, selectedIds.length, 'adapter membership contains no duplicates');
     assert.equal(await readFile(path.join(root, '.triad-runtime', 'adapter.json'), 'utf8').then((text) => JSON.parse(text).id), 'opencode', 'the first selected adapter retains the singleton runtime metadata');
-    for (const adapter of adapters) {
+    for (const adapter of adapters.filter((candidate) => selectedIds.includes(candidate.id))) {
       const record = multi.adapters.find((entry) => entry.id === adapter.id);
       assert.deepEqual(record.scopes, { project: true, global: false }, `${adapter.id} is installed project-only`);
       const owned = new Map(record.managed_assets.filter((asset) => asset.scope === 'project').map((asset) => [asset.path, asset]));
@@ -278,7 +306,7 @@ try {
     const fixtureBeforeDiagnostics = await treeSnapshot(fixture);
     const list = runCli(['adapter', 'list', '--control', root], root, isolatedHostEnv);
     assert.equal(list.status, 0, `${list.stderr}\n${list.stdout}`);
-    for (const id of expectedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=not_configured host=unavailable`), `${id} keeps installed assets distinct from its absent host binary`);
+    for (const id of recordedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=not_configured host=unavailable`), `${id} keeps installed assets distinct from its absent host binary`);
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter list and isolated global locations are read-only');
     const manifestBytesBeforeDoctor = await readFile(manifestPath);
     const doctor = runCli(['adapter', 'doctor', '--control', root], root, isolatedHostEnv);
@@ -287,6 +315,103 @@ try {
     assert.match(doctor.stdout, /host=unavailable/);
     assert.deepEqual(await readFile(manifestPath), manifestBytesBeforeDoctor, 'adapter doctor is read-only');
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter doctor and isolated global locations leave all fixture files unchanged');
+
+    // Screen A/B: multi-select two colliding slugs, visit Back, and verify both
+    // repository and harness selections survive the round trip before cancel.
+    const multiRoot = path.join(fixture, 'MULTI-REPOSITORIES');
+    await mkdir(multiRoot);
+    const firstSlugRepo = path.join(multiRoot, 'a-app');
+    const secondSlugRepo = path.join(multiRoot, 'a_app');
+    await makeRepo(firstSlugRepo, 'first repository remains untouched\n');
+    await makeRepo(secondSlugRepo, 'second repository remains untouched\n');
+    const firstSlugBefore = await treeSnapshot(firstSlugRepo);
+    const secondSlugBefore = await treeSnapshot(secondSlugRepo);
+    const multiAnswers = [
+      line(''), line(''), key('enter'), // zero selection is diagnosed, not defaulted
+      key('down'), key('space'), key('up'), key('space'), key('enter'), // a_app first, then a-app
+      line(''), line(''), line(''), line(''), line(''), line(''), line(''), line(''),
+      key('down'), key('space'), key('up'), key('space'), key('escape'), // OpenCode primary, Codex second; back
+      key('enter'), // both repositories remain checked
+      line(''), line(''), line(''), line(''), line(''), line(''), line(''), line(''),
+      key('enter'), line('n'), line('cancel'), // both adapters remain checked; cancel exact plan
+    ];
+    const multiSelection = terminalInput(multiRoot, multiAnswers, { HOME: path.join(fixture, 'home-multi') });
+    assert.equal(multiSelection.status, 0, `${multiSelection.stderr}\n${multiSelection.stdout}`);
+    assert.match(multiSelection.stdout, /Select at least 1 items|Select a row with Space/);
+    assert.match(multiSelection.stdout, /primary OpenCode \(opencode\)/);
+    assert.match(multiSelection.stdout, /a-app-2: \.\/a_app/);
+    assert.match(multiSelection.stdout, /a-app: \.\/a-app/);
+    assert.match(multiSelection.stdout, /Cancelled\. No files were changed\./);
+    assert.equal(await readFile(path.join(multiRoot, 'project.yaml')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(multiRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+    assert.deepEqual(await treeSnapshot(firstSlugRepo), firstSlugBefore, 'both source repositories remain byte-identical after Back/Cancel');
+    assert.deepEqual(await treeSnapshot(secondSlugRepo), secondSlugBefore, 'both source repositories remain byte-identical after Back/Cancel');
+
+    // Zero suggested children still permits an explicit custom external Git root.
+    const customRoot = path.join(fixture, 'CUSTOM-PATH-CONTROL');
+    await mkdir(customRoot);
+    const externalRepo = path.join(fixture, 'EXPLICIT-EXTERNAL-REPOSITORY');
+    await makeRepo(externalRepo, 'external repository stays untouched\n');
+    git(externalRepo, ['branch', '-m', 'develop']);
+    const externalBefore = await treeSnapshot(externalRepo);
+    const customPathRun = terminalInput(customRoot, [
+      line(''), line(''), key('enter'), line(externalRepo), key('enter'),
+      line(''), line(''), line(''), line(''), key('down'), key('space'), key('enter'), line('n'), line('cancel'),
+    ], { HOME: path.join(fixture, 'home-custom-path') });
+    assert.equal(customPathRun.status, 0, `${customPathRun.stderr}\n${customPathRun.stdout}`);
+    assert.match(customPathRun.stdout, /Add repository by path/);
+    assert.ok(customPathRun.stdout.includes(externalRepo), customPathRun.stdout);
+    assert.match(customPathRun.stdout, /external-repository/);
+    assert.match(customPathRun.stdout, /Cancelled\. No files were changed\./);
+    assert.deepEqual(await treeSnapshot(externalRepo), externalBefore, 'custom external repository stays unchanged before exact approval');
+    assert.equal(await readFile(path.join(customRoot, 'project.yaml')).then(() => true, () => false), false);
+
+    // Ctrl+C from the raw checklist restores the terminal and exits without mutation.
+    const interruptRoot = path.join(fixture, 'INTERRUPT');
+    await mkdir(interruptRoot);
+    const interruptRepo = path.join(interruptRoot, 'product');
+    await makeRepo(interruptRepo, 'interrupt fixture remains untouched\n');
+    const interruptBefore = await treeSnapshot(interruptRepo);
+    const interrupted = terminalInput(interruptRoot, [line(''), line(''), key('ctrl-c')], { HOME: path.join(fixture, 'home-interrupt') });
+    assert.equal(interrupted.status, 130, `${interrupted.stderr}\n${interrupted.stdout}`);
+    assert.match(interrupted.stdout, /Cancelled by Ctrl\+C\. No workspace or repository changes were applied\./);
+    assert.deepEqual(await treeSnapshot(interruptRepo), interruptBefore, 'Ctrl+C leaves source repository bytes unchanged');
+    assert.equal(await readFile(path.join(interruptRoot, 'project.yaml')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(interruptRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+
+    // Narrow, monochrome dumb terminals use clipped plain text, including long repository paths.
+    const narrowRoot = path.join(fixture, 'NARROW-CONTROL-WORKSPACE');
+    await mkdir(narrowRoot);
+    const longName = `product-${'long-segment-'.repeat(5)}repo`;
+    const longRepo = path.join(narrowRoot, longName);
+    await makeRepo(longRepo, 'long path fixture remains untouched\n');
+    const narrow = terminalInput(narrowRoot, [line(''), line(''), key('escape')], {
+      HOME: path.join(fixture, 'home-narrow'),
+      TERM: 'dumb',
+      NO_COLOR: '1',
+      TRIAD_TEST_PTY_COLS: '36',
+      TRIAD_TEST_PTY_ROWS: '12',
+    });
+    assert.equal(narrow.status, 0, `${narrow.stderr}\n${narrow.stdout}`);
+    assert.doesNotMatch(narrow.stdout, /\u001b\[/, 'TERM=dumb and NO_COLOR stay readable without ANSI controls');
+    assert.match(narrow.stdout, /…/, 'long paths are clipped to the terminal width');
+    assert.match(narrow.stdout, /Cancelled\. No files were changed\./);
+    assert.equal(await readFile(path.join(narrowRoot, 'project.yaml')).then(() => true, () => false), false);
+
+    // NO_COLOR disables style codes independently of ANSI screen navigation.
+    const noColorRoot = path.join(fixture, 'NO-COLOR-CONTROL-WORKSPACE');
+    await mkdir(noColorRoot);
+    const noColorRepo = path.join(noColorRoot, 'product');
+    await makeRepo(noColorRepo, 'no-color fixture remains untouched\n');
+    const noColor = terminalInput(noColorRoot, [line(''), line(''), key('escape')], {
+      HOME: path.join(fixture, 'home-no-color'),
+      TERM: 'xterm-256color',
+      NO_COLOR: '1',
+    });
+    assert.equal(noColor.status, 0, `${noColor.stderr}\n${noColor.stdout}`);
+    assert.match(noColor.stdout, /\u001b\[2J/, 'interactive navigation remains available in a colorless terminal');
+    assert.doesNotMatch(noColor.stdout, /\u001b\[[0-9;]*m/, 'NO_COLOR suppresses all ANSI style codes including cleanup reset');
+    assert.match(noColor.stdout, /Cancelled\. No files were changed\./);
 
     // Regression: a wrong repository path is corrected without restarting the wizard;
     // a later preflight failure can retry repository mapping in the same Control Workspace.
@@ -298,15 +423,17 @@ try {
     const retryBefore = await treeSnapshot(retryRepo);
     const retryHead = git(retryRepo, ['rev-parse', 'HEAD']);
     const retryAnswers = [
-      '', '', '1', '1', '', './missing', '1', '', 'bad..branch', '',
-      'y', '1', '1', '', '1', '', '', '', 'opencode', '', 'install',
+      line(''), line(''), key('down'), key('enter'), line('./missing'), key('enter'), line('./ketchup2'), key('enter'),
+      line(''), line(''), line('bad..branch'), line(''),
+      line('y'), key('enter'), line(''), line(''), line('triad/ketchup2-feature'), line(''),
+      key('space'), key('enter'), line('n'), line('install'),
     ];
     const retryRun = terminalInput(retryRoot, retryAnswers, {
       HOME: path.join(fixture, 'home-path-recovery'),
       CODEX_HOME: path.join(fixture, 'home-path-recovery', '.codex'),
     });
     assert.equal(retryRun.status, 0, retryRun.stderr + '\n' + retryRun.stdout);
-    assert.match(retryRun.stdout, /Not an existing Git repository root:/);
+    assert.match(retryRun.stdout, /Path was not added; no workspace changes were made:/);
     assert.match(retryRun.stdout, /Repository preflight failed; nothing was changed:/);
     assert.match(retryRun.stdout, /Correct repository mapping and retry from this workspace\?/);
     assert.match(retryRun.stdout, /Triad\+ setup completed\./);
@@ -324,7 +451,10 @@ try {
     await mkdir(greenRoot);
     const greenHome = path.join(fixture, 'home-green');
     await mkdir(greenHome);
-    const greenAnswers = ['', '', '2', '1', 'sample-app', '', '', '', '', 'opencode', '', 'install'];
+    const greenAnswers = [
+      line(''), line(''), key('down'), key('enter'), line('1'), line('sample-app'), line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), line('n'), line('install'),
+    ];
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
     await saveTranscript('greenfield-not-ready', green);
@@ -341,7 +471,7 @@ try {
     // A06: a CWD that is itself a product Git root is not initialized as control and no sibling is guessed.
     const appRoot = path.join(fixture, 'APP-ROOT');
     await makeRepo(appRoot, 'app source\n');
-    const blocked = terminalInput(appRoot, ['', ''], { HOME: path.join(fixture, 'home-blocked') });
+    const blocked = terminalInput(appRoot, [line(''), line('')], { HOME: path.join(fixture, 'home-blocked') });
     assert.equal(blocked.status, 0, `${blocked.stderr}\n${blocked.stdout}`);
     await saveTranscript('git-root-boundary-cancel', blocked);
     assert.match(blocked.stdout, /belongs to Git root/);
@@ -352,10 +482,10 @@ try {
 
     // A01: a not-yet-created root is previewed without making the directory; cancellation remains write-free.
     const missingRoot = path.join(await realpath(fixture), 'NEW-ROOT');
-    const missingRootRun = terminalInput(fixture, ['', 'NEW-ROOT', '3', 'opencode', '', ''], { HOME: path.join(fixture, 'home-missing-root') });
+    const missingRootRun = terminalInput(fixture, [line(''), line('NEW-ROOT'), key('escape')], { HOME: path.join(fixture, 'home-missing-root') });
     assert.equal(missingRootRun.status, 0, `${missingRootRun.stderr}\n${missingRootRun.stdout}`);
     await saveTranscript('new-root-cancel', missingRootRun);
-    assert.ok(missingRootRun.stdout.includes(`Control Workspace (open this path): ${missingRoot}`), missingRootRun.stdout);
+    assert.ok(missingRootRun.stdout.includes(`Control Workspace: ${missingRoot}`), missingRootRun.stdout);
     assert.match(missingRootRun.stdout, /Cancelled\. No files were changed\./);
     assert.equal(await stat(missingRoot).then(() => true, () => false), false);
 
@@ -364,7 +494,9 @@ try {
     await mkdir(path.join(collisionRoot, '.opencode', 'commands'), { recursive: true });
     const ownerCommand = '# Owner command\n';
     await writeFile(path.join(collisionRoot, '.opencode', 'commands', 'triad.md'), ownerCommand);
-    const collision = terminalInput(collisionRoot, ['', '', '3', 'opencode', '', ''], { HOME: path.join(fixture, 'home-collision') });
+    const collision = terminalInput(collisionRoot, [
+      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('enter'), line('n'),
+    ], { HOME: path.join(fixture, 'home-collision') });
     assert.equal(collision.status, 0, `${collision.stderr}\n${collision.stdout}`);
     await saveTranscript('preflight-collision', collision);
     assert.match(collision.stdout, /Preflight failed; nothing was changed/);
@@ -376,7 +508,9 @@ try {
     const partialRoot = path.join(fixture, 'PARTIAL');
     await mkdir(partialRoot);
     const conflict = path.join(partialRoot, '.agents', 'skills', 'triad-loop-bootstrap', 'SKILL.md');
-    const partialAnswers = ['', '', '3', 'opencode,codex', '', 'install'];
+    const partialAnswers = [
+      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('up'), key('space'), key('enter'), line('n'), line('install'),
+    ];
     const partial = terminalInput(partialRoot, partialAnswers, {
       HOME: path.join(fixture, 'home-partial'),
       TRIAD_TEST_INJECT_CONFLICT: conflict,

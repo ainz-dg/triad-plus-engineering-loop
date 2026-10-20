@@ -464,6 +464,27 @@ export async function immediateGitChildren(root) {
   return result.sort();
 }
 
+/** Validate one explicitly supplied existing Git root without scanning beyond it. */
+export async function inspectExistingRepositoryRoot(controlRoot, candidatePath) {
+  const root = path.resolve(controlRoot);
+  const repository = normalizeDeclaredPath(root, candidatePath, 'repository path');
+  await assertNoSymlinkPath(repository.absolute, { allowMissing: false });
+  let info;
+  try { info = await lstat(repository.absolute); }
+  catch (error) { if (error.code === 'ENOENT') fail(`Existing repository directory does not exist: ${repository.absolute}`); throw error; }
+  if (!info.isDirectory()) fail(`Existing repository path is not a directory: ${repository.absolute}`);
+  const top = gitRoot(repository.absolute);
+  const physical = await realpath(repository.absolute);
+  if (!top || path.resolve(top) !== physical) fail(`Selected path is not an independent Git root: ${repository.absolute}`);
+  const branchResult = git(repository.absolute, ['branch', '--show-current']);
+  const currentBranch = branchResult.status === 0 ? branchResult.stdout.trim() : '';
+  return {
+    path: repository.declared,
+    absolutePath: repository.absolute,
+    currentBranch: currentBranch || null,
+  };
+}
+
 export async function setupReadiness(controlRoot, repositories) {
   const prd = path.join(controlRoot, 'PRD.md');
   const gates = path.join(controlRoot, '.loop', 'quality-gates.yaml');
