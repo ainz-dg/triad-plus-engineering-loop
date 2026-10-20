@@ -27,9 +27,11 @@ existing local Git root outside that list, or choose **Create greenfield
 repository** / **Defer repository configuration**. Greenfield paths remain a
 text-entry flow in this prototype. A selected repository's directory name
 suggests its stable ID, project branch, and worktree mapping; these remain
-editable and pass the existing safety validation.
+editable and pass the existing safety validation. The selected path and
+detected base branch are shown in the mapping step.
 
-Select one or more harnesses on the next checkbox screen with the same keys.
+Select one or more harnesses on the next checkbox screen with the same keys:
+OpenCode, Codex, Claude Code, GitHub Copilot, Antigravity, and Hermes Agent.
 The first harness selected is visibly marked as primary because it supplies
 the current singleton runtime metadata; multi-harness installation does not
 provide per-Attempt cross-harness dispatch. Escape cancels from repository
@@ -47,21 +49,31 @@ At the Control Workspace root, create `PRD.md` with a small goal, one
 observable acceptance criterion, and a deterministic verification command.
 Also add `.loop/quality-gates.yaml`, make an initial commit in each mapped
 repository, and create the declared worktree. Setup does not create these
-inputs implicitly. Then check readiness:
+inputs implicitly. The wizard preview is only a structural check: it looks for
+the root PRD and gate file, an initial commit for each mapped repository, and
+the configured worktree paths. It does not assess PRD or gate quality and does
+not execute the gates.
+
+`doctor` answers a different question. It diagnoses the selected adapter and
+managed project assets, host executable, and available host/verifier
+configuration; it does **not** report the structural project-readiness checks
+or run quality gates. Run it for host and installation diagnostics:
 
 ```bash
 npx triad-plus doctor --host opencode --control .
 ```
 
-Resolve any reported missing inputs before starting the host. Open OpenCode in
-the Control Workspace and start the loop with `/triad ./PRD.md` (or `/triad`
-to use the root PRD). Bootstrap snapshots the source to immutable
+Resolve structural gaps from the preview yourself, and address any host or
+installation issue reported by `doctor`. Open OpenCode in the Control
+Workspace and start the loop with `/triad ./PRD.md` (or `/triad` to use the
+root PRD). Bootstrap snapshots the source to immutable
 `artifacts/prd.md` and records its SHA-256; keep the source unchanged. Direct
 `init` remains available for scripts and advanced setup, but is not the
 first-run wizard path. A successful `init --host ... --control ...`
 confirms installation of adapter assets, **not** creation of `project.yaml`,
 root `PRD.md`, quality gates, or mapped Git worktrees. Do not infer loop
-readiness from adapter installation alone.
+readiness from adapter installation alone. The declared deterministic gates
+are run later by `triad-verify` for an Attempt's recorded candidate.
 
 ## 3. Follow the Card and evidence
 

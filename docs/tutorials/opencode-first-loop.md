@@ -5,11 +5,6 @@ recorded evidence, the optional human-readable reports, and the read-only
 Cockpit. It is a procedure, not a promise that a full loop finishes within a
 fixed time.
 
-![Synthetic demo: project view and Delivery handoff entry](../assets/1.20.0/project-delivery-handoff.png)
-
-*Synthetic demo data. The project view exposes the existing handoff file; it
-does not create one or declare delivery.*
-
 ## Before you start
 
 - Node.js 20 or newer and npm.
@@ -41,15 +36,20 @@ preview before confirming the exact `install` action. The wizard does not
 create the product worktree, PRD, quality gates, or initial product-repository
 commit. It does not log in to OpenCode or write global host configuration.
 
-Check the installed version and readiness from the Control Workspace:
+Check the installed version and host/installation diagnostics from the Control
+Workspace:
 
 ```bash
 npx triad-plus version --control .
 npx triad-plus doctor --host opencode --control .
 ```
 
-Resolve every missing prerequisite that `doctor` reports. A successful
-installation is not the same as a ready project.
+The setup preview checks structural presence of the root PRD and quality-gate
+file, initial commits for mapped repositories, and configured worktree paths.
+It does not evaluate PRD/gate quality or run a gate. `doctor` diagnoses the
+adapter, managed project assets, host executable, and available host/verifier
+configuration; it does not perform those project-readiness checks. A
+successful installation is not the same as a ready project.
 
 ## 2. Write the goal and deterministic quality gates
 
@@ -70,7 +70,10 @@ Use the gate format and executor supported by the installed Triad+ version;
 the example command is valid only when that product repository actually has
 an `npm test` script. Commit the product baseline and create the worktree
 declared in the project mapping. The setup wizard does none of those tasks.
-Run `doctor` again and continue only when its readiness checks pass.
+The wizard does not create the PRD, gate commands, commits, or worktree. Use
+the preview to resolve structural setup gaps and `doctor` for host or
+installation issues. `triad-verify` later runs the declared gates for a
+recorded Attempt.
 
 ## 3. Start the OpenCode loop
 
@@ -136,20 +139,37 @@ is not a fourth Triad role or a repair controller. The viewer renders Markdown
 as inert text, does not fetch links or images, and keeps wide tables and code
 inside their own scroll areas on narrow viewports.
 
-![Synthetic demo: distinct Card signals and Card report entry](../assets/1.20.0/card-signals-report.png)
+![Cockpit 1.21.0 demo workspace overview](../assets/1.21.0/cockpit-workspace-overview.png)
 
-*Synthetic demo only; the displayed names, records, and results are fabricated
-for documentation.*
+*Real Triad+ UI capture; synthetic demo workspace data; not proof of a real
+agent run.*
 
-![Synthetic demo: readable Markdown viewer on desktop](../assets/1.20.0/desktop-handoff-viewer.png)
+![Cockpit 1.21.0 Verifier, Reviewer, and Evaluator+ signals](../assets/1.21.0/cockpit-card-signals.png)
 
-*Synthetic demo only. Viewer links and embedded media remain inert; this image
-does not represent a private run or an OpenCode execution.*
+*Real Triad+ UI capture; synthetic demo workspace data; not proof of a real
+agent run.*
+
+The attempt detail keeps deterministic verifier evidence distinct from review
+documents declared by an agent; the displayed candidate is explicitly not
+re-checked by Cockpit:
+
+![Cockpit 1.21.0 verifier evidence and candidate freshness](../assets/1.21.0/cockpit-card-evidence.png)
+
+*Real Triad+ UI capture; synthetic demo workspace data; not proof of a real
+agent run.*
+
+The built-in reading guide explains evidence provenance and the limits of each
+signal:
+
+![Cockpit 1.21.0 provenance and freshness guide](../assets/1.21.0/cockpit-how-to-read.png)
+
+*Real Triad+ UI capture; synthetic demo workspace data; not proof of a real
+agent run.*
 
 ## When something is absent or blocked
 
-- If `doctor` reports missing inputs, complete them explicitly; setup does not
-  invent the PRD, gate commands, commits, or worktrees.
+- Use the setup preview for structural input/path gaps and `doctor` for host
+  and installation diagnostics; neither creates missing inputs or runs gates.
 - If no Card report or `handoff.md` exists, first check whether the relevant
   Card is terminal or whether the Orchestrator has invoked the renderer. The
   Cockpit will show the document as unavailable rather than generating it.
