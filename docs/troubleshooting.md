@@ -1,11 +1,13 @@
 # Troubleshooting
 
-When the new-workspace wizard lists an existing Git repository, select it
-explicitly by its numbered suggestion or path. A generated repository ID such
-as `repo-1` is not a filesystem path and must not silently become one.
-A mistyped repository path can be corrected in place. If branch/mapping
-validation fails, retry the repository mapping from the same Control
-Workspace; no repository or installation files are changed before approval.
+When the new-workspace wizard lists an existing Git repository, use Up/Down
+and Space to select it, then Enter to confirm. **Add repository by path** is
+for an explicitly supplied local Git root not in the immediate-child list; it
+does not broaden discovery. Repository IDs are suggested from directory names
+and are distinct from keyboard selection. A mistyped path can be corrected in
+place. If branch/mapping validation fails, retry the repository mapping from
+the same Control Workspace; no repository or installation files are changed
+before approval.
 
 Successful `npx triad-plus init --host opencode --control .` installs the
 adapter assets only. It does **not** configure product-repository mappings,
