@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.20.1 — 2026-10-20
+
+Maintenance release following `v1.20.0`, covering PR #22 and PR #23.
+
+- Start the local read-only Cockpit with `npx triad-plus cockpit` from the
+  Control Workspace, without requiring `--control .`. Keep `--control`
+  as an explicit override and add `--no-open` to suppress safe interactive
+  browser opening.
+- Keep the Cockpit bound to 127.0.0.1 with one-time session login, foreground
+  execution, and no agent-control or liveness claims. OpenCode `/cockpit`
+  is **not** provided: the existing custom-command contract does not manage
+  persistent background processes safely.
+- Fix onboarding of existing product repositories: show numbered Git-root
+  suggestions and require an explicit selection, allow correction of invalid
+  paths and retry of repository preflight without restarting the wizard.
+- Clarify adapter installation versus project readiness, the scope of doctor
+  checks, and concise CLI errors. No changes to the Triad+ Core, verifier,
+  Reviewer independence, or Evaluator+ lifecycle.
+- Release notes: [Triad+ 1.20.1](docs/releases/1.20.1.md).
+
 ## 1.20.0
 
 The 1.20.0 change set follows `v1.19.0` and covers the documentation
