@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { openSessionUrl } from "../launcher/open-browser.mjs";
 import { startCockpitServer } from "./server.mjs";
 
 // Foreground launcher behind `triad-plus cockpit`. It validates the control
@@ -17,14 +18,14 @@ function looksLikeControlWorkspace(root) {
 }
 
 /** Validate inputs; returns `{ controlRoot, port }` or throws a user-facing Error. */
-export function resolveCockpitOptions({ control, port }) {
-  if (!control) throw new Error("Provide --control <project-control-path>.");
-  const controlRoot = path.resolve(control);
+export function resolveCockpitOptions({ control, port, cwd = process.cwd() }) {
+  const controlRoot = control ? path.resolve(control) : path.resolve(cwd);
   let info;
   try { info = statSync(controlRoot); } catch { throw new Error(`Control workspace does not exist: ${controlRoot}`); }
   if (!info.isDirectory()) throw new Error(`Control path is not a directory: ${controlRoot}`);
   if (!looksLikeControlWorkspace(controlRoot)) {
-    throw new Error(`Not a Triad+ control workspace (no .triad-plus/, .loop/, or projects/<id>/.loop/): ${controlRoot}`);
+    const hint = control ? "" : " Run from a Control Workspace or pass --control <path>.";
+    throw new Error(`Not a Triad+ control workspace (no .triad-plus/, .loop/, or projects/<id>/.loop/): ${controlRoot}.${hint}`);
   }
   let parsedPort = 0;
   if (port !== undefined) {
@@ -38,8 +39,8 @@ export function resolveCockpitOptions({ control, port }) {
  * Start the Cockpit and keep the process alive until a signal arrives.
  * Resolves with the started server (useful to tests); output goes to `out`.
  */
-export async function launchCockpit({ control, port, out = process.stdout, err = process.stderr, handleSignals = true }) {
-  const options = resolveCockpitOptions({ control, port });
+export async function launchCockpit({ control, port, noOpen = false, cwd = process.cwd(), out = process.stdout, err = process.stderr, handleSignals = true }) {
+  const options = resolveCockpitOptions({ control, port, cwd });
   const started = await startCockpitServer({
     controlRoot: options.controlRoot,
     port: options.port,
@@ -51,7 +52,8 @@ export async function launchCockpit({ control, port, out = process.stdout, err =
   if (!started.uiAvailable) out.write("Warning: UI assets are not built; only the JSON API is available.\n");
   // The URL carries a one-time login code, not the session secret. It is
   // printed once here and stops working after its first use.
-  out.write(`Open this link once to start a session:\n  ${started.sessionUrl}\n`);
+  out.write(`One-time session URL (manual fallback if browser opening is unavailable):\n  ${started.sessionUrl}\n`);
+  openSessionUrl(started.sessionUrl, { noOpen, err });
   out.write("Press Ctrl+C to stop.\n");
   if (handleSignals) {
     const stop = async () => {

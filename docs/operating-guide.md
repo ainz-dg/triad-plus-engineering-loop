@@ -108,12 +108,13 @@ materialized. See the [human-readable reports guide](human-readable-reports.md).
 
 ## Cockpit (read-only)
 
-Once a Control Workspace contains project, Card, and attempt records, start the
-local view with `npx triad-plus cockpit --control <control-workspace>`. It
-shows persisted records and linked evidence; it neither starts agents nor
-generates the human-readable reports. The state `in_progress` is a declared
-workflow value, not proof that an agent is active. Triad+ does not record agent
-liveness. See the [Cockpit guide](../cockpit/README.md).
+Once a Control Workspace contains project, Card, and attempt records, run
+`npx triad-plus cockpit` from its root. The current directory is validated;
+`--control <path>` selects another workspace and `--no-open` disables safe
+automatic browser opening. Cockpit shows persisted records and linked evidence;
+it neither starts agents nor generates the human-readable reports. The state
+`in_progress` is a declared workflow value, not proof that an agent is active.
+Triad+ does not record agent liveness. See the [Cockpit guide](../cockpit/README.md).
 
 For a configured demo service, record its command, local URL, remote-access mode,
 and remote URL in the project and handoff. `localhost` is local-only; do not give

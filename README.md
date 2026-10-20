@@ -208,11 +208,15 @@ never replace JSON/YAML evidence or add an LLM reporting call. See the
 ## Triad Cockpit (read-only web view)
 
 ```bash
-npx triad-plus cockpit --control /absolute/path/to/triad-control
+npx triad-plus cockpit
 ```
 
-Run this after project/Card/attempt records exist. The command starts a local
-web view on `127.0.0.1` and prints a one-time link. It shows persisted cards,
+Run this from the Control Workspace after project/Card/attempt records exist;
+the current directory is validated automatically. Use `--control <path>` to
+select a different workspace or `--no-open` to disable automatic browser
+opening. On a local interactive desktop, the command starts a local web view
+on `127.0.0.1`, opens the one-time link when safe, and always prints that link
+as a fallback. It shows persisted cards,
 attempts, verifier evidence, review documents, Evaluator+ results, and
 artifacts. Every item says who wrote it: Triad+ code, a Triad+ validator, or
 an agent's declaration. A declared `in_progress` state does not show that an
