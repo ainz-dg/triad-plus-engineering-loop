@@ -43,7 +43,7 @@ export function SessionEnded() {
         <h1>Session ended</h1>
         <p>This Cockpit tab no longer has a valid session. The server may have restarted, or the link was opened in another browser.</p>
         <p>Run the command again and open the new one-time link it prints:</p>
-        <pre className="command">npx triad-plus cockpit --control &lt;path&gt;</pre>
+        <pre className="command">npx triad-plus cockpit</pre>
       </div>
     </div>
   );

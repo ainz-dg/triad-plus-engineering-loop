@@ -74,13 +74,13 @@ Usage:
   npx triad-plus adapter upgrade <adapter-id> --control <path> [--apply]
   npx triad-plus adapter remove <adapter-id> --control <path> [--apply]
   npx triad-plus import-bmad-story --source <story.md> --output <card.md> [--target-repository <id>] [--provenance <record.json>] [--required-gate <id>] [--depends-on <card-id>]
-  npx triad-plus cockpit --control <path> [--port <n>]
+  npx triad-plus cockpit [--control <path>] [--port <n>] [--no-open]
 
 Adapters: ${listAdapters().map((adapter) => adapter.id).join(', ')}
 
 The control path is a project-control workspace, not a product repository.
 Installation refuses conflicting asset overwrites; identical global assets may be reused. Upgrade is a dry run unless --apply is supplied.
-cockpit serves a read-only web view of the control workspace on 127.0.0.1 only; it never starts agents.
+cockpit serves a read-only web view of the control workspace on 127.0.0.1 only; it never starts agents. Without --control it validates the current directory. A local interactive launch may open the one-time URL in your browser; --no-open disables this.
 Multi-adapter installation records membership and exact local asset ownership. Attempt-bound host dispatch is not available in this version.
 `);
   process.exit(exitCode);
@@ -89,7 +89,7 @@ Multi-adapter installation records membership and exact local asset ownership. A
 function parseArgs(args) {
   const [command, ...arguments_] = args;
   const rest = [...arguments_];
-  const options = { command, global: false, allowProductRepo: false, apply: false, requiredGates: [], dependsOn: [] };
+  const options = { command, global: false, allowProductRepo: false, apply: false, noOpen: false, requiredGates: [], dependsOn: [] };
   if (command === 'adapter') {
     options.adapterCommand = rest.shift();
     if (!['add', 'list', 'doctor', 'upgrade', 'remove'].includes(options.adapterCommand)) throw new Error('Use adapter add, list, doctor, upgrade, or remove.');
@@ -100,6 +100,7 @@ function parseArgs(args) {
     if (argument === '--global') options.global = true;
     else if (argument === '--allow-product-repo') options.allowProductRepo = true;
     else if (argument === '--apply') options.apply = true;
+    else if (argument === '--no-open' && command === 'cockpit') options.noOpen = true;
     else if (argument === '--required-gate' || argument === '--depends-on') {
       const value = rest[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value.`);
@@ -1831,7 +1832,7 @@ async function doctor(options) {
 async function cockpit(options) {
   // Loaded on demand so installer commands never import the Cockpit server.
   const { launchCockpit } = await import('../cockpit/server/launch.mjs');
-  await launchCockpit({ control: options.control, port: options.port });
+  await launchCockpit({ control: options.control, port: options.port, noOpen: options.noOpen });
 }
 
 async function chooseNewControlRoot(prompt, currentDirectory) {

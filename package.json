@@ -17,6 +17,7 @@
     "tests/codex-liveness-test.mjs",
     "docs/",
     "assets/",
+    "cockpit/launcher/",
     "cockpit/server/",
     "cockpit/dist/",
     "cockpit/README.md",

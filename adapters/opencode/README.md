@@ -167,3 +167,22 @@ Then open the TUI and type `/triad`. The command description should appear.
 Before using the adapter for real delivery, follow the forward test in the
 [Codex replication guide](../../docs/codex-replication.md#forward-test-before-adopting): the
 same observable checks validate this OpenCode adapter.
+
+## Open Cockpit alongside a running loop
+
+`/triad` is a prompt-backed OpenCode command; this adapter does not install a
+`/cockpit` process launcher. To inspect the read-only Cockpit without
+interrupting an active TUI session, open a separate terminal at the Control
+Workspace root and run:
+
+```bash
+npx triad-plus cockpit
+```
+
+This starts the foreground loopback server and prints its one-time URL; a local
+interactive desktop may open it automatically. Use `--no-open` for manual
+opening. Ctrl+C in that separate terminal stops only the Cockpit server. A
+custom command that runs the foreground server as a shell block would hold
+OpenCode's command expansion until the server exits, while detaching it would
+leave process ownership and shutdown undefined; neither behavior is provided
+as `/cockpit`.

@@ -117,11 +117,14 @@ After the workspace has project and Card data, run this in a terminal at the
 Control Workspace root:
 
 ```bash
-npx triad-plus cockpit --control .
+npx triad-plus cockpit
 ```
 
-Open the one-time loopback link printed by the command on the same machine.
-The server is local and read-only; `Ctrl+C` stops it. It reads persisted
+The current Control Workspace is validated automatically; pass
+`--control <path>` to select a different one explicitly. A local interactive
+desktop opens the one-time loopback link when safe, and the URL is always
+printed as a fallback. Use `--no-open` to suppress automatic opening. The
+server is local and read-only; `Ctrl+C` stops it. It reads persisted
 artifacts and does not run a gate, start an agent, or materialize a report.
 
 On the project view, **Delivery handoff** opens the existing `handoff.md` when
