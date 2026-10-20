@@ -1901,7 +1901,7 @@ async function collectRepositoryPlan(prompt, controlRoot) {
       while (!repoPath) {
         const answer = (await prompt.question(`${id} repository path (suggestion number or explicit path; blank cancels): `)).trim();
         if (!answer) return null;
-        const numbered = /^\\d+$/.test(answer);
+        const numbered = /^\d+$/.test(answer);
         const selected = numbered ? suggestions[Number(answer) - 1] : answer;
         if (!selected) {
           process.stdout.write('Unknown suggestion number. Select a listed number or type a repository path.\n');
