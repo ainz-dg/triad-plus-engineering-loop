@@ -51,6 +51,8 @@ existing team/model setup behavior; the manifest's adapter membership is
 normalized independently. Installing several adapters does **not** enable
 per-Attempt cross-harness dispatch. Escape cancels repository selection and
 backs out from adapter selection; Ctrl+C exits without applying the plan.
+The registered adapters are OpenCode, Codex, Claude Code, GitHub Copilot,
+Antigravity, and Hermes Agent.
 
 An optional team-identity/model configuration may also be requested. Before
 writing, the wizard shows a complete preview of the Control Workspace, mapping
@@ -67,9 +69,15 @@ silently overwritten.
 Successful steps are not automatically rolled back if a later adapter install
 fails; the wizard reports the partial result and directs the owner to inspect
 it before re-entry. Installation itself does not imply project readiness:
-the status separately checks for the root `PRD.md`,
-`.loop/quality-gates.yaml`, an initial Git commit per repository, and each
-mapped worktree. It does not create those inputs implicitly.
+the wizard's initial readiness summary is a structural check for the root
+`PRD.md`, `.loop/quality-gates.yaml`, an initial Git commit per repository,
+and each mapped worktree path. It does not create those inputs implicitly,
+assess their quality, or execute the gates.
+
+Keep this structural preview separate from `doctor`. `doctor` diagnoses
+adapter installation, managed project assets, the host executable, and
+available host/verifier configuration; it is not a project-readiness check.
+Declared quality gates run later through `triad-verify` for a recorded Attempt.
 
 ### Existing-workspace management
 

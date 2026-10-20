@@ -95,7 +95,11 @@ npx triad-plus
 
 After setup, create root `PRD.md` and `.loop/quality-gates.yaml`, commit the
 mapped repositories, and create their declared worktrees; the wizard does not
-create these inputs. Check readiness and then start OpenCode:
+create these inputs. Its preview checks only their structural presence (plus
+an initial commit and configured worktree path for each mapping). It does not
+judge PRD or gate quality, nor run the gates. `doctor` is a separate host and
+installation diagnostic: it does not establish project readiness or execute
+the gates. Review both outputs for their distinct purposes, then start OpenCode:
 
 ```bash
 npx triad-plus doctor --host opencode --control .

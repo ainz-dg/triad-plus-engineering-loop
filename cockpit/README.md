@@ -61,6 +61,8 @@ How it is built:
 The UI follows Workspace → Project → Card → Attempt → Evidence. Navigation
 uses URL hashes (`#/p/<project>/c/<card>?file=<path>`), so refresh, deep links,
 and the Back button work and the server needs no fallback routes.
+For an illustrated, synthetic-data walkthrough of the read-only UI, see the
+[v1.21.0 Cockpit captures](../docs/tutorials/opencode-first-loop.md#5-read-the-project-and-card-in-cockpit).
 
 The human-reading path starts with the declared Card state, then **Card
 report**, then the separate verification/review evidence below. **Delivery
