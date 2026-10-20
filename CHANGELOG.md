@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.21.0 — 2026-10-20
+
+Onboarding TUI usability update, following `v1.20.1`, with PR #25.
+
+- Add real keyboard-driven repository selection, displaying local Git roots
+  found only as immediate children of the explicitly selected Control Workspace.
+  Navigate with Up/Down; Space toggles; Enter confirms; Escape cancels.
+- Suggest stable repository IDs from selected directory names, preserve editable
+  base/project branches and worktree mappings, and keep existing deterministic
+  validation, no-clobber, and exact `install` approval.
+- Add genuine multi-harness checkboxes for the six registered coding-agent
+  adapters; the first selected host remains visibly primary. Multi-adapter
+  *installation* does not provide automatic per-Attempt host dispatch.
+- Preserve the no-write-before-confirmation and no-global-settings boundaries,
+  support explicit add-by-path, greenfield and defer, and maintain readable
+  monochrome/narrow-terminal behavior. Add real-key PTY regression coverage.
+- The P0 rollout does not yet redesign the text-based optional team, persona
+  and model configuration. Those improvements remain scoped to later P1 work.
+- No Core, verifier, Reviewer or Evaluator+ runtime changes.
+- Release notes: [Triad+ 1.21.0](docs/releases/1.21.0.md).
+
 ## 1.20.1 — 2026-10-20
 
 Maintenance release following `v1.20.0`, covering PR #22 and PR #23.
