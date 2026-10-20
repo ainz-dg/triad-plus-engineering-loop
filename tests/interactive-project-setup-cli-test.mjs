@@ -193,7 +193,7 @@ try {
     const repoStatusBefore = git(sampleApp, ['status', '--porcelain']);
     const answers = [
       '', '', '1', '1',
-      'sample-app', '', '', '', '',
+      'sample-app', '1', '', '', '',
       'opencode,codex,claude-code,copilot,antigravity,hermes', 'install',
     ];
     const setup = terminalInput(root, answers, {
@@ -212,6 +212,8 @@ try {
     const realRoot = await realpath(root);
     assert.ok(setup.stdout.includes(`Control Workspace (open this path): ${realRoot}`), setup.stdout);
     assert.match(setup.stdout, /Triad\+ setup completed\./);
+    assert.match(setup.stdout, /1\) \.\/sample-app/, 'Git root appears as an explicit numbered suggestion');
+    assert.match(setup.stdout, /repository path \(suggestion number or explicit path; blank cancels\)/);
     assert.match(setup.stdout, /Attempt-bound multi-harness dispatch remains unsupported/);
     assert.match(setup.stdout, /Readiness: NOT READY/);
     assert.match(setup.stdout, /\/triad/);
@@ -286,6 +288,36 @@ try {
     assert.deepEqual(await readFile(manifestPath), manifestBytesBeforeDoctor, 'adapter doctor is read-only');
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter doctor and isolated global locations leave all fixture files unchanged');
 
+    // Regression: a wrong repository path is corrected without restarting the wizard;
+    // a later preflight failure can retry repository mapping in the same Control Workspace.
+    const retryRoot = path.join(fixture, 'PATH-RECOVERY');
+    await mkdir(retryRoot);
+    const retryRepo = path.join(retryRoot, 'ketchup2');
+    await makeRepo(retryRepo, 'do not change product contents\n');
+    const retryBefore = await treeSnapshot(retryRepo);
+    const retryHead = git(retryRepo, ['rev-parse', 'HEAD']);
+    const retryAnswers = [
+      '', '', '1', '1', '', './missing', '1', '', 'bad..branch', '',
+      'y', '1', '1', '', '1', '', '', '', 'opencode', '', 'install',
+    ];
+    const retryRun = terminalInput(retryRoot, retryAnswers, {
+      HOME: path.join(fixture, 'home-path-recovery'),
+      CODEX_HOME: path.join(fixture, 'home-path-recovery', '.codex'),
+    });
+    assert.equal(retryRun.status, 0, retryRun.stderr + '\n' + retryRun.stdout);
+    assert.match(retryRun.stdout, /Not an existing Git repository root:/);
+    assert.match(retryRun.stdout, /Repository preflight failed; nothing was changed:/);
+    assert.match(retryRun.stdout, /Correct repository mapping and retry from this workspace\?/);
+    assert.match(retryRun.stdout, /Triad\+ setup completed\./);
+    assert.match(await readFile(path.join(retryRoot, 'project.yaml'), 'utf8'), /path: "\.\/ketchup2"/);
+    assert.equal(git(retryRepo, ['rev-parse', 'HEAD']), retryHead);
+    assert.deepEqual(await treeSnapshot(retryRepo), retryBefore, 'product repository stays byte-identical');
+    const missingControl = runCli(['init', '--host', 'opencode'], retryRoot);
+    assert.equal(missingControl.status, 2);
+    assert.match(missingControl.stderr, /Provide --control/);
+    assert.match(missingControl.stderr, /npx triad-plus --help/);
+    assert.doesNotMatch(missingControl.stderr, /Usage:/, 'parameter errors no longer dump the full help');
+    
     // A04-A05: actual greenfield setup initializes local Git only after exact approval and reports missing readiness inputs.
     const greenRoot = path.join(fixture, 'GREENFIELD');
     await mkdir(greenRoot);
