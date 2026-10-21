@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://triad-plus.invalid/schemas/pr-plan.schema.json",
+  "title": "Triad+ PR Delivery Plan",
+  "type": "object",
+  "required": ["schema_version", "project_id", "snapshot_sha256", "mode", "review_limit_files", "source", "groups", "diagnostics", "approval", "drafts", "plan_sha256"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "snapshot_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "mode": { "enum": ["auto", "single", "compact", "review-friendly"] },
+    "review_limit_files": { "type": "integer", "minimum": 1 },
+    "source": {
+      "type": "object",
+      "required": ["queue_path", "queue_sha256", "project_path", "project_sha256", "canonical_card_ids"],
+      "properties": {
+        "queue_path": { "type": "string", "minLength": 1 },
+        "queue_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "project_path": { "type": "string", "minLength": 1 },
+        "project_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "canonical_card_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      },
+      "additionalProperties": false
+    },
+    "groups": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "card_ids", "target_repository", "branch", "worktree", "base_branch", "base_commit", "remote", "remote_url", "dependencies", "expected_paths", "rationale"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "card_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+          "target_repository": { "type": "string", "minLength": 1 },
+          "branch": { "type": ["string", "null"] },
+          "worktree": { "type": ["string", "null"] },
+          "base_branch": { "type": ["string", "null"] },
+          "base_commit": { "type": ["string", "null"] },
+          "remote": { "type": ["string", "null"] },
+          "remote_url": { "type": ["string", "null"] },
+          "dependencies": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "expected_paths": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "rationale": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "diagnostics": { "type": "array", "items": { "type": "object" } },
+    "approval": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["status", "owner", "approved_at", "plan_sha256", "permitted_repositories", "pr_count", "groups", "effect"],
+          "properties": {
+            "status": { "const": "approved" },
+            "owner": { "type": "string", "minLength": 1 },
+            "approved_at": { "type": "string", "format": "date-time" },
+            "plan_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+            "permitted_repositories": { "type": "array", "items": { "type": "string" } },
+            "pr_count": { "type": "integer", "minimum": 1 },
+            "groups": { "type": "array", "items": { "type": "object" } },
+            "effect": { "const": "draft_pr_creation_only" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "drafts": { "type": "array", "items": { "type": "object" } },
+    "plan_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+  },
+  "additionalProperties": false
+}

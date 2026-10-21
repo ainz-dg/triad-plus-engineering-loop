@@ -108,14 +108,16 @@ function normalizeRepositoryMappings(value) {
       id: scalarValue(entry.id),
       path: typeof entry.path === "string" ? scalarValue(entry.path) : null,
       worktree: typeof entry.worktree === "string" ? scalarValue(entry.worktree) : null,
+      ...(typeof entry.base_branch === "string" ? { base_branch: scalarValue(entry.base_branch) } : {}),
+      ...(typeof entry.project_branch === "string" ? { project_branch: scalarValue(entry.project_branch) } : {}),
     }))
     .filter((entry) => entry.id && (entry.path || entry.worktree));
 }
 
 /**
- * Read only the repository mapping subset needed to authorize a declared
- * external worktree. This accepts project.yaml's stable JSON/YAML shapes and
- * is deliberately not a second general-purpose project parser.
+ * Read the repository mapping subset needed to authorize a declared worktree
+ * and its default branches. This accepts project.yaml's stable JSON/YAML
+ * shapes and is deliberately not a second general-purpose project parser.
  */
 export function parseRepositoryMappings(source) {
   try {

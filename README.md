@@ -120,6 +120,10 @@ The Orchestrator first shows the feature cards, then delegates the bounded work.
 If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencode)
 and [troubleshooting](docs/troubleshooting.md).
 
+For deterministic, owner-approved draft PR grouping and creation from verified
+Triad snapshots, see [PR planning](docs/pr-planning.md). Draft creation is
+opt-in; merge, release, push, and force-push actions are outside that tool.
+
 ## Installation version and safe uninstall
 
 For interactive setup or day-to-day management, run `npx triad-plus` in a
