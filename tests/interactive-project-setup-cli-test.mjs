@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listAdapters, sharedSkillNames } from '../adapters/registry.mjs';
-import { validateInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
+import { buildMultiAdapterManifest, validateInstallationManifest, writeInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repositoryRoot, 'bin', 'triad-plus.js');
@@ -339,6 +339,176 @@ try {
     assert.match(doctor.stdout, /host=unavailable/);
     assert.deepEqual(await readFile(manifestPath), manifestBytesBeforeDoctor, 'adapter doctor is read-only');
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter doctor and isolated global locations leave all fixture files unchanged');
+
+    // The managed-block regression must come from a real first-run wizard
+    // install, with Codex primary, the optional global entry, and READY inputs.
+    const managedRoot = path.join(fixture, 'MANAGED-BLOCK-FIRST-RUN');
+    const managedHome = path.join(fixture, 'managed-home');
+    const managedCodexHome = path.join(fixture, 'managed-codex-home');
+    const managedHostlessPath = path.join(fixture, 'managed-hostless-bin');
+    await mkdir(managedRoot, { recursive: true });
+    for (const directory of [managedHome, managedCodexHome, managedHostlessPath]) await mkdir(directory, { recursive: true });
+    for (const command of ['git', 'python3']) {
+      const executable = spawnSync('which', [command], { encoding: 'utf8' });
+      assert.equal(executable.status, 0, `the local ${command} fixture executable is available`);
+      await symlink(executable.stdout.trim(), path.join(managedHostlessPath, command));
+    }
+    await writeFile(path.join(managedRoot, 'PRD.md'), '# Managed block first-run fixture\n');
+    await mkdir(path.join(managedRoot, '.loop'), { recursive: true });
+    await writeFile(path.join(managedRoot, '.loop', 'quality-gates.yaml'), [
+      'version: 2',
+      'gates:',
+      '  - id: required-fixture-check',
+      '    command: true',
+      '    required: true',
+      '    executor: control-plane',
+      '    timeout_seconds: 2',
+      '',
+    ].join('\n'));
+    const managedTeamBytes = Buffer.from(`${JSON.stringify(teamConfiguration(), null, 2)}\n`);
+    await mkdir(path.join(managedRoot, '.triad-plus'), { recursive: true });
+    await writeFile(path.join(managedRoot, '.triad-plus', 'team.json'), managedTeamBytes);
+    const managedRepo = path.join(managedRoot, 'product');
+    await makeRepo(managedRepo, 'managed block product fixture\n');
+    const managedWorktree = path.join(managedRoot, 'worktrees', 'product-feature');
+    await mkdir(path.dirname(managedWorktree), { recursive: true });
+    git(managedRepo, ['worktree', 'add', '-b', 'triad/product-feature', managedWorktree, 'main']);
+    const managedAnswers = [
+      line(''), line(''), key('space'), key('enter'), line('product'), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('install'),
+    ];
+    const managedSetup = terminalInput(managedRoot, managedAnswers, {
+      HOME: managedHome,
+      CODEX_HOME: managedCodexHome,
+      PATH: managedHostlessPath,
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    });
+    assert.equal(managedSetup.status, 0, `${managedSetup.stderr}\n${managedSetup.stdout}`);
+    assert.match(managedSetup.stdout, /primary Codex \(codex\)/);
+    assert.match(managedSetup.stdout, /Readiness: READY/);
+    assert.ok(managedSetup.stdout.includes(`CREATE ${path.join(managedCodexHome, 'skills', 'triad', 'SKILL.md')}`), 'the wizard approved the optional Codex global skill');
+    assert.deepEqual(await readFile(path.join(managedRoot, '.triad-plus', 'team.json')), managedTeamBytes, 'the first-run wizard preserves the configured team');
+    const managedManifestPath = path.join(managedRoot, '.triad-plus', 'installation.json');
+    const managedManifestBytes = await readFile(managedManifestPath);
+    const managedManifest = JSON.parse(managedManifestBytes);
+    validateInstallationManifest(managedManifest);
+    const managedCodexRecord = managedManifest.adapters.find((record) => record.id === 'codex');
+    assert.equal(managedCodexRecord.managed_assets.find((asset) => asset.scope === 'project' && asset.path === 'AGENTS.md')?.kind, 'managed_block');
+    const managedAgentsPath = path.join(managedRoot, 'AGENTS.md');
+    const startMarker = '<!-- triad-plus:managed-instructions:start -->';
+    const endMarker = '<!-- triad-plus:managed-instructions:end -->';
+    const managedAgentsBytes = await readFile(managedAgentsPath);
+    const managedEntryPath = path.join(managedRoot, '.triad-runtime', 'triad-host-entry.mjs');
+    const managedEntryBytes = await readFile(managedEntryPath);
+    const managedPreflight = path.join(managedCodexHome, 'triad-plus', 'host-entry-preflight.mjs');
+    const managedBindingKey = digest(Buffer.from(await realpath(managedRoot)));
+    const managedBindingPath = path.join(managedCodexHome, 'triad-plus', 'bindings', `${managedBindingKey}.json`);
+    const managedBindingBytes = await readFile(managedBindingPath);
+    const managedRuntimeEnv = {
+      HOME: managedHome,
+      CODEX_HOME: managedCodexHome,
+      PATH: managedHostlessPath,
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+    };
+    const runManagedPreflight = () => run(process.execPath, [managedPreflight, '--adapter', 'codex'], managedRoot, managedRuntimeEnv);
+    const runManagedEntry = () => run(process.execPath, [managedEntryPath, '--adapter', 'codex'], managedRoot, managedRuntimeEnv);
+    const assertManagedReady = (label) => {
+      const preflight = runManagedPreflight();
+      assert.equal(preflight.status, 0, `${label}: ${preflight.stderr}\n${preflight.stdout}`);
+      assert.match(preflight.stdout, /READY: codex Triad\+ workspace validated/);
+      const entry = runManagedEntry();
+      assert.equal(entry.status, 0, `${label}: ${entry.stderr}\n${entry.stdout}`);
+      assert.match(entry.stdout, /READY: codex Triad\+ workspace validated/);
+    };
+    const assertManagedBlocked = (label) => {
+      const preflight = runManagedPreflight();
+      assert.equal(preflight.status, 2, `${label}: ${preflight.stderr}\n${preflight.stdout}`);
+      assert.match(preflight.stderr, /BLOCKED: Triad not started/);
+      const entry = runManagedEntry();
+      assert.equal(entry.status, 2, `${label}: ${entry.stderr}\n${entry.stdout}`);
+      assert.match(`${entry.stderr}\n${entry.stdout}`, /BLOCKED: Triad not started/);
+    };
+    assertManagedReady('fresh first-run wizard install validates READY');
+
+    const ownerEditedAgents = Buffer.concat([
+      Buffer.from('# Owner-authored header remains outside the managed block.\n\n'),
+      managedAgentsBytes,
+      Buffer.from('\n## Owner-authored footer remains outside the managed block.\n'),
+    ]);
+    await writeFile(managedAgentsPath, ownerEditedAgents);
+    assertManagedReady('owner edits outside the managed block stay READY');
+    const changedInsideBlock = Buffer.from(ownerEditedAgents.toString('utf8').replace('## Triad+ role-run overlay', '## Altered managed overlay'));
+    await writeFile(managedAgentsPath, changedInsideBlock);
+    assertManagedBlocked('a modified managed block is BLOCKED');
+
+    await writeFile(managedAgentsPath, Buffer.concat([ownerEditedAgents, Buffer.from(`\n${startMarker}\n`)]));
+    assertManagedBlocked('duplicate markers are BLOCKED');
+    await writeFile(managedAgentsPath, Buffer.from(ownerEditedAgents.toString('utf8').replace(endMarker, '<!-- removed managed end -->')));
+    assertManagedBlocked('a missing marker is BLOCKED');
+    const malformedMarkers = ownerEditedAgents.toString('utf8')
+      .replace(startMarker, '<!-- temporary marker -->')
+      .replace(endMarker, startMarker)
+      .replace('<!-- temporary marker -->', endMarker);
+    await writeFile(managedAgentsPath, malformedMarkers);
+    assertManagedBlocked('out-of-order markers are BLOCKED');
+    await writeFile(managedAgentsPath, ownerEditedAgents);
+
+    const managedSentinel = path.join(fixture, 'untrusted-managed-validator-ran.txt');
+    await writeFile(managedEntryPath, `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(managedSentinel)}, 'executed');\n`);
+    const alteredMarkerManifest = JSON.parse(managedManifestBytes);
+    alteredMarkerManifest.adapters.find((record) => record.id === 'codex')
+      .managed_assets.find((asset) => asset.scope === 'project' && asset.path === 'AGENTS.md').start_marker = '<!-- attacker:start -->';
+    await writeInstallationManifest(managedRoot, buildMultiAdapterManifest({
+      triadVersion: alteredMarkerManifest.triad_version,
+      installedAt: alteredMarkerManifest.installed_at,
+      updatedAt: new Date().toISOString(),
+      adapters: alteredMarkerManifest.adapters,
+    }));
+    const alteredMarkerPreflight = runManagedPreflight();
+    assert.equal(alteredMarkerPreflight.status, 2, `${alteredMarkerPreflight.stderr}\n${alteredMarkerPreflight.stdout}`);
+    assert.match(alteredMarkerPreflight.stderr, /canonical AGENTS\.md marker contract/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed manifest marker definition cannot load local validator code');
+    await writeFile(managedManifestPath, managedManifestBytes);
+
+    const alteredBinding = JSON.parse(managedBindingBytes);
+    alteredBinding.expected_project_assets.find((asset) => asset.path === 'AGENTS.md').start_marker = '<!-- attacker:start -->';
+    await writeFile(managedBindingPath, `${JSON.stringify(alteredBinding, null, 2)}\n`);
+    const alteredBindingPreflight = runManagedPreflight();
+    assert.equal(alteredBindingPreflight.status, 2, `${alteredBindingPreflight.stderr}\n${alteredBindingPreflight.stdout}`);
+    assert.match(alteredBindingPreflight.stderr, /canonical AGENTS\.md marker contract/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed owner-binding marker definition cannot load local validator code');
+    await writeFile(managedBindingPath, managedBindingBytes);
+
+    const alteredBindingHash = JSON.parse(managedBindingBytes);
+    alteredBindingHash.expected_project_assets.find((asset) => asset.path === 'AGENTS.md').sha256 = digest(ownerEditedAgents);
+    await writeFile(managedBindingPath, `${JSON.stringify(alteredBindingHash, null, 2)}\n`);
+    const alteredBindingHashPreflight = runManagedPreflight();
+    assert.equal(alteredBindingHashPreflight.status, 2, `${alteredBindingHashPreflight.stderr}\n${alteredBindingHashPreflight.stdout}`);
+    assert.match(alteredBindingHashPreflight.stderr, /project-managed asset list differs from the owner-bound manifest/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed owner-binding hash cannot load local validator code');
+    await writeFile(managedBindingPath, managedBindingBytes);
+
+    const alteredHashManifest = JSON.parse(managedManifestBytes);
+    const agentsAsset = alteredHashManifest.adapters.find((record) => record.id === 'codex')
+      .managed_assets.find((asset) => asset.scope === 'project' && asset.path === 'AGENTS.md');
+    agentsAsset.sha256 = digest(ownerEditedAgents);
+    await writeInstallationManifest(managedRoot, buildMultiAdapterManifest({
+      triadVersion: alteredHashManifest.triad_version,
+      installedAt: alteredHashManifest.installed_at,
+      updatedAt: new Date().toISOString(),
+      adapters: alteredHashManifest.adapters,
+    }));
+    const alteredHashPreflight = runManagedPreflight();
+    assert.equal(alteredHashPreflight.status, 2, `${alteredHashPreflight.stderr}\n${alteredHashPreflight.stdout}`);
+    assert.match(alteredHashPreflight.stderr, /project-managed asset list differs from the owner-bound manifest/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed managed-block hash cannot load local validator code');
+    await writeFile(managedEntryPath, managedEntryBytes);
+    await writeFile(managedManifestPath, managedManifestBytes);
+    await writeFile(managedAgentsPath, managedAgentsBytes);
+    assertManagedReady('restored wizard-generated install remains READY');
 
     // Selecting a global entry is still only a plan: cancelling the exact
     // final preview must leave both local and user-level files untouched.

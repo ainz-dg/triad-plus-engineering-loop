@@ -12,6 +12,9 @@ import { parseQualityGates } from './lib/gates.mjs';
 
 const SUPPORTED = new Set(['codex', 'hermes']);
 const PRODUCT_MARKERS = ['package.json', 'pyproject.toml', 'Cargo.toml', 'pom.xml', 'go.mod', 'Gemfile'];
+const MANAGED_BLOCK_PATH = 'AGENTS.md';
+const MANAGED_BLOCK_START = '<!-- triad-plus:managed-instructions:start -->';
+const MANAGED_BLOCK_END = '<!-- triad-plus:managed-instructions:end -->';
 
 function within(root, candidate) {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
@@ -19,6 +22,53 @@ function within(root, candidate) {
 
 function git(cwd, args) {
   return spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 10_000 });
+}
+
+function managedBlockBytes(bytes, asset) {
+  if (asset.path !== MANAGED_BLOCK_PATH
+    || asset.start_marker !== MANAGED_BLOCK_START
+    || asset.end_marker !== MANAGED_BLOCK_END) {
+    throw new Error(`managed block markers do not match the canonical ${MANAGED_BLOCK_PATH} contract`);
+  }
+  const start = Buffer.from(MANAGED_BLOCK_START);
+  const end = Buffer.from(MANAGED_BLOCK_END);
+  const occurrences = (marker) => {
+    let count = 0;
+    let offset = 0;
+    while ((offset = bytes.indexOf(marker, offset)) !== -1) {
+      count += 1;
+      offset += marker.length;
+    }
+    return count;
+  };
+  if (occurrences(start) !== 1 || occurrences(end) !== 1) {
+    throw new Error('managed instruction block is missing or has duplicate markers');
+  }
+  const startAt = bytes.indexOf(start);
+  const endAt = bytes.indexOf(end);
+  const startLineEnds = bytes[startAt + start.length] === 0x0a
+    || (bytes[startAt + start.length] === 0x0d && bytes[startAt + start.length + 1] === 0x0a);
+  const endAfter = endAt + end.length;
+  const endLineEnds = endAfter === bytes.length || bytes[endAfter] === 0x0a
+    || (bytes[endAfter] === 0x0d && bytes[endAfter + 1] === 0x0a);
+  if (endAt <= startAt || (startAt > 0 && bytes[startAt - 1] !== 0x0a)
+    || !startLineEnds || (endAt > 0 && bytes[endAt - 1] !== 0x0a) || !endLineEnds) {
+    throw new Error('managed instruction block markers are malformed or out of order');
+  }
+  return bytes.subarray(startAt, endAfter);
+}
+
+function managedAssetDigest(bytes, asset) {
+  if (asset.kind === 'file') {
+    if (asset.start_marker !== undefined || asset.end_marker !== undefined) {
+      throw new Error('regular file asset cannot contain managed block markers');
+    }
+    return createHash('sha256').update(bytes).digest('hex');
+  }
+  if (asset.kind === 'managed_block') {
+    return createHash('sha256').update(managedBlockBytes(bytes, asset)).digest('hex');
+  }
+  throw new Error(`unsupported managed asset kind: ${asset.kind}`);
 }
 
 async function expectedGlobalEntry(adapter) {
@@ -183,8 +233,13 @@ async function validateHostEntry({ adapter, cwd = process.cwd() }) {
     for (const asset of projectAssets) {
       const target = await regularFile(root, asset.path, problems, `managed asset ${asset.path}`);
       if (!target) continue;
-      const digest = createHash('sha256').update(await readFile(target)).digest('hex');
-      if (digest !== asset.sha256) problems.push(`managed asset ${asset.path} hash differs from installation manifest`);
+      let actualDigest;
+      try { actualDigest = managedAssetDigest(await readFile(target), asset); }
+      catch (error) {
+        problems.push(`managed asset ${asset.path}: ${error.message}`);
+        continue;
+      }
+      if (actualDigest !== asset.sha256) problems.push(`managed asset ${asset.path} hash differs from installation manifest`);
     }
     const globalAssets = assets.filter((asset) => asset.scope === 'global');
     const expected = await expectedGlobalEntry(adapter);

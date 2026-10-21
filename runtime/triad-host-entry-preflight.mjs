@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 const SUPPORTED = new Set(['codex', 'hermes']);
 const MANIFEST_PATH = '.triad-plus/installation.json';
 const SHA256 = /^[a-f0-9]{64}$/i;
+const MANAGED_BLOCK_PATH = 'AGENTS.md';
+const MANAGED_BLOCK_START = '<!-- triad-plus:managed-instructions:start -->';
+const MANAGED_BLOCK_END = '<!-- triad-plus:managed-instructions:end -->';
 
 function within(root, candidate) {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
@@ -18,6 +21,44 @@ function within(root, candidate) {
 
 function digest(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function managedBlockBytes(bytes, asset) {
+  if (asset.path !== MANAGED_BLOCK_PATH
+    || asset.start_marker !== MANAGED_BLOCK_START
+    || asset.end_marker !== MANAGED_BLOCK_END) {
+    throw new Error(`managed block markers do not match the canonical ${MANAGED_BLOCK_PATH} contract`);
+  }
+  const start = Buffer.from(MANAGED_BLOCK_START);
+  const end = Buffer.from(MANAGED_BLOCK_END);
+  const occurrences = (marker) => {
+    let count = 0;
+    let offset = 0;
+    while ((offset = bytes.indexOf(marker, offset)) !== -1) {
+      count += 1;
+      offset += marker.length;
+    }
+    return count;
+  };
+  if (occurrences(start) !== 1 || occurrences(end) !== 1) {
+    throw new Error('managed instruction block is missing or has duplicate markers');
+  }
+  const startAt = bytes.indexOf(start);
+  const endAt = bytes.indexOf(end);
+  const startLineEnds = bytes[startAt + start.length] === 0x0a
+    || (bytes[startAt + start.length] === 0x0d && bytes[startAt + start.length + 1] === 0x0a);
+  const endAfter = endAt + end.length;
+  const endLineEnds = endAfter === bytes.length || bytes[endAfter] === 0x0a
+    || (bytes[endAfter] === 0x0d && bytes[endAfter + 1] === 0x0a);
+  if (endAt <= startAt || (startAt > 0 && bytes[startAt - 1] !== 0x0a)
+    || !startLineEnds || (endAt > 0 && bytes[endAt - 1] !== 0x0a) || !endLineEnds) {
+    throw new Error('managed instruction block markers are malformed or out of order');
+  }
+  return bytes.subarray(startAt, endAfter);
+}
+
+function managedAssetDigest(bytes, asset) {
+  return digest(asset.kind === 'managed_block' ? managedBlockBytes(bytes, asset) : bytes);
 }
 
 async function assertNoSymlinkPath(target) {
@@ -71,6 +112,23 @@ function assetList(value, label, { absolute = false } = {}) {
     }
     if (seen.has(asset.path)) throw new Error(`${label} contains a duplicate path: ${asset.path}`);
     seen.add(asset.path);
+    if (asset.kind === 'managed_block') {
+      if (asset.path !== MANAGED_BLOCK_PATH
+        || (asset.start_marker !== undefined && asset.start_marker !== MANAGED_BLOCK_START)
+        || (asset.end_marker !== undefined && asset.end_marker !== MANAGED_BLOCK_END)) {
+        throw new Error(`${label} managed block does not match the canonical ${MANAGED_BLOCK_PATH} marker contract`);
+      }
+      return {
+        path: asset.path,
+        kind: asset.kind,
+        sha256: asset.sha256.toLowerCase(),
+        start_marker: MANAGED_BLOCK_START,
+        end_marker: MANAGED_BLOCK_END,
+      };
+    }
+    if (asset.start_marker !== undefined || asset.end_marker !== undefined) {
+      throw new Error(`${label} regular file asset cannot contain managed block markers: ${asset.path}`);
+    }
     return { path: asset.path, kind: asset.kind, sha256: asset.sha256.toLowerCase() };
   }).sort((left, right) => left.path.localeCompare(right.path));
   return result;
@@ -129,7 +187,7 @@ async function validateBinding({ adapter, workspace, bindingPath }) {
   const boundRuntimeAssets = [];
   for (const asset of expectedProject) {
     const bytes = await readRegularFile(path.join(workspace, asset.path), { root: workspace, label: `managed project asset ${asset.path}` });
-    if (digest(bytes) !== asset.sha256) throw new Error(`managed project asset hash differs from owner binding: ${asset.path}`);
+    if (managedAssetDigest(bytes, asset) !== asset.sha256) throw new Error(`managed project asset hash differs from owner binding: ${asset.path}`);
     if (asset.path.startsWith('.triad-runtime/')) boundRuntimeAssets.push({ path: asset.path, bytes });
   }
   for (const asset of expectedGlobal) {
