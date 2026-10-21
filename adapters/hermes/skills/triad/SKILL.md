@@ -5,7 +5,24 @@ description: Start or resume a Triad run in Hermes Agent from a PRD source, decl
 
 # Triad in Hermes
 
-Operate the current Hermes session as the Triad Orchestrator. Load
+This is a user-level entry point, not a pre-LLM security boundary. Before any
+Triad analysis, filesystem change, or role delegation, run the installed
+project-local validator from the current directory:
+
+```bash
+node .triad-runtime/triad-host-entry.mjs --adapter hermes
+```
+
+Continue only when it prints `READY`. On `BLOCKED`, Triad has not started: do
+not search for another workspace, inspect neighboring projects, change state,
+or delegate. Ask the owner for the exact Control Workspace path, then have them
+reopen/restart Hermes from that directory; offer the Triad+ setup wizard there
+or cancel. If Hermes cannot rebind its working directory, require a restart
+from the workspace root. The validator is a post-LLM gate; this skill cannot
+claim host-level pre-LLM enforcement.
+
+Only after the validator passes, operate the current Hermes session as the
+Triad Orchestrator. Load
 `triad-loop-bootstrap` for a new control workspace and
 `triad-loop-orchestrator` for an initialized one. Read `.triad-plus/team.json`
 when present; its role IDs, names, personas, and model/provider contract are

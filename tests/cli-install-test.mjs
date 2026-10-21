@@ -71,7 +71,6 @@ try {
   for (const host of ['codex', 'opencode', 'claude-code', 'antigravity', 'hermes', 'copilot']) {
     const controlRoot = join(fixtureRoot, host, 'control');
     const cliArgs = ['bin/triad-plus.js', 'init', '--host', host, '--control', controlRoot];
-    if (host === 'codex') cliArgs.push('--global');
     const first = spawnSync(process.execPath, cliArgs, {
       cwd: repositoryRoot,
       env: { ...process.env, CODEX_HOME: codexHome },
@@ -92,7 +91,9 @@ try {
     encoding: 'utf8'
   });
   assert.equal(second.status, 2, second.stderr);
-  assert.match(second.stderr, /would be overwritten/);
+  assert.match(second.stderr, /only through the interactive setup wizard/);
+  assert.equal(await stat(join(codexHome, 'prompts', 'triad.md')).then(() => true, () => false), false,
+    'direct Codex global init cannot create user-level files');
   const nonInteractiveWizard = spawnSync(process.execPath, ['bin/triad-plus.js'], {
     cwd: repositoryRoot,
     encoding: 'utf8'
@@ -119,7 +120,7 @@ try {
   const configuredCodexHome = join(fixtureRoot, 'configured-codex-home');
   const configured = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'init', '--host', 'codex', '--control', configuredControl,
-    '--global', '--team-config', teamConfigSource
+    '--team-config', teamConfigSource
   ], {
     cwd: repositoryRoot,
     env: { ...process.env, CODEX_HOME: configuredCodexHome },
@@ -128,13 +129,6 @@ try {
   assert.equal(configured.status, 0, configured.stderr);
   assert.match(await readFile(join(configuredControl, '.triad-plus', 'team.json'), 'utf8'), /"Italian"/);
   assert.match(await readFile(join(configuredControl, '.triad-plus', 'team.json'), 'utf8'), /"enabled": false/);
-  assert.ok((await readFile(join(configuredCodexHome, 'prompts', 'triad.md'), 'utf8')).includes(userFacingIdentityInvariant));
-  assert.match(await readFile(join(configuredCodexHome, 'prompts', 'triad.md'), 'utf8'), /first owner-facing message/i);
-  assert.match(await readFile(join(configuredCodexHome, 'prompts', 'triad.md'), 'utf8'), /--hook-config \.codex\/hooks\.json/);
-  const developerProfile = await readFile(join(configuredCodexHome, 'agents', 'triad_developer.toml'), 'utf8');
-  assert.match(developerProfile, /gpt-5\.6-luna/);
-  assert.match(developerProfile, /precise and focused/);
-  assert.match(developerProfile, /identify yourself as Lin, the Triad\+ Developer/);
   await readFile(join(configuredControl, '.agents', 'skills', 'triad-model-configuration', 'SKILL.md'), 'utf8');
   const instructionPath = join(configuredControl, 'AGENTS.md');
   assert.match(await readFile(instructionPath, 'utf8'), /Orchestrator is `Ada` for this run/);
@@ -142,34 +136,29 @@ try {
   await mkdir(join(configuredControl, '.loop'), { recursive: true });
   const legacyRunState = join(configuredControl, '.loop', 'run-state.yaml');
   await writeFile(legacyRunState, 'version: 2\nupdated_at: null\nproject_decision: not_started\n');
-  const stalePrompt = join(configuredCodexHome, 'prompts', 'triad.md');
-  await writeFile(stalePrompt, 'stale prompt\n');
-  const staleProfile = join(configuredCodexHome, 'agents', 'triad_developer.toml');
-  await writeFile(staleProfile, `${await readFile(staleProfile, 'utf8')}`
-    .replace(/model = .*$/m, 'model = "stale/provider-model"')
-    .replace(/model_reasoning_effort = .*$/m, 'model_reasoning_effort = "low"'));
+  const legacyRunStateBeforeBlockedUpgrade = await readFile(legacyRunState, 'utf8');
+  const codexProfileBeforeBlockedUpgrade = await readFile(join(configuredControl, '.triad-plus', 'team.json'), 'utf8');
+  const instructionBeforeBlockedUpgrade = await readFile(instructionPath, 'utf8');
   const plannedUpgrade = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'upgrade', '--host', 'codex', '--control', configuredControl, '--global'
   ], { cwd: repositoryRoot, env: { ...process.env, CODEX_HOME: configuredCodexHome }, encoding: 'utf8' });
-  assert.equal(plannedUpgrade.status, 0, plannedUpgrade.stderr);
-  assert.match(plannedUpgrade.stdout, /Dry run only/);
-  assert.match(plannedUpgrade.stdout, /Would initialize delivery state/);
+  assert.equal(plannedUpgrade.status, 2);
+  assert.match(plannedUpgrade.stderr, /only through the interactive setup wizard/);
   assert.doesNotMatch(await readFile(legacyRunState, 'utf8'), /^delivery:/m);
-  assert.equal(await readFile(stalePrompt, 'utf8'), 'stale prompt\n');
+  assert.equal(await readFile(join(configuredControl, '.triad-plus', 'team.json'), 'utf8'), codexProfileBeforeBlockedUpgrade);
   const appliedUpgrade = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'upgrade', '--host', 'codex', '--control', configuredControl, '--global', '--apply'
   ], { cwd: repositoryRoot, env: { ...process.env, CODEX_HOME: configuredCodexHome }, encoding: 'utf8' });
-  assert.equal(appliedUpgrade.status, 0, appliedUpgrade.stderr);
-  assert.ok((await readFile(stalePrompt, 'utf8')).includes(userFacingIdentityInvariant));
-  assert.match(await readFile(stalePrompt, 'utf8'), /first owner-facing message/i);
+  assert.equal(appliedUpgrade.status, 2);
+  assert.match(appliedUpgrade.stderr, /only through the interactive setup wizard/);
   assert.match(await readFile(instructionPath, 'utf8'), /Keep this note/);
-  assert.match(await readFile(instructionPath, 'utf8'), /triad-plus:managed-instructions:start/);
-  assert.match(await readFile(legacyRunState, 'utf8'), /^delivery:\n  status: not_delivered/m);
+  assert.equal(await readFile(instructionPath, 'utf8'), instructionBeforeBlockedUpgrade,
+    'blocked global upgrade preserves project instructions byte-for-byte');
+  assert.equal(await readFile(legacyRunState, 'utf8'), legacyRunStateBeforeBlockedUpgrade,
+    'blocked global upgrade preserves run state byte-for-byte');
   assert.equal(await readFile(join(configuredControl, '.triad-plus', 'team.json'), 'utf8'), await readFile(teamConfigSource, 'utf8'));
-  assert.ok((await stat(join(configuredControl, '.triad-plus', 'backups'))).isDirectory());
-  const reboundDeveloperProfile = await readFile(staleProfile, 'utf8');
-  assert.match(reboundDeveloperProfile, /model = "gpt-5\.6-luna"/);
-  assert.match(reboundDeveloperProfile, /model_reasoning_effort = "max"/);
+  assert.equal(await stat(join(configuredControl, '.triad-plus', 'backups')).then(() => true, () => false), false,
+    'blocked global upgrade creates no backup or local workspace changes');
   const shippedCodexHooks = JSON.parse(await readFile(join(repositoryRoot, 'integrations', 'codex', 'hooks.json'), 'utf8'));
   assert.equal(typeof shippedCodexHooks.description, 'string');
   assert.equal('minimum_codex_cli_version' in shippedCodexHooks, false);
@@ -316,9 +305,10 @@ try {
   await readFile(join(antigravityHome, '.gemini', 'config', 'agents', 'triad-reviewer', 'agent.md'), 'utf8');
   await readFile(join(antigravityHome, '.gemini', 'config', 'skills', 'triad', 'SKILL.md'), 'utf8');
   const hermesControl = join(fixtureRoot, 'hermes-configured-control');
+  const hermesHome = join(fixtureRoot, 'hermes-home');
   const hermes = spawnSync(process.execPath, [
-    'bin/triad-plus.js', 'init', '--host', 'hermes', '--control', hermesControl, '--global', '--team-config', teamConfigSource
-  ], { cwd: repositoryRoot, env: { ...process.env, HERMES_HOME: join(fixtureRoot, 'hermes-home') }, encoding: 'utf8' });
+    'bin/triad-plus.js', 'init', '--host', 'hermes', '--control', hermesControl, '--team-config', teamConfigSource
+  ], { cwd: repositoryRoot, env: { ...process.env, HERMES_HOME: hermesHome }, encoding: 'utf8' });
   assert.equal(hermes.status, 0, hermes.stderr);
   await readFile(join(hermesControl, '.triad-runtime', 'adapter.json'), 'utf8');
   // Native BMAD intake is shipped as an integration runtime asset, not only
@@ -327,6 +317,8 @@ try {
   await readFile(join(hermesControl, '.triad-runtime', 'integrations', 'bmad', 'epics-parser.mjs'), 'utf8');
   await readFile(join(hermesControl, '.triad-runtime', 'integrations', 'bmad', 'story-importer.mjs'), 'utf8');
   await readFile(join(hermesControl, '.triad-runtime', 'triad-bmad-intake.mjs'), 'utf8');
+  assert.equal(await stat(join(hermesHome, 'skills', 'triad')).then(() => true, () => false), false,
+    'direct Hermes project init does not install into the user profile');
   const installedEpics = join(fixtureRoot, 'installed-epics.md');
   await writeFile(installedEpics, '# Epic Breakdown\n\n### Epic E1: Installed intake\n\n### Story S1: Parse installed artifact\n\n**Intent / outcome:** The installed runtime parses native BMAD planning.\n\n**Acceptance Criteria:**\n**Given** a native epics.md file\n**When** the installed intake runs\n**Then** it returns a canonical Story.\n');
   const installedIntake = spawnSync(process.execPath, [
@@ -334,8 +326,10 @@ try {
   ], { cwd: hermesControl, encoding: 'utf8' });
   assert.equal(installedIntake.status, 0, installedIntake.stderr);
   assert.match(installedIntake.stdout, /"story_id":"S1"/);
-  assert.ok((await readFile(join(fixtureRoot, 'hermes-home', 'skills', 'triad', 'SKILL.md'), 'utf8')).includes(userFacingIdentityInvariant));
-  await readFile(join(fixtureRoot, 'hermes-home', 'skills', 'triad-model-configuration', 'SKILL.md'), 'utf8');
+  assert.equal(await stat(join(fixtureRoot, 'hermes-home', 'skills', 'triad', 'SKILL.md')).then(() => true, () => false), false,
+    'direct Hermes init leaves user-level wrapper files untouched');
+  assert.equal(await stat(join(fixtureRoot, 'hermes-home', 'skills', 'triad-model-configuration', 'SKILL.md')).then(() => true, () => false), false,
+    'direct Hermes init does not copy optional global skills');
   const copilotControl = join(fixtureRoot, 'copilot-configured-control');
   const copilot = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'init', '--host', 'copilot', '--control', copilotControl, '--team-config', teamConfigSource

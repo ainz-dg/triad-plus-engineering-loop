@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 export const sharedSkillNames = [
   'triad-loop-bootstrap',
@@ -24,14 +24,23 @@ function hostHome(...parts) {
   return join(homedir(), ...parts);
 }
 
-function hermesProfileHome() {
-  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
+export function hermesProfileHome() {
+  if (process.env.HERMES_HOME) return resolve(process.env.HERMES_HOME);
   const root = hostHome('.hermes');
+  const activeProfile = join(root, 'active_profile');
+  let info;
   try {
-    const profile = readFileSync(join(root, 'active_profile'), 'utf8').trim();
-    if (profile) return join(root, 'profiles', profile);
-  } catch {}
-  return root;
+    info = lstatSync(activeProfile);
+  } catch (error) {
+    if (error.code === 'ENOENT') return root;
+    throw new Error(`Unable to inspect Hermes active profile marker: ${error.message}`);
+  }
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Hermes active profile marker is not a regular file: ${activeProfile}`);
+  const profile = readFileSync(activeProfile, 'utf8').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile) || profile === '.' || profile === '..') {
+    throw new Error(`Hermes active profile name is unsafe in ${activeProfile}`);
+  }
+  return join(root, 'profiles', profile);
 }
 
 function projectRuntimeAssets(id) {
@@ -56,10 +65,11 @@ const definitions = [
     id: 'codex',
     label: 'Codex',
     binary: 'codex',
-    entry: '/prompts:triad',
+    entry: '$triad',
     lifecycle: { kind: 'SubagentStop', agentType: 'triad_developer', requiresAsync: true },
     modelBinding: 'global-profiles',
     globalEntry: true,
+    globalEntryDescription: 'one global prompt file',
     projectAssets: [
       { source: 'adapters/codex/run-role.mjs', destination: '.triad-runtime/adapters/codex/run-role.mjs', file: true },
       { source: 'adapters/codex/reviewer-result.mjs', destination: '.triad-runtime/adapters/codex/reviewer-result.mjs', file: true },
@@ -67,8 +77,7 @@ const definitions = [
       ...projectRuntimeAssets('codex')
     ],
     globalAssets: [
-      { source: 'adapters/codex/prompts/triad.md', destination: ({ codexHome }) => join(codexHome, 'prompts', 'triad.md'), file: true },
-      sharedSkills(({ codexHome }) => join(codexHome, 'skills'))
+      { source: 'adapters/codex/prompts/triad.md', destination: ({ codexHome }) => join(codexHome, 'prompts', 'triad.md'), file: true }
     ],
     projectPaths(controlRoot) {
       return [
@@ -79,7 +88,7 @@ const definitions = [
       ];
     },
     globalPaths({ codexHome }) {
-      return [join(codexHome, 'prompts', 'triad.md'), ...sharedSkillNames.map((name) => join(codexHome, 'skills', name))];
+      return [join(codexHome, 'prompts', 'triad.md')];
     },
     roleModelPaths({ codexHome }) {
       return roleDefinitions.map((role) => join(codexHome, 'agents', `triad_${role.id}.toml`));
@@ -219,19 +228,19 @@ const definitions = [
     lifecycle: null,
     modelBinding: 'team-record',
     globalEntry: true,
+    globalEntryDescription: 'the /triad wrapper files in the active profile',
     projectAssets: [
       ...projectRuntimeAssets('hermes')
     ],
     globalAssets: [
-      { source: 'adapters/hermes/skills/triad', destination: () => join(hermesProfileHome(), 'skills', 'triad') },
-      sharedSkills(() => join(hermesProfileHome(), 'skills'))
+      { source: 'adapters/hermes/skills/triad', destination: () => join(hermesProfileHome(), 'skills', 'triad') }
     ],
     projectPaths(controlRoot) {
       return [join(controlRoot, '.triad-runtime')];
     },
     globalPaths() {
       const root = join(hermesProfileHome(), 'skills');
-      return [join(root, 'triad'), ...sharedSkillNames.map((name) => join(root, name))];
+      return [join(root, 'triad')];
     }
   },
   {

@@ -210,7 +210,7 @@ try {
       line(''), line(''), key('space'), key('enter'),
       line('ketchup2'), line(''), line(''), line(''),
       key('down'), key('space'), key('up'), key('space'), key('enter'),
-      line('install'),
+      key('space'), key('enter'), line('install'),
     ];
     const setup = terminalInput(root, answers, {
       HOME: home,
@@ -235,6 +235,8 @@ try {
     assert.match(setup.stdout, /primary OpenCode \(opencode\)/);
     assert.doesNotMatch(setup.stdout, /repo-1/);
     assert.match(setup.stdout, /Attempt-bound multi-harness dispatch remains unsupported/);
+    assert.match(setup.stdout, /Optional; only exact files shown in the final preview can be installed/);
+    assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'prompts', 'triad.md')}`), 'the final preview names the exact absolute Codex prompt path');
     assert.match(setup.stdout, /Readiness: NOT READY/);
     assert.match(setup.stdout, /\/triad/);
     assert.equal(await readFile(path.join(root, 'PRD.md'), 'utf8'), prd);
@@ -270,7 +272,7 @@ try {
     assert.equal(await readFile(path.join(root, '.triad-runtime', 'adapter.json'), 'utf8').then((text) => JSON.parse(text).id), 'opencode', 'the first selected adapter retains the singleton runtime metadata');
     for (const adapter of adapters.filter((candidate) => selectedIds.includes(candidate.id))) {
       const record = multi.adapters.find((entry) => entry.id === adapter.id);
-      assert.deepEqual(record.scopes, { project: true, global: false }, `${adapter.id} is installed project-only`);
+      assert.deepEqual(record.scopes, { project: true, global: adapter.id === 'codex' }, `${adapter.id} records only the explicitly selected global entry scope`);
       const owned = new Map(record.managed_assets.filter((asset) => asset.scope === 'project').map((asset) => [asset.path, asset]));
       for (const target of await registryProjectAssetPaths(adapter)) {
         const asset = owned.get(target);
@@ -299,14 +301,17 @@ try {
       assert.deepEqual(shared.owners, owners, `shared-asset owners are exact: ${shared.path}`);
       assert.equal(digest(await readFile(path.join(root, shared.path))), shared.sha256, `shared bytes match manifest: ${shared.path}`);
     }
-    for (const directory of [home, xdgHome, codexHome, hermesHome, isolatedTmp]) {
+    const codexGlobalEntry = path.join(codexHome, 'prompts', 'triad.md');
+    assert.ok((await readFile(codexGlobalEntry, 'utf8')).includes('triad-host-entry.mjs --adapter codex'));
+    assert.deepEqual(await filesUnder(codexHome), ['prompts/triad.md'], 'the exact selected Codex entry is the only global file installed');
+    for (const directory of [home, xdgHome, hermesHome, isolatedTmp]) {
       assert.deepEqual(await filesUnder(directory), [], `local-only setup wrote no global files under ${directory}`);
     }
     const isolatedHostEnv = { HOME: home, XDG_CONFIG_HOME: xdgHome, CODEX_HOME: codexHome, HERMES_HOME: hermesHome, PATH: hostlessPath };
     const fixtureBeforeDiagnostics = await treeSnapshot(fixture);
     const list = runCli(['adapter', 'list', '--control', root], root, isolatedHostEnv);
     assert.equal(list.status, 0, `${list.stderr}\n${list.stdout}`);
-    for (const id of recordedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=not_configured host=unavailable`), `${id} keeps installed assets distinct from its absent host binary`);
+    for (const id of recordedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=${id === 'codex' ? 'installed' : 'not_configured'} host=unavailable`), `${id} records the selected global entry separately from host availability`);
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter list and isolated global locations are read-only');
     const manifestBytesBeforeDoctor = await readFile(manifestPath);
     const doctor = runCli(['adapter', 'doctor', '--control', root], root, isolatedHostEnv);
@@ -315,6 +320,101 @@ try {
     assert.match(doctor.stdout, /host=unavailable/);
     assert.deepEqual(await readFile(manifestPath), manifestBytesBeforeDoctor, 'adapter doctor is read-only');
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter doctor and isolated global locations leave all fixture files unchanged');
+
+    // Selecting a global entry is still only a plan: cancelling the exact
+    // final preview must leave both local and user-level files untouched.
+    const cancelRoot = path.join(fixture, 'GLOBAL-CANCEL-CONTROL');
+    const cancelRepo = path.join(cancelRoot, 'product');
+    const cancelCodexHome = path.join(fixture, 'codex-cancel-home');
+    await mkdir(cancelRoot);
+    await mkdir(cancelCodexHome);
+    await makeRepo(cancelRepo, 'cancel fixture product state\n');
+    const globalCancel = terminalInput(cancelRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('cancel'),
+    ], { HOME: path.join(fixture, 'home-global-cancel'), CODEX_HOME: cancelCodexHome });
+    assert.equal(globalCancel.status, 0, `${globalCancel.stderr}\n${globalCancel.stdout}`);
+    assert.match(globalCancel.stdout, /CREATE .*prompts[/\\]triad\.md/);
+    assert.match(globalCancel.stdout, /Cancelled\. No files were changed\./);
+    assert.deepEqual(await filesUnder(cancelCodexHome), [], 'final-preview cancellation creates no global file');
+    assert.equal(await readFile(path.join(cancelRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(cancelRoot, 'project.yaml')).then(() => true, () => false), false);
+
+    // A different pre-existing global command is a preflight conflict and the
+    // wizard must preserve it without creating any local workspace assets.
+    const collisionBridgeRoot = path.join(fixture, 'GLOBAL-COLLISION-CONTROL');
+    const collisionBridgeRepo = path.join(collisionBridgeRoot, 'product');
+    const collisionCodexHome = path.join(fixture, 'codex-collision-home');
+    const collisionBridgeEntry = path.join(collisionCodexHome, 'prompts', 'triad.md');
+    const collisionBridgeBytes = '# Owner managed Codex prompt\n';
+    await mkdir(collisionBridgeRoot);
+    await mkdir(path.dirname(collisionBridgeEntry), { recursive: true });
+    await makeRepo(collisionBridgeRepo, 'collision fixture product state\n');
+    await writeFile(collisionBridgeEntry, collisionBridgeBytes);
+    const globalCollision = terminalInput(collisionBridgeRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'),
+    ], { HOME: path.join(fixture, 'home-global-collision'), CODEX_HOME: collisionCodexHome });
+    assert.equal(globalCollision.status, 0, `${globalCollision.stderr}\n${globalCollision.stdout}`);
+    assert.match(globalCollision.stdout, /Global entry collision; existing bytes differ, no files were changed/);
+    assert.equal(await readFile(collisionBridgeEntry, 'utf8'), collisionBridgeBytes, 'pre-existing global owner file remains byte-identical');
+    assert.equal(await readFile(path.join(collisionBridgeRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(collisionBridgeRoot, 'project.yaml')).then(() => true, () => false), false);
+
+    // A different file appearing after the preview is never overwritten.
+    const raceRoot = path.join(fixture, 'GLOBAL-RACE-CONTROL');
+    const raceRepo = path.join(raceRoot, 'product');
+    const raceCodexHome = path.join(fixture, 'codex-race-home');
+    const raceGlobalEntry = path.join(raceCodexHome, 'prompts', 'triad.md');
+    await mkdir(raceRoot);
+    await mkdir(raceCodexHome);
+    await makeRepo(raceRepo, 'race fixture product state\n');
+    const globalRace = terminalInput(raceRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('install'),
+    ], {
+      HOME: path.join(fixture, 'home-global-race'),
+      CODEX_HOME: raceCodexHome,
+      TRIAD_TEST_INJECT_CONFLICT: raceGlobalEntry,
+    });
+    assert.equal(globalRace.status, 2, `${globalRace.stderr}\n${globalRace.stdout}`);
+    assert.match(`${globalRace.stdout}\n${globalRace.stderr}`, /Global entry (?:changed|appeared) after preview.*refusing to overwrite/);
+    assert.equal(await readFile(raceGlobalEntry, 'utf8'), 'introduced after preview\n', 'late owner content remains untouched');
+    const raceManifest = JSON.parse(await readFile(path.join(raceRoot, '.triad-plus', 'installation.json'), 'utf8'));
+    assert.equal(raceManifest.scopes.global, false, 'an unapproved or conflicting global file is never claimed by the local manifest');
+
+    // Direct global init is blocked so it cannot bypass exact-path consent.
+    const secondWorkspace = path.join(fixture, 'SECOND-CONTROL-WORKSPACE');
+    await mkdir(secondWorkspace);
+    const bypass = runCli(['init', '--host', 'codex', '--control', secondWorkspace, '--global'], secondWorkspace, isolatedHostEnv);
+    assert.equal(bypass.status, 2, `${bypass.stderr}\n${bypass.stdout}`);
+    assert.match(bypass.stderr, /only through the interactive setup wizard/);
+    assert.equal(await readFile(path.join(secondWorkspace, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/prompts/triad.md'), 'utf8'), 'blocked direct init leaves the approved global file unchanged');
+
+    // A Codex user profile is shared: the wizard may reuse only byte-identical
+    // global files in a second Control Workspace, then removal of that local
+    // adapter must preserve the global file for the first workspace.
+    const secondRepo = path.join(secondWorkspace, 'product');
+    await makeRepo(secondRepo, 'second workspace fixture stays in temp storage\n');
+    const secondInstall = terminalInput(secondWorkspace, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('install'),
+    ], isolatedHostEnv);
+    assert.equal(secondInstall.status, 0, `${secondInstall.stderr}\n${secondInstall.stdout}`);
+    assert.match(secondInstall.stdout, /REUSE identical .*prompts[/\\]triad\.md/);
+    assert.match(secondInstall.stdout, /Triad\+ setup completed\./);
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/prompts/triad.md'), 'utf8'));
+    const removeSecond = runCli(['adapter', 'remove', 'codex', '--control', secondWorkspace, '--apply'], secondWorkspace, isolatedHostEnv);
+    assert.equal(removeSecond.status, 0, `${removeSecond.stderr}\n${removeSecond.stdout}`);
+    assert.match(removeSecond.stdout, /Global entry files are preserved/);
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/prompts/triad.md'), 'utf8'), 'removing one workspace never removes the shared global entry');
+    const firstAfterSecondRemoval = JSON.parse(await readFile(manifestPath, 'utf8'));
+    assert.equal(firstAfterSecondRemoval.adapters.find((record) => record.id === 'codex').scope_status.global, 'installed', 'the other workspace retains its valid global owner record');
 
     // Screen A/B: multi-select two colliding slugs, visit Back, and verify both
     // repository and harness selections survive the round trip before cancel.
@@ -333,7 +433,7 @@ try {
       key('down'), key('space'), key('up'), key('space'), key('escape'), // OpenCode primary, Codex second; back
       key('enter'), // both repositories remain checked
       line(''), line(''), line(''), line(''), line(''), line(''), line(''), line(''),
-      key('enter'), line('n'), line('cancel'), // both adapters remain checked; cancel exact plan
+      key('enter'), key('enter'), line('n'), line('cancel'), // both adapters remain checked; skip global files and cancel exact plan
     ];
     const multiSelection = terminalInput(multiRoot, multiAnswers, { HOME: path.join(fixture, 'home-multi') });
     assert.equal(multiSelection.status, 0, `${multiSelection.stderr}\n${multiSelection.stdout}`);
@@ -426,7 +526,7 @@ try {
       line(''), line(''), key('down'), key('enter'), line('./missing'), key('enter'), line('./ketchup2'), key('enter'),
       line(''), line(''), line('bad..branch'), line(''),
       line('y'), key('enter'), line(''), line(''), line('triad/ketchup2-feature'), line(''),
-      key('space'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('enter'), line('n'), line('install'),
     ];
     const retryRun = terminalInput(retryRoot, retryAnswers, {
       HOME: path.join(fixture, 'home-path-recovery'),
@@ -453,7 +553,7 @@ try {
     await mkdir(greenHome);
     const greenAnswers = [
       line(''), line(''), key('down'), key('enter'), line('1'), line('sample-app'), line(''), line(''), line(''), line(''),
-      key('space'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('enter'), line('n'), line('install'),
     ];
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
@@ -495,7 +595,7 @@ try {
     const ownerCommand = '# Owner command\n';
     await writeFile(path.join(collisionRoot, '.opencode', 'commands', 'triad.md'), ownerCommand);
     const collision = terminalInput(collisionRoot, [
-      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('enter'), line('n'),
+      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('enter'), key('enter'), line('n'),
     ], { HOME: path.join(fixture, 'home-collision') });
     assert.equal(collision.status, 0, `${collision.stderr}\n${collision.stdout}`);
     await saveTranscript('preflight-collision', collision);
@@ -509,7 +609,7 @@ try {
     await mkdir(partialRoot);
     const conflict = path.join(partialRoot, '.agents', 'skills', 'triad-loop-bootstrap', 'SKILL.md');
     const partialAnswers = [
-      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('up'), key('space'), key('enter'), line('n'), line('install'),
+      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('up'), key('space'), key('enter'), key('enter'), line('n'), line('install'),
     ];
     const partial = terminalInput(partialRoot, partialAnswers, {
       HOME: path.join(fixture, 'home-partial'),

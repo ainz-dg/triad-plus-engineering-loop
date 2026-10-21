@@ -54,12 +54,21 @@ backs out from adapter selection; Ctrl+C exits without applying the plan.
 The registered adapters are OpenCode, Codex, Claude Code, GitHub Copilot,
 Antigravity, and Hermes Agent.
 
-An optional team-identity/model configuration may also be requested. Before
-writing, the wizard shows a complete preview of the Control Workspace, mapping
-changes, selected project-local adapter assets, primary runtime adapter, and
+After project adapters are selected, the wizard can optionally install the
+Codex `$triad` prompt and/or Hermes `/triad` wrapper at user level. It resolves
+and displays every absolute file target (Codex:
+`CODEX_HOME/prompts/triad.md`; Hermes: the active profile's `skills/triad/`
+wrapper files, or `~/.hermes/skills/triad/` only when no active profile marker
+exists). Byte-identical existing files are labeled for reuse; a different
+existing file is a preflight conflict and is never overwritten. Skipping this
+step writes no user-level files. An optional team-identity/model configuration
+may also be requested. The final preview covers the Control Workspace, mapping
+changes, selected project and global assets, primary runtime adapter, and
 initial readiness. Type `install` to apply that exact plan; any other answer
-cancels. The first-run flow does not write global/user-level host files,
-credentials, or account settings.
+cancels. Global bridge files are written only after that final consent; no
+credentials or account settings are changed. Direct global `init`/`upgrade`
+and the legacy Codex/Hermes `install.sh --global` paths refuse the bridge so
+they cannot bypass this preview.
 
 Preflight refuses a Control Workspace inside a product Git root, unsafe paths,
 and asset conflicts. Before applying, setup rechecks relevant root, role
@@ -110,9 +119,14 @@ select the host for the next Attempt.
 For repeatable setup:
 
 ```bash
-npx triad-plus init --host codex --control /path/to/project-control --global
+npx triad-plus
 npx triad-plus doctor --host codex --control /path/to/project-control
 ```
+
+Run the wizard from the intended Control Workspace (or supply its path in the
+wizard) to review and optionally install the global bridge. The direct
+`init --host codex --global` and `init --host hermes --global` commands do not
+perform that installation.
 
 ## Version visibility
 
@@ -206,8 +220,10 @@ The schema-v2 inventory is an installation/lifecycle foundation only. It does
 not provide per-Attempt host selection or active-run safety. Attempts are not
 dispatched to whichever adapter was most recently installed; host dispatch is
 reported as unsupported until an explicit Attempt-bound liveness contract is
-approved and implemented. Codex and Hermes project-local native entry points
-are marked limited/unproven rather than treated as validated.
+approved and implemented. Their optional global entry wrappers validate the
+current project-local workspace after the host invokes the model; this is not a
+pre-LLM security boundary, and native host discovery/invocation still requires
+host-specific smoke testing.
 
 ## Upgrade, repair, or restore an existing control workspace
 
@@ -220,9 +236,13 @@ safe uninstall. It re-materializes project assets, reuses the preserved
 PRD files, evidence, or product repositories. The default is a dry run:
 
 ```bash
-npx triad-plus upgrade --host codex --control /path/to/project-control --global
-npx triad-plus upgrade --host codex --control /path/to/project-control --global --apply
+npx triad-plus upgrade --host codex --control /path/to/project-control
+npx triad-plus upgrade --host codex --control /path/to/project-control --apply
 ```
+
+This managed upgrade refreshes project-local assets. Codex/Hermes global entry
+files are deliberately excluded from direct upgrade; their installation is
+available only through the exact-path, final-consent first-run wizard.
 
 Before replacing a managed asset, the applied upgrade saves its prior copy under
 `.triad-plus/backups/`. Triad+ also maintains a clearly marked role-run block in
@@ -231,10 +251,11 @@ the control workspace `AGENTS.md`; existing instructions are preserved. Review
 higher-priority host policy can prevent the configured Orchestrator identity.
 
 Supported hosts: `codex`, `opencode`, `claude-code`, `antigravity`, `hermes`, and
-the `copilot` adapter.
-Use `--global` to install a host-level entry point where desired. The installer
-refuses overwrites. If the control path is recognizably a product Git repository,
-it stops unless `--allow-product-repo` is explicitly supplied after review.
+the `copilot` adapter. Other adapters retain their documented `--global`
+behavior. Codex/Hermes entry files are the exception: only the interactive
+first-run wizard installs them after exact-path preview and final consent. If
+the control path is recognizably a product Git repository, setup stops unless
+`--allow-product-repo` is explicitly supplied after review.
 
 The saved `.triad-plus/team.json` separates stable role IDs from display names,
 personas, models, and supported effort/options. Existing schema-version-1 team

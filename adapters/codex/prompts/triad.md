@@ -2,6 +2,22 @@
 description: Start or resume a Triad+ Engineering Loop from a PRD source, target repositories, and measurable goals.
 ---
 
+This global prompt is a user-level entry point, not a pre-LLM security
+boundary. Before any Triad analysis, filesystem change, or role delegation,
+run the installed project-local validator from the current directory:
+
+```bash
+node .triad-runtime/triad-host-entry.mjs --adapter codex
+```
+
+Continue only when it prints `READY`. On `BLOCKED`, Triad has not started: do
+not search for another workspace, inspect neighboring projects, change state,
+or delegate. Ask the owner for the exact Control Workspace path, then have them
+reopen/restart Codex from that directory; offer the Triad+ setup wizard there
+or cancel. If Codex cannot rebind its working directory, require a restart
+from the workspace root. The validator is a post-LLM gate; this prompt cannot
+claim host-level pre-LLM enforcement.
+
 Operate a Triad+ Engineering Loop for this owner request:
 
 $ARGUMENTS

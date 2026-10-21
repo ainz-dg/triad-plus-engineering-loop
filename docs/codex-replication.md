@@ -1,7 +1,15 @@
 # Codex adapter
 
-Install with `npx triad-plus init --host codex --control <path> --global`.
-Open the control workspace and run `/prompts:triad <absolute-prd-path>`.
+Run `npx triad-plus` and select Codex as a project adapter. To add the optional
+user-level `$triad` entry, select Codex on the **Optional global entry bridge**
+screen, review the exact absolute `CODEX_HOME/prompts/triad.md` target, then
+type `install` at the final preview. No global file is written when that
+optional entry is skipped. Direct global `init`/`upgrade` and the legacy
+`install.sh --global` path refuse to bypass this consent.
+
+Open the Control Workspace and run `$triad <absolute-prd-path>`. The prompt
+checks that exact workspace before doing Triad work, but runs after the host
+model has been invoked; it is not a pre-LLM security boundary.
 
 Codex uses role profiles for the Orchestrator, Developer, Reviewer, and optional
 Evaluator+. Verification uses explicit dispatch by default, even when a complete,

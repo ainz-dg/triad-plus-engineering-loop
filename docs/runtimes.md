@@ -5,20 +5,33 @@ host-specific entry points and configuration behavior.
 
 | Runtime | Prerequisite | Entry point | Verification | Hook limitation |
 | --- | --- | --- | --- | --- |
-| Codex | Codex CLI | `/prompts:triad` | Explicit dispatch by default; experimental async hook opt-in | Hook is optional, requires trusted configuration, and is not selected by `auto`. |
+| Codex | Codex CLI | `$triad` (optional user-level prompt) | Explicit dispatch by default; experimental async hook opt-in | Hook is optional, requires trusted configuration, and is not selected by `auto`. |
 | Claude Code | Claude Code CLI | `/triad` | Explicit dispatch; hook when validated | Hook is optional and requires trusted configuration. |
 | OpenCode | OpenCode | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
 | Antigravity | Antigravity | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
 | Hermes Agent | Hermes Agent | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
 | GitHub Copilot | GitHub Copilot CLI and desktop app | `/triad` when the project skill is exposed, otherwise `/agent` → `triad-orchestrator` | Explicit dispatch | No adapter hook; desktop app supports the complete validated lifecycle. |
 
-Install with `npx triad-plus init --host <runtime> --control <path>`; use
-`--global` when you want host-level command assets. `doctor` reports the runtime
-binary, adapter assets, verifier, team file, and optional Evaluator+ state.
+Run `npx triad-plus` for the first-install wizard. It can optionally install
+the Codex `$triad` prompt or Hermes `/triad` wrapper after displaying each
+exact absolute target and requiring the final `install` confirmation. Direct
+global `init`/`upgrade` and legacy global scripts refuse these two entries.
+`doctor` reports the runtime binary, adapter assets, verifier, team file, and
+optional Evaluator+ state.
 
-Hermes installs user skills into the active Hermes profile. Its role invocations
-must bind terminal operations to the declared worktree; this is handled by its
-adapter instructions. It is supported, not experimental.
+When selected, the Hermes bridge installs only its `/triad` wrapper files into
+the active Hermes profile; shared role skills remain project-local. Its role
+invocations must bind terminal operations to the declared worktree; this is
+handled by its adapter instructions. It is supported, not experimental.
+
+The Codex and Hermes wrappers run a deterministic project-local check before
+Triad work: current Control Workspace, installation manifest and managed-file
+hashes, adapter metadata, PRD, quality gates, and explicitly declared Git
+repositories/worktrees. A failure stops without searching other workspaces or
+changing files and offers an explicit workspace path, setup wizard, or cancel.
+Because the wrapper itself is invoked by the host model, this is not a pre-LLM
+security boundary. Full native-host invocation still needs host-specific smoke
+testing.
 
 See the concise host guides for [Codex](codex-replication.md),
 [Claude Code](claude-code-replication.md), [OpenCode](opencode-replication.md),

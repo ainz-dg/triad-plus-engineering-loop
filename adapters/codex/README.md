@@ -1,32 +1,40 @@
 # Triad+ Codex adapter
 
-Codex custom prompts live in the user prompt directory, so its native command
-is `/prompts:triad` rather than the un-namespaced `/triad` used by OpenCode and
-Claude Code. The prompt places the current conversation in the Orchestrator
-role; it does not create a hidden coordinator session.
+Codex custom prompts live in the selected user's prompt directory, so the
+global command is `$triad`. The prompt places the current conversation in the
+Orchestrator role; it does not create a hidden coordinator session.
 
-Install a project-control repository first:
-
-```bash
-./adapters/codex/install.sh --project /path/to/project-control-repository
-```
-
-Then install the global entry point and the skills once for the Codex user:
+Use the interactive installer from the intended Control Workspace:
 
 ```bash
-./adapters/codex/install.sh --global
+npx triad-plus
 ```
 
-The installer refuses any overwrite. It installs the project runtime under
-`.triad-runtime` and the six shared skills under `.agents/skills`; the global
-installation also makes the skills available to Codex and writes
-`$CODEX_HOME/prompts/triad.md` (`$HOME/.codex` by default).
+Select Codex as a project adapter. To expose `$triad`, also select Codex under
+**Optional global entry bridge**. The final preview shows the exact absolute
+file `$CODEX_HOME/prompts/triad.md` (default `$HOME/.codex/prompts/triad.md`)
+and the installer creates it only after the exact `install` confirmation.
+That is the only Codex global file managed by this bridge; shared Triad skills
+and role profiles remain project-local or separately user-configured.
 
-Start Codex from the control repository and invoke:
+For non-interactive project-only installation, use `init --host codex
+--control <path>` without `--global`. Direct `init/upgrade --global` and the
+legacy script's `--global` option refuse this entry so the exact-path consent
+preview cannot be bypassed.
+
+Start Codex from the Control Workspace root and invoke:
 
 ```text
-/prompts:triad <PRD path or project request>
+$triad <PRD path or project request>
 ```
+
+The global prompt runs `.triad-runtime/triad-host-entry.mjs --adapter codex`
+before any Triad work. It validates the exact current directory, local
+installation manifest and hashes, project configuration, PRD, gates, and
+declared repositories/worktrees. On failure it states that Triad did not start,
+does not search other workspaces, and offers an explicit path, setup wizard, or
+cancel. This is a post-LLM model-level gate; it cannot claim pre-LLM host
+enforcement. If Codex cannot rebind to the selected root, restart it there.
 
 Before it starts work, configure the four named role profiles described in
 [`docs/codex-replication.md`](../../docs/codex-replication.md). The adapter
