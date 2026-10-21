@@ -37,11 +37,14 @@ the current singleton runtime metadata; multi-harness installation does not
 provide per-Attempt cross-harness dispatch. Escape cancels from repository
 selection and goes back from harness selection. Ctrl+C exits without applying
 the plan. Review the complete preview and type exactly
-`install` to apply it. The wizard does not clone repositories, push changes, or
-write global host configuration. For the full setup behavior and limitations,
-see [npx installation](npx-installation.md). Selecting an adapter installs its
-project-local entry; it does not prove native host discovery or route an Attempt
-to that host. See the [adapter compatibility matrix](compatibility.md).
+`install` to apply it. An additional optional screen can select the Codex
+`$triad` or Hermes `/triad` global entry; the exact files and profile paths are
+previewed and written only after the final confirmation. Skipping it leaves
+global host files unchanged. The wizard does not clone repositories or push
+changes. For full setup behavior and limitations, see
+[npx installation](npx-installation.md). Selecting an adapter does not prove
+native host discovery or route an Attempt to that host. See the
+[adapter compatibility matrix](compatibility.md).
 
 ## 2. Add the project inputs and check readiness
 

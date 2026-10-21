@@ -82,8 +82,10 @@ project; this guide does not promise that a full loop finishes in five minutes.
 
 Start outside the product repository. The wizard asks you to choose a dedicated
 Control Workspace, map local product repositories/worktrees explicitly, select
-adapters, and review a preview before the exact `install` confirmation. It
-does not clone repositories, push changes, or write global host configuration.
+adapters, optionally select a Codex or Hermes user-level entry, and review every
+target before the exact `install` confirmation. The optional entries are not
+written unless selected and approved. Setup does not clone repositories or push
+changes.
 For the step-by-step path, see [Getting started](docs/getting-started.md).
 For the complete OpenCode walkthrough—from setup and readiness through a first
 loop, its evidence, human-readable reports, and the read-only Cockpit—see the
@@ -166,7 +168,13 @@ overwriting one another. `adapter list` and `adapter doctor` are read-only;
 ownership records and conservative hash checks. This is an installation
 foundation, not multi-host dispatch: an Attempt does not yet select an adapter,
 and the CLI reports dispatch as unsupported rather than choosing the last-added
-host. Codex and Hermes project-local native entries remain limited/unproven.
+host. The first-run wizard can also install the optional Codex `$triad` and
+Hermes `/triad` user-level entry files. It previews every absolute profile path
+and exact file, and writes only after `install` is typed; existing or
+conflicting profile files are never overwritten. Codex and Hermes entries are
+model-level wrappers: they validate the project-local workspace before Triad
+work but cannot enforce a pre-LLM host boundary. Native host discovery and full
+application invocation still require smoke tests.
 The terminal menu is the normal path; direct `adapter` commands remain useful
 for scripts and advanced use. See [multi-adapter details](docs/npx-installation.md#local-multi-adapter-inventory).
 
@@ -234,21 +242,21 @@ install. See the [Cockpit guide](cockpit/README.md).
 
 Requirements: Node.js 20+ and one supported coding-agent host.
 
-```bash
-npx triad-plus init --host codex --control /absolute/path/to/triad-control --global
-npx triad-plus doctor --host codex --control /absolute/path/to/triad-control
-```
+Run `npx triad-plus` and use the setup wizard. Select Codex and/or Hermes under
+**Optional global entry bridge** if you want user-level commands. The final
+preview lists the exact profile files and writes them only after the `install`
+confirmation. Without that selection, no user-level files are changed.
 
 Open the control workspace in the selected host and start Triad with an absolute
 PRD path:
 
 | Host | Entry point |
 | --- | --- |
-| Codex | `/prompts:triad /absolute/path/to/prd.md` |
+| Codex | `$triad /absolute/path/to/prd.md` |
 | Claude Code | `/triad /absolute/path/to/prd.md` |
 | OpenCode | `/triad /absolute/path/to/prd.md` |
 | Antigravity | `/triad /absolute/path/to/prd.md` |
-| Hermes Agent | `/triad /absolute/path/to/prd.md` |
+| Hermes Agent | `/triad /absolute/path/to/prd.md` (active Hermes profile) |
 | GitHub Copilot | `/triad /absolute/path/to/prd.md` or select `triad-orchestrator` with `/agent` |
 
 ## Evaluator+

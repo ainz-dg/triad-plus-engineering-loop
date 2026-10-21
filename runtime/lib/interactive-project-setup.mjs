@@ -502,18 +502,22 @@ export async function setupReadiness(controlRoot, repositories) {
   return { ready: missing.length === 0 && repositories.length > 0, missing };
 }
 
-export function projectLaunchHint(adapter, controlRoot) {
+export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled = false } = {}) {
   const rootLine = `Open this Control Workspace in your IDE: ${controlRoot}`;
   if (adapter.id === 'opencode') return [rootLine, 'OpenCode local entry: /triad.'];
   if (adapter.id === 'claude-code') return [rootLine, 'Claude Code local entry: /triad.'];
   if (adapter.id === 'copilot') return [rootLine, 'GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.'];
   if (adapter.id === 'antigravity') return [rootLine, 'Antigravity local assets are installed; native discovery still needs a host smoke test.'];
-  if (adapter.id === 'codex') return [rootLine, 'Codex project-local skill assets are installed; the /prompts:triad entry is user-level and was not installed by this local-only setup.'];
-  if (adapter.id === 'hermes') return [rootLine, 'Hermes project-local assets are installed; native discovery still needs a host smoke test.'];
+  if (adapter.id === 'codex') return [rootLine, globalEntryInstalled
+    ? 'Codex user-level native skill: $triad. Reopen Codex from this exact Control Workspace; its global preflight checks the consent-bound workspace and runtime hashes before local code runs.'
+    : 'Codex project-local skill assets are installed; optional user-level $triad was not selected.'];
+  if (adapter.id === 'hermes') return [rootLine, globalEntryInstalled
+    ? 'Hermes user-level entry: /triad in the active profile. Restart Hermes from this exact Control Workspace; its global preflight checks the consent-bound workspace and runtime hashes before local code runs.'
+    : 'Hermes project-local runtime is installed; optional user-level /triad was not selected.'];
   return [rootLine, `Native entry: ${adapter.entry ?? 'not declared'}.`];
 }
 
-export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, readiness, currentVersion, teamMode = 'leave unconfigured', roleOverlayPlan = null, roleBindingActions = [] }) {
+export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, readiness, currentVersion, teamMode = 'leave unconfigured', roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map() }) {
   const directories = new Set();
   for (const adapter of adapters) {
     for (const target of adapterPlans.get(adapter.id)?.created ?? []) {
@@ -539,7 +543,9 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
         ...roleBindingActions.map(({ adapterId, target }) => `    ${adapterId}: CONFIGURE ${target}`),
       ] : []),
     ]),
-    'Host scope: project-local only; no user-level/global files, credentials, or account settings will be changed.',
+    globalEntryPlans.size
+      ? 'Host scope: project-local assets plus the exact user-level entry and workspace-binding files listed below; the binding is written only after this exact plan is approved. No credentials, account settings, or unrelated profile files will be changed.'
+      : 'Host scope: project-local only; no user-level/global files, credentials, or account settings will be changed.',
     'Workspace/asset directories after approval:',
     `  ${root} (create only if absent)`,
     ...[...directories].sort().map((directory) => `  ${path.join(root, directory)}`),
@@ -554,6 +560,14 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
         ...(plan?.reused ?? []).map((target) => `    REUSE ${target}`),
       ];
     }),
+    'Global host-entry bridge files (Codex/Hermes; optional and consent-gated):',
+    ...(globalEntryPlans.size
+      ? [...globalEntryPlans.values()].flatMap((plan) => [
+        `  ${plan.adapterId}:`,
+        ...plan.created.map((target) => `    CREATE ${target}`),
+        ...plan.reused.map((target) => `    REUSE identical ${target}`),
+      ])
+      : ['  Not selected; no user-level files will be written.']),
     `Initial runtime metadata: ${adapters[0]?.id ?? 'none'} writes .triad-runtime/adapter.json; later adapter additions will not replace it.`,
     `Readiness: ${readiness.ready ? 'READY' : 'NOT READY'}${readiness.missing.length ? ` — missing: ${readiness.missing.join('; ')}` : ''}`,
     'Attempt-bound multi-harness dispatch remains unsupported; installation does not enable per-Attempt host selection.',

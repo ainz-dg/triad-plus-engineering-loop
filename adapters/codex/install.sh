@@ -5,16 +5,14 @@ usage() {
   cat <<'EOF'
 Usage:
   ./adapters/codex/install.sh --project <control-repository-path>
-  ./adapters/codex/install.sh --global
 
-Install the Triad Codex adapter without overwriting existing skills, prompt, or
-project runtime. --project installs the six skills under
-<control-repository-path>/.agents/skills and installs .triad-runtime. It does
-not install the user-level Codex prompt. --global installs the /prompts:triad
-entry point and the six skills under $CODEX_HOME (default: $HOME/.codex).
-
-For normal use run both commands once: --project for each control repository,
-then --global for the Codex entry point. Existing paths are never overwritten.
+This legacy helper installs project-local skills only. For a global $triad
+entry, use `npx triad-plus` and select Codex under “Optional global entry
+bridge”; the wizard previews `$CODEX_HOME/skills/triad/SKILL.md` and installs
+it only after the exact `install` confirmation. An existing legacy
+`$CODEX_HOME/prompts/triad.md` is never changed or deleted and blocks native
+skill installation until the owner backs it up or deselects the Codex global
+entry. Global entries are not written by this script.
 EOF
 }
 
@@ -25,8 +23,8 @@ if [[ $# -eq 2 && "$1" == "--project" ]]; then
   project_root="$2"
   project_install=true
 elif [[ $# -eq 1 && "$1" == "--global" ]]; then
-  project_root=""
-  project_install=false
+  printf '%s\n' 'Global Codex entry installation requires the consent-gated npx triad-plus wizard; no files were changed.' >&2
+  exit 2
 else
   usage >&2
   exit 2
@@ -43,7 +41,7 @@ if [[ "$project_install" == true ]]; then
   done
   [[ -e "$project_root/.triad-runtime" ]] && collisions+=(".triad-runtime")
 else
-  [[ -e "$codex_home/prompts/triad.md" ]] && collisions+=("$codex_home/prompts/triad.md")
+  [[ -e "$codex_home/skills/triad/SKILL.md" ]] && collisions+=("$codex_home/skills/triad/SKILL.md")
   for skill_name in "${skill_names[@]}"; do
     [[ -e "$codex_home/skills/$skill_name" ]] && collisions+=("$codex_home/skills/$skill_name")
   done
@@ -69,13 +67,5 @@ if [[ "$project_install" == true ]]; then
   cp "$adapter_root/runtime.json" "$project_root/.triad-runtime/adapter.json"
   printf 'Triad skills installed in %s/.agents/skills\n' "$project_root"
   printf 'Control-plane runtime installed in %s/.triad-runtime\n' "$project_root"
-  printf 'Then run the global install once to expose /prompts:triad in Codex.\n'
-else
-  mkdir -p "$codex_home/prompts" "$codex_home/skills"
-  cp "$adapter_root/prompts/triad.md" "$codex_home/prompts/triad.md"
-  for skill_name in "${skill_names[@]}"; do
-    cp -R "$repository_root/skills/$skill_name" "$codex_home/skills/$skill_name"
-  done
-  printf 'Triad Codex prompt installed at %s/prompts/triad.md\n' "$codex_home"
-  printf 'Start Codex in an initialized control repository and use /prompts:triad followed by a PRD source or project request.\n'
+  printf 'To expose the optional global $triad entry, run npx triad-plus and approve the exact global path in its wizard.\n'
 fi

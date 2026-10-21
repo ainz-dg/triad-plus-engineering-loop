@@ -292,7 +292,7 @@ try {
     "skills/triad-loop-orchestrator/SKILL.md",
     "skills/triad-loop-developer/SKILL.md",
     "skills/triad-loop-reviewer/SKILL.md",
-    "adapters/codex/prompts/triad.md",
+    "adapters/codex/skills/triad/SKILL.md",
     "adapters/claude-code/.claude/commands/triad.md",
     "adapters/opencode/.opencode/commands/triad.md",
     "adapters/opencode/.opencode/agents/triad-orchestrator.md",

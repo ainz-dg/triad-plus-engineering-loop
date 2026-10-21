@@ -2,6 +2,23 @@
 description: Start or resume a Triad+ Engineering Loop from a PRD source, target repositories, and measurable goals.
 ---
 
+This global prompt is a user-level entry point, not a pre-LLM security
+boundary. Before any Triad analysis, filesystem change, or role delegation,
+run the installed global preflight from the current directory:
+
+```bash
+node "${CODEX_HOME:-$HOME/.codex}/triad-plus/host-entry-preflight.mjs" --adapter codex
+```
+
+Continue only when it prints `READY`. The installed, built-ins-only preflight
+checks the exact owner-approved Control Workspace path, manifest, and bound
+runtime hashes before running a temporary snapshot of the local validator. The
+local manifest alone is not owner trust. On `BLOCKED`, do not search for
+another workspace, change state, or delegate; have the owner reopen/restart
+Codex from the bound workspace or approve setup there. This remains post-LLM:
+Codex has selected and read this prompt before the preflight can run, so it is
+not host-level pre-LLM enforcement.
+
 Operate a Triad+ Engineering Loop for this owner request:
 
 $ARGUMENTS

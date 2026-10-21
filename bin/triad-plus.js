@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-import { access, copyFile, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile, lstat, readdir } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile, lstat, readdir, realpath } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { basename, dirname, join, resolve, relative, sep } from 'node:path';
+import { basename, dirname, join, parse, resolve, relative, sep } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { getAdapter, listAdapters, roleDefinitions, sharedSkillNames } from '../adapters/registry.mjs';
@@ -125,6 +125,20 @@ async function exists(target) {
   try { await access(target); return true; } catch { return false; }
 }
 
+async function canonicalProspectivePath(target) {
+  let base = resolve(target);
+  const suffix = [];
+  while (!(await exists(base))) {
+    const parent = dirname(base);
+    if (parent === base) break;
+    suffix.unshift(basename(base));
+    base = parent;
+  }
+  const canonicalBase = await realpath(base);
+  if (suffix.length && !(await stat(base)).isDirectory()) throw new Error(`Control Workspace parent is not a directory: ${base}`);
+  return resolve(canonicalBase, ...suffix);
+}
+
 async function requireDirectory(target) {
   if (!(await exists(target))) return mkdir(target, { recursive: true });
   if (!(await stat(target)).isDirectory()) throw new Error(`Control path is not a directory: ${target}`);
@@ -231,7 +245,7 @@ async function materializedAssetPaths(assets, root, installContext) {
 }
 
 function generatedRoleAssetPaths(adapter, installContext, scope, team) {
-  if (!team || scope !== 'global' || adapter.modelBinding !== 'global-profiles' || typeof adapter.roleModelPaths !== 'function') return [];
+  if (!team || scope !== 'global' || adapter.globalEntry || adapter.modelBinding !== 'global-profiles' || typeof adapter.roleModelPaths !== 'function') return [];
   return adapter.roleModelPaths(installContext);
 }
 
@@ -259,9 +273,14 @@ async function installationManifestFor({ adapter, controlRoot, installContext, t
   const previousManifest = previous?.manifest ?? previous;
   const overlayAssets = await managedOverlayRecord(controlRoot, previousManifest, team);
   const globalConfigured = Boolean(global || previousManifest?.scopes?.global);
-  const globalAssets = global
+  const previousGlobalAssets = (previousManifest?.managed_assets ?? []).filter((asset) => asset.scope === 'global');
+  const plannedGlobalAssets = global
     ? await collectInstallationAssets(adapter, controlRoot, installContext, 'global', team)
-    : (previousManifest?.managed_assets ?? []).filter((asset) => asset.scope === 'global');
+    : [];
+  const plannedGlobalPaths = new Set(plannedGlobalAssets.map((asset) => asset.path));
+  const globalAssets = global
+    ? [...plannedGlobalAssets, ...previousGlobalAssets.filter((asset) => !plannedGlobalPaths.has(asset.path))]
+    : previousGlobalAssets;
   const scopeStatus = {
     project: 'installed',
     global: globalConfigured
@@ -762,6 +781,7 @@ async function collectTeamConfiguration(prompt, adapter) {
 async function init(options) {
   const adapter = getAdapter(options.host);
   if (!adapter) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
+  if (options.global && adapter.globalEntry) throw new Error(`Global ${adapter.label} entry installation is available only through the interactive setup wizard, which previews the exact profile files and requires confirmation. No files were changed.`);
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
   const team = options.useExistingTeam ? await currentTeam(controlRoot) : await loadTeamConfig(options);
@@ -837,7 +857,7 @@ async function init(options) {
   process.stdout.write(`Triad+ adapter assets installed for ${adapter.label} in ${controlRoot}\n`);
   process.stdout.write('This init command does not configure repository mappings, PRD, quality gates, or worktrees. Verify project readiness separately before invoking /triad.\n');
   if (adapter.globalEntry) {
-    process.stdout.write(`Install user-level assets with --global to expose ${adapter.entry}.\n`);
+    process.stdout.write(`The optional user-level ${adapter.entry} entry is installed only through the consent-gated interactive setup wizard; this init wrote no global files.\n`);
   }
   process.stdout.write(`Open the control workspace and use ${adapter.entry} <PRD path>. Configured Evaluator+ runs automatically post-approval.\n`);
 }
@@ -886,6 +906,7 @@ async function upgradeRunStateDelivery(controlRoot, backupRoot, apply) {
 async function upgrade(options) {
   const adapter = getAdapter(options.host);
   if (!adapter) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
+  if (options.global && adapter.globalEntry) throw new Error(`Global ${adapter.label} entry updates are available only through the interactive setup wizard, which previews the exact profile files and requires confirmation. No files were changed.`);
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
   await requireExistingDirectory(controlRoot);
@@ -1015,6 +1036,57 @@ async function safeProjectAssetInfo(controlRoot, target) {
   }
 }
 
+async function safeGlobalAssetInfo(target) {
+  const absolute = resolve(target);
+  if (!absolute.startsWith(sep)) throw new Error(`Global adapter asset path is not absolute: ${target}`);
+  const parsed = parse(absolute);
+  let current = parsed.root;
+  const segments = absolute.slice(parsed.root.length).split(sep).filter(Boolean);
+  for (const segment of segments.slice(0, -1)) {
+    current = join(current, segment);
+    try {
+      const info = await lstat(current);
+      const tempAlias = info.isSymbolicLink()
+        && ((current === '/var' && await realpath(current) === '/private/var') || (current === '/tmp' && await realpath(current) === '/private/tmp'));
+      if ((info.isSymbolicLink() && !tempAlias) || (!info.isSymbolicLink() && !info.isDirectory())) throw new Error(`Global adapter asset parent is unsafe: ${current}`);
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+  try {
+    const info = await lstat(absolute);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Global adapter asset is not a regular file: ${absolute}`);
+    return info;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function ensureSafeGlobalParents(target) {
+  const absolute = resolve(target);
+  const parsed = parse(absolute);
+  let current = parsed.root;
+  for (const segment of absolute.slice(parsed.root.length).split(sep).filter(Boolean).slice(0, -1)) {
+    current = join(current, segment);
+    try {
+      const info = await lstat(current);
+      const tempAlias = info.isSymbolicLink()
+        && ((current === '/var' && await realpath(current) === '/private/var') || (current === '/tmp' && await realpath(current) === '/private/tmp'));
+      if ((info.isSymbolicLink() && !tempAlias) || (!info.isSymbolicLink() && !info.isDirectory())) throw new Error(`Global adapter asset parent is unsafe: ${current}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      try { await mkdir(current); }
+      catch (mkdirError) { if (mkdirError.code !== 'EEXIST') throw mkdirError; }
+      const info = await lstat(current);
+      const tempAlias = info.isSymbolicLink()
+        && ((current === '/var' && await realpath(current) === '/private/var') || (current === '/tmp' && await realpath(current) === '/private/tmp'));
+      if ((info.isSymbolicLink() && !tempAlias) || (!info.isSymbolicLink() && !info.isDirectory())) throw new Error(`Global adapter asset parent is unsafe: ${current}`);
+    }
+  }
+}
+
 async function ensureSafeProjectParents(controlRoot, target) {
   if (!pathWithin(controlRoot, target)) throw new Error(`Managed project asset escaped the Control Workspace: ${target}`);
   const root = resolve(controlRoot);
@@ -1038,28 +1110,38 @@ async function ensureSafeProjectParents(controlRoot, target) {
   }
 }
 
-async function plannedAdapterRecords(pairs, controlRoot) {
+async function plannedAdapterRecords(pairs, controlRoot, scope = 'project') {
   const seen = new Set();
   const records = [];
   for (const pair of pairs) {
-    if (!pathWithin(controlRoot, pair.target)) throw new Error(`Adapter asset escapes the Control Workspace: ${pair.target}`);
-    const targetPath = relative(resolve(controlRoot), resolve(pair.target)).split(sep).join('/');
-    if (!targetPath || targetPath.startsWith('../')) throw new Error(`Adapter asset escapes the Control Workspace: ${pair.target}`);
+    const target = resolve(pair.target);
+    if (scope === 'project' && !pathWithin(controlRoot, target)) throw new Error(`Adapter asset escapes the Control Workspace: ${pair.target}`);
+    const targetPath = scope === 'project'
+      ? relative(resolve(controlRoot), target).split(sep).join('/')
+      : target;
+    if (!targetPath || (scope === 'project' && targetPath.startsWith('../'))) throw new Error(`Adapter asset escapes the Control Workspace: ${pair.target}`);
     if (seen.has(targetPath)) throw new Error(`Adapter plan contains duplicate target ownership: ${targetPath}`);
     seen.add(targetPath);
     const sourceInfo = await lstat(pair.source);
     if (!sourceInfo.isFile()) throw new Error(`Adapter asset source is not a regular file: ${pair.source}`);
-    records.push({ scope: 'project', path: targetPath, kind: 'file', sha256: await sha256File(pair.source) });
+    records.push({ scope, path: targetPath, kind: 'file', sha256: await sha256File(pair.source) });
   }
   return records;
 }
 
 async function observedAdapterRecords(planned, pairs, controlRoot) {
-  const byPath = new Map(pairs.map((pair) => [relative(resolve(controlRoot), resolve(pair.target)).split(sep).join('/'), pair.target]));
+  const byPath = new Map();
+  for (const pair of pairs) {
+    const target = resolve(pair.target);
+    byPath.set(target, pair.target);
+    byPath.set(relative(resolve(controlRoot), target).split(sep).join('/'), pair.target);
+  }
   const records = [];
   for (const asset of planned) {
-    const target = byPath.get(asset.path);
-    if (!target || !(await safeProjectAssetInfo(controlRoot, target))) throw new Error(`Adapter asset is missing after materialization: ${asset.path}`);
+    const target = byPath.get(asset.scope === 'global' ? resolve(asset.path) : asset.path);
+    if (!target) throw new Error(`Adapter asset is missing after materialization: ${asset.path}`);
+    const info = asset.scope === 'project' ? await safeProjectAssetInfo(controlRoot, target) : await safeGlobalAssetInfo(target);
+    if (!info) throw new Error(`Adapter asset is missing after materialization: ${asset.path}`);
     records.push({ ...asset, sha256: await sha256File(target) });
   }
   return records;
@@ -1197,7 +1279,7 @@ async function adapterDoctor(options) {
       else if (await sha256File(target) !== asset.sha256) issues.push(`${asset.path}: modified`);
     }
     const runtimePath = recordedRuntimeMetadataPath(record);
-    const entrySupport = ['codex', 'hermes'].includes(record.id) ? 'limited/unproven' : 'installed project assets (static only)';
+    const entrySupport = adapter.globalEntry ? 'limited/unproven' : 'installed project assets (static only)';
     process.stdout.write(`  ${record.id}: manifest=${issues.length ? 'incomplete' : 'OK'} host=${binary?.version ? `available (${binary.version})` : 'unavailable'} project-entry=${entrySupport}\n`);
     process.stdout.write(`    runtime metadata=${runtimePath ?? 'missing'}; attempt dispatch=unsupported\n`);
     for (const issue of issues) process.stdout.write(`    ISSUE ${issue}\n`);
@@ -1297,7 +1379,7 @@ async function adapterRemove(options) {
     return;
   }
   const selected = records.find((record) => record.id === options.host);
-  if (selected.scopes.global) throw new Error(`Adapter ${options.host} also owns global assets. Global migration/removal is not part of this project-local operation; no files were changed.`);
+  const preservesGlobal = Boolean(selected.scopes.global);
   const remaining = records.filter((record) => record.id !== options.host);
   const owners = new Map();
   for (const record of records) for (const asset of record.managed_assets) {
@@ -1330,6 +1412,7 @@ async function adapterRemove(options) {
     throw new Error('Resolve the preserved/modified asset before removing this adapter.');
   }
   process.stdout.write(`Adapter remove ${options.apply ? 'applying' : 'plan'} — ${options.host}\n`);
+  if (preservesGlobal) process.stdout.write('  Global entry files are preserved; they may be shared with other Control Workspaces and are never removed by this project-local operation.\n');
   process.stdout.write(`  ${removals.length} exclusive unchanged file(s) ${options.apply ? 'will be removed' : 'would be removed'}; ${preservedShared.length} shared file(s) retained.\n`);
   for (const entry of removals) process.stdout.write(`  REMOVE ${entry.asset.path}\n`);
   for (const assetPath of preservedShared) process.stdout.write(`  PRESERVE shared ${assetPath}\n`);
@@ -1712,9 +1795,13 @@ async function doctor(options) {
     const projectTargets = adapter.projectPaths(controlRoot, installContext).filter((target) => !(installation.multiAdapter && resolve(target) === resolve(controlRoot, '.triad-runtime/adapter.json')));
     if (recordedMetadata) projectTargets.push(resolve(controlRoot, recordedMetadata));
     for (const target of projectTargets) if (!(await exists(target))) absent.push(target);
-    const globalDetected = adapter.globalPaths ? await anyExist(adapter.globalPaths(installContext)) : false;
+    let globalTargets = [];
+    let globalPathError = null;
+    try { globalTargets = adapter.globalPaths ? adapter.globalPaths(installContext) : []; }
+    catch (error) { globalPathError = error; }
+    const globalDetected = globalTargets.length ? await anyExist(globalTargets) : false;
     const inspectGlobal = Boolean(options.global || globalDetected);
-    const globalTargets = inspectGlobal && adapter.globalPaths ? adapter.globalPaths(installContext) : [];
+    globalTargets = inspectGlobal ? globalTargets : [];
     const globalAbsent = [];
     for (const target of globalTargets) if (!(await exists(target))) globalAbsent.push(target);
     const binary = commandVersion(adapter.binaryCandidates ?? adapter.binary);
@@ -1727,7 +1814,7 @@ async function doctor(options) {
     const triadSkillTargets = targets.filter((target) => /[/\\]skills[/\\]triad$/.test(target));
     const capability = manifest ? capabilitySnapshot(controlRoot, manifestPath) : null;
     process.stdout.write(`\n${formatDoctorSection(`Triad+ doctor — ${adapter.label}`)}\n`);
-    process.stdout.write(`${formatDoctorLine(adapter.label, absent.length || globalAbsent.length || installation.issues.length ? 'incomplete' : 'OK')}\n`);
+    process.stdout.write(`${formatDoctorLine(adapter.label, absent.length || globalAbsent.length || globalPathError || installation.issues.length ? 'incomplete' : 'OK')}\n`);
     process.stdout.write(`${formatDoctorSection('Triad+ installation')}\n`);
     process.stdout.write(`  ${formatDoctorLine('CLI version', packageVersion)}\n`);
     if (installation.state === 'legacy') {
@@ -1766,6 +1853,7 @@ async function doctor(options) {
     process.stdout.write(`  ${formatDoctorLine('Host runtime', binary ? `OK (${binary})` : 'not installed or version unavailable')}\n`);
     process.stdout.write(`  ${formatDoctorLine('Verifier', node && await exists(join(controlRoot, '.triad-runtime', 'triad-verify.mjs')) ? 'OK' : 'incomplete')}\n`);
     process.stdout.write(`  ${formatDoctorLine('Adapter', manifest ? 'OK' : 'missing or different adapter')}\n`);
+    if (globalPathError) process.stdout.write(`  ${formatDoctorLine('Global host profile', `unsafe or unreadable — ${globalPathError.message}`)}\n`);
     if (installation.multiAdapter) process.stdout.write(`  ${formatDoctorLine('Attempt dispatch', 'unsupported; no implicit host selection')}\n`);
     if (roleTargets.length) process.stdout.write(`  ${formatDoctorLine('Role agents', await allExist(roleTargets) ? 'OK' : 'missing')}\n`);
     if (triadSkillTargets.length) process.stdout.write(`  ${formatDoctorLine('Triad skill', await allExist(triadSkillTargets) ? 'OK' : 'missing')}\n`);
@@ -1875,7 +1963,7 @@ function uniqueRepositoryIds(repositories) {
 }
 
 async function chooseNewControlRoot(prompt, currentDirectory) {
-  process.stdout.write('Triad+ / 1 of 5 — Control Workspace\n');
+  process.stdout.write('Triad+ / 1 of 6 — Control Workspace\n');
   const current = await inspectControlRoot(currentDirectory);
   if (current.gitBoundary) {
     process.stdout.write(`Current directory belongs to Git root ${current.gitBoundary}. It cannot be selected as a clean Control Workspace; choose a separate root explicitly. No sibling path will be generated.\n`);
@@ -1995,7 +2083,7 @@ async function collectRepositoryPlan(prompt, controlRoot, previousPlan = null) {
       { kind: 'action', id: 'defer', action: 'defer', label: 'Defer repository configuration', description: 'explicitly leave mappings empty' },
     );
     const result = await prompt.checklist({
-      step: 'Triad+ / 2 of 5 — Product repositories',
+      step: 'Triad+ / 2 of 6 — Product repositories',
       title: 'Select product repositories',
       context: [`Control Workspace: ${controlRoot}`],
       description: 'Only immediate-child Git roots are suggested. No ancestor/sibling search, clone, or implicit selection.',
@@ -2084,7 +2172,7 @@ async function collectAdapterSelection(prompt, initialSelection = []) {
     hermes: 'project-local skills and runtime assets',
   };
   const result = await prompt.checklist({
-    step: 'Triad+ / 3 of 5 — Harnesses',
+    step: 'Triad+ / 3 of 6 — Harnesses',
     title: 'Select coding harnesses',
     context: ['Control Workspace project-local install only; no host/global files or settings.'],
     description: 'Multi-adapter installation is supported. Per-Attempt cross-harness dispatch is not.',
@@ -2109,7 +2197,107 @@ async function collectAdapterSelection(prompt, initialSelection = []) {
   return { ...result, adapters: result.selected.map((id) => adapters.find((adapter) => adapter.id === id)).filter(Boolean) };
 }
 
-async function preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam }) {
+async function collectGlobalEntrySelection(prompt, adapters, initialSelection = []) {
+  const available = adapters.filter((adapter) => adapter.globalEntry && adapter.globalAssets?.length);
+  if (!available.length) return { kind: 'selected', adapters: [] };
+  const result = await prompt.checklist({
+    step: 'Triad+ / 4 of 6 — Optional global entry bridge',
+    title: 'Install user-level host entries?',
+    context: ['Optional; only exact files shown in the final preview can be installed.'],
+    description: 'Optional entries are available only for supported adapters. This does not enforce a pre-LLM security boundary.',
+    items: available.map((adapter) => ({
+      kind: 'checkbox',
+      id: adapter.id,
+      label: `${adapter.label} (${adapter.id})`,
+      description: adapter.globalEntryDescription,
+    })),
+    initialSelection: initialSelection.filter((id) => available.some((adapter) => adapter.id === id)),
+    initialFocus: initialSelection[0],
+    minimum: 0,
+    maximum: available.length,
+    escapeBehavior: 'back',
+    selectionSummary: (selection) => selection.length ? `${selection.length} global entry point(s)` : 'no user-level files',
+    hint: '↑↓ move · Space toggle · Enter confirm selection · Esc Back',
+  });
+  if (result.kind === 'interrupt' || result.kind === 'back') return result;
+  return { ...result, adapters: result.selected.map((id) => available.find((adapter) => adapter.id === id)).filter(Boolean) };
+}
+
+function hostEntryBindingText(adapterId, workspace, manifest, globalAssets) {
+  const record = adapterRecords(manifest).find((entry) => entry.id === adapterId);
+  if (!record) throw new Error(`Cannot bind ${adapterId} global entry; its project adapter is not installed in the Control Workspace.`);
+  const expectedProjectAssets = (record.managed_assets ?? [])
+    .filter((asset) => asset.scope === 'project')
+    .map(({ path: assetPath, kind, sha256 }) => ({ path: assetPath, kind, sha256 }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const expectedGlobalAssets = [...globalAssets]
+    .map(({ path: assetPath, kind, sha256 }) => ({ path: resolve(assetPath), kind, sha256 }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return `${JSON.stringify({
+    schema_version: 1,
+    adapter: adapterId,
+    workspace,
+    installation_manifest: '.triad-plus/installation.json',
+    expected_project_assets: expectedProjectAssets,
+    expected_global_assets: expectedGlobalAssets,
+  }, null, 2)}\n`;
+}
+
+async function planGlobalEntryAdapters(adapters, selectedAdapters, controlRoot) {
+  const bindingWorkspace = await canonicalProspectivePath(controlRoot);
+  if (selectedAdapters.length && bindingWorkspace !== resolve(controlRoot)) {
+    throw new Error(`Global entry setup requires the canonical Control Workspace path ${bindingWorkspace}; no files were changed.`);
+  }
+  const installContext = { ...context(controlRoot), bindingWorkspace };
+  const loadedInstallation = await exists(installationManifestPath(controlRoot))
+    ? await loadInstallationManifest(controlRoot)
+    : null;
+  const selectedIds = new Set(selectedAdapters.map((adapter) => adapter.id));
+  const plans = new Map();
+  for (const adapter of adapters) {
+    if (!selectedIds.has(adapter.id)) continue;
+    if (!adapter.globalEntry || !adapter.globalAssets?.length) throw new Error(`${adapter.id} does not declare an approved global entry bridge.`);
+    for (const legacyPath of adapter.legacyGlobalPaths?.(installContext) ?? []) {
+      const legacyInfo = await safeGlobalAssetInfo(legacyPath);
+      if (legacyInfo) {
+        throw new Error(`Legacy Codex prompt collision at ${legacyPath}; it is preserved byte-for-byte and is not migrated or deleted. Back it up under a different name or deselect the Codex global entry, then retry. No files were changed.`);
+      }
+    }
+    const pairs = await materializedAssetPairs(adapter.globalAssets, controlRoot, installContext);
+    const managedAssets = await plannedAdapterRecords(pairs, controlRoot, 'global');
+    const created = [];
+    const reused = [];
+    for (const [index, pair] of pairs.entries()) {
+      const info = await safeGlobalAssetInfo(pair.target);
+      if (!info) {
+        created.push(managedAssets[index].path);
+        continue;
+      }
+      const observed = await sha256File(pair.target);
+      if (observed !== managedAssets[index].sha256) {
+        throw new Error(`Global entry collision; existing bytes differ, no files were changed: ${pair.target}`);
+      }
+      reused.push(managedAssets[index].path);
+    }
+    const bindingTarget = adapter.globalBindingPath?.(installContext);
+    if (!bindingTarget) throw new Error(`${adapter.id} global bridge does not declare its owner-binding path.`);
+    const absoluteBindingTarget = resolve(bindingTarget);
+    const bindingInfo = await safeGlobalAssetInfo(absoluteBindingTarget);
+    if (!bindingInfo) created.push(absoluteBindingTarget);
+    else {
+      if (!loadedInstallation) throw new Error(`Global host-entry binding collision; no installed Control Workspace manifest can verify it: ${absoluteBindingTarget}`);
+      const bindingText = hostEntryBindingText(adapter.id, bindingWorkspace, loadedInstallation.manifest, managedAssets);
+      if (await sha256File(absoluteBindingTarget) !== sha256Text(bindingText)) {
+        throw new Error(`Global host-entry binding collision; existing owner binding differs, no files were changed: ${absoluteBindingTarget}`);
+      }
+      reused.push(absoluteBindingTarget);
+    }
+    plans.set(adapter.id, { adapterId: adapter.id, pairs, managedAssets, bindingTarget: absoluteBindingTarget, created, reused });
+  }
+  return plans;
+}
+
+async function preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam, globalEntryAdapters = [] }) {
   const adapterPlans = new Map();
   const first = await init({ host: adapters[0].id, control: root, planOnly: true, team, useExistingTeam });
   adapterPlans.set(adapters[0].id, first);
@@ -2131,14 +2319,114 @@ async function preflightInteractiveSetup({ root, repositories, adapters, project
     if (adapter.modelBinding !== 'project-frontmatter' || typeof adapter.roleModelPaths !== 'function') return [];
     return adapter.roleModelPaths(root, context(root)).map((target) => ({ adapterId: adapter.id, target }));
   }) : [];
+  const globalEntryPlans = await planGlobalEntryAdapters(adapters, globalEntryAdapters, root);
   return {
     root, repositories, adapters, adapterPlans, projectYamlPlan, readiness,
-    roleOverlayPlan, roleBindingActions,
+    roleOverlayPlan, roleBindingActions, globalEntryPlans,
     teamMode: useExistingTeam ? 'reuse existing without rewriting' : team ? 'create requested team config' : 'leave unconfigured',
     team,
     useExistingTeam,
     currentVersion: packageVersion,
   };
+}
+
+async function applyGlobalEntryPlans(controlRoot, globalEntryPlans) {
+  if (!globalEntryPlans?.size) return;
+  const created = [];
+  try {
+    for (const plan of globalEntryPlans.values()) {
+      for (const [index, pair] of plan.pairs.entries()) {
+        const expected = plan.managedAssets[index];
+        let info = await safeGlobalAssetInfo(pair.target);
+        if (info) {
+          if (await sha256File(pair.target) !== expected.sha256) throw new Error(`Global entry changed after preview; refusing to overwrite: ${pair.target}`);
+          continue;
+        }
+        await ensureSafeGlobalParents(pair.target);
+        info = await safeGlobalAssetInfo(pair.target);
+        if (info) {
+          if (await sha256File(pair.target) !== expected.sha256) throw new Error(`Global entry appeared after preview with different bytes; refusing to overwrite: ${pair.target}`);
+          continue;
+        }
+        await copyFile(pair.source, pair.target, fsConstants.COPYFILE_EXCL);
+        created.push({ target: pair.target, sha256: expected.sha256 });
+      }
+
+      const loadedForBinding = await loadInstallationManifest(controlRoot);
+      if (!loadedForBinding) throw new Error('Control Workspace installation manifest disappeared before global host-entry binding.');
+      const bindingWorkspace = await realpath(controlRoot);
+      const bindingText = hostEntryBindingText(plan.adapterId, bindingWorkspace, loadedForBinding.manifest, plan.managedAssets);
+      const bindingDigest = sha256Text(bindingText);
+      let bindingInfo = await safeGlobalAssetInfo(plan.bindingTarget);
+      if (bindingInfo) {
+        if (await sha256File(plan.bindingTarget) !== bindingDigest) throw new Error(`Global host-entry binding changed after preview; refusing to overwrite: ${plan.bindingTarget}`);
+      } else {
+        await ensureSafeGlobalParents(plan.bindingTarget);
+        bindingInfo = await safeGlobalAssetInfo(plan.bindingTarget);
+        if (bindingInfo) {
+          if (await sha256File(plan.bindingTarget) !== bindingDigest) throw new Error(`Global host-entry binding appeared after preview with different bytes; refusing to overwrite: ${plan.bindingTarget}`);
+        } else {
+          await writeFile(plan.bindingTarget, bindingText, { encoding: 'utf8', flag: 'wx' });
+          created.push({ target: plan.bindingTarget, sha256: bindingDigest });
+        }
+      }
+      if (!plan.managedAssets.some((asset) => asset.path === plan.bindingTarget)) {
+        plan.managedAssets.push({ scope: 'global', path: plan.bindingTarget, kind: 'file', sha256: bindingDigest });
+      }
+    }
+
+    const loaded = await loadInstallationManifest(controlRoot);
+    if (!loaded) throw new Error('Control Workspace installation manifest disappeared after local install.');
+    const now = new Date().toISOString();
+    const adapters = await Promise.all(adapterRecords(loaded.manifest).map(async (record) => {
+      const plan = globalEntryPlans.get(record.id);
+      if (!plan) return record;
+      const priorAssets = record.managed_assets ?? [];
+      const globalByPath = new Map(priorAssets.filter((asset) => asset.scope === 'global').map((asset) => [asset.path, asset]));
+      for (const asset of plan.managedAssets) {
+        const prior = globalByPath.get(asset.path);
+        if (prior && prior.sha256 !== asset.sha256) throw new Error(`Installation manifest has conflicting global ownership for ${asset.path}`);
+        globalByPath.set(asset.path, asset);
+      }
+      const globalAssets = [...globalByPath.values()];
+      let allGlobalAssetsHealthy = true;
+      for (const asset of globalAssets) {
+        const info = await safeGlobalAssetInfo(asset.path);
+        if (!info || await sha256File(asset.path) !== asset.sha256) allGlobalAssetsHealthy = false;
+      }
+      return {
+        ...record,
+        updated_at: now,
+        scopes: { ...record.scopes, project: true, global: true },
+        scope_status: { ...record.scope_status, project: 'installed', global: allGlobalAssetsHealthy ? 'installed' : 'partial' },
+        managed_assets: [...priorAssets.filter((asset) => asset.scope !== 'global'), ...globalAssets],
+      };
+    }));
+    const missing = [...globalEntryPlans.keys()].filter((id) => !adapters.some((record) => record.id === id));
+    if (missing.length) throw new Error(`Global entry adapters are not installed locally: ${missing.join(', ')}`);
+    await writeInstallationManifest(controlRoot, buildMultiAdapterManifest({
+      triadVersion: packageVersion,
+      installedAt: loaded.manifest.installed_at,
+      updatedAt: now,
+      adapters,
+    }));
+  } catch (error) {
+    const rollbackFailures = [];
+    for (const entry of created.reverse()) {
+      try {
+        const info = await safeGlobalAssetInfo(entry.target);
+        if (!info) continue;
+        if (await sha256File(entry.target) !== entry.sha256) {
+          rollbackFailures.push(entry.target);
+          continue;
+        }
+        await rm(entry.target);
+      } catch { rollbackFailures.push(entry.target); }
+    }
+    if (rollbackFailures.length) process.stderr.write(`Global-entry recovery required; newly created files preserved at: ${rollbackFailures.join(', ')}\n`);
+    else if (created.length) process.stderr.write('Newly created global-entry files were rolled back; any pre-existing byte-identical files were preserved.\n');
+    throw error;
+  }
 }
 
 async function applyInteractiveSetup(plan) {
@@ -2174,6 +2462,7 @@ async function applyInteractiveSetup(plan) {
       await adapterAdd({ adapterCommand: 'add', host: adapter.id, control: plan.root, apply: true });
       installedAdapters.push(adapter.id);
     }
+    await applyGlobalEntryPlans(plan.root, plan.globalEntryPlans);
   } catch (error) {
     process.stderr.write(`Setup is incomplete; no successful step was removed.\n`);
     process.stderr.write(`  Control Workspace: ${plan.root}\n`);
@@ -2191,7 +2480,7 @@ async function applyInteractiveSetup(plan) {
   process.stdout.write(`Readiness: ${readiness.ready ? 'READY' : 'NOT READY'}${readiness.missing.length ? ` — missing: ${readiness.missing.join('; ')}` : ''}\n`);
   for (const adapter of plan.adapters) await adapterDoctor({ adapterCommand: 'doctor', host: adapter.id, control: plan.root });
   for (const adapter of plan.adapters) {
-    for (const line of projectLaunchHint(adapter, plan.root)) process.stdout.write(`${line}\n`);
+    for (const line of projectLaunchHint(adapter, plan.root, { globalEntryInstalled: plan.globalEntryPlans.has(adapter.id) })) process.stdout.write(`${line}\n`);
   }
   process.stdout.write('No PRD, gate, branch baseline, worktree, remote, or successful verification was created implicitly.\n');
 }
@@ -2216,6 +2505,7 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
   let repositoryPlan = null;
   let repositories = null;
   let adapters = null;
+  let globalEntryAdapters = [];
   let initialAdapters = [];
   while (!adapters) {
     const selection = await collectRepositoryPlan(prompt, root, repositoryPlan);
@@ -2245,9 +2535,16 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
     }
     adapters = adapterSelection.adapters;
   }
+  const globalSelection = await collectGlobalEntrySelection(prompt, adapters);
+  if (globalSelection.kind === 'interrupt') return 'interrupt';
+  if (globalSelection.kind === 'cancel') {
+    process.stdout.write('Cancelled. No files were changed.\n');
+    return;
+  }
+  globalEntryAdapters = globalSelection.adapters;
   let team = null;
   let useExistingTeam = false;
-  process.stdout.write('\nTriad+ / 4 of 5 — Optional team setup\n');
+  process.stdout.write('\nTriad+ / 5 of 6 — Optional team setup\n');
   try {
     if (await exists(teamConfigPath(root))) {
       team = await currentTeam(root);
@@ -2265,14 +2562,14 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
       projectId: basename(root),
       title: basename(root),
     });
-    plan = await preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam });
+    plan = await preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam, globalEntryAdapters });
   } catch (error) {
     process.stdout.write(`Preflight failed; nothing was changed: ${error.message}\n`);
     return;
   }
   await confirmAndApplySetup({
     prompt,
-    preview: `Triad+ / 5 of 5 — Review exact plan\n${formatSetupPreview(plan)}`,
+    preview: `Triad+ / 6 of 6 — Review exact plan\n${formatSetupPreview(plan)}`,
     apply: () => applyInteractiveSetup(plan),
   });
 }

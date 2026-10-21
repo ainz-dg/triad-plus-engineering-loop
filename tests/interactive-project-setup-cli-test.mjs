@@ -6,11 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listAdapters, sharedSkillNames } from '../adapters/registry.mjs';
-import { validateInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
+import { buildMultiAdapterManifest, validateInstallationManifest, writeInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repositoryRoot, 'bin', 'triad-plus.js');
-const fixture = await mkdtemp(path.join(os.tmpdir(), 'triad-setup-cli-'));
+const fixture = await realpath(await mkdtemp(path.join(os.tmpdir(), 'triad-setup-cli-')));
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const pseudoTerminalAvailable = ['darwin', 'linux'].includes(process.platform)
   && spawnSync('python3', ['--version'], { encoding: 'utf8' }).status === 0;
@@ -210,7 +210,7 @@ try {
       line(''), line(''), key('space'), key('enter'),
       line('ketchup2'), line(''), line(''), line(''),
       key('down'), key('space'), key('up'), key('space'), key('enter'),
-      line('install'),
+      key('space'), key('enter'), line('install'),
     ];
     const setup = terminalInput(root, answers, {
       HOME: home,
@@ -235,6 +235,8 @@ try {
     assert.match(setup.stdout, /primary OpenCode \(opencode\)/);
     assert.doesNotMatch(setup.stdout, /repo-1/);
     assert.match(setup.stdout, /Attempt-bound multi-harness dispatch remains unsupported/);
+    assert.match(setup.stdout, /Optional; only exact files shown in the final preview can be installed/);
+    assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
     assert.match(setup.stdout, /Readiness: NOT READY/);
     assert.match(setup.stdout, /\/triad/);
     assert.equal(await readFile(path.join(root, 'PRD.md'), 'utf8'), prd);
@@ -270,7 +272,7 @@ try {
     assert.equal(await readFile(path.join(root, '.triad-runtime', 'adapter.json'), 'utf8').then((text) => JSON.parse(text).id), 'opencode', 'the first selected adapter retains the singleton runtime metadata');
     for (const adapter of adapters.filter((candidate) => selectedIds.includes(candidate.id))) {
       const record = multi.adapters.find((entry) => entry.id === adapter.id);
-      assert.deepEqual(record.scopes, { project: true, global: false }, `${adapter.id} is installed project-only`);
+      assert.deepEqual(record.scopes, { project: true, global: adapter.id === 'codex' }, `${adapter.id} records only the explicitly selected global entry scope`);
       const owned = new Map(record.managed_assets.filter((asset) => asset.scope === 'project').map((asset) => [asset.path, asset]));
       for (const target of await registryProjectAssetPaths(adapter)) {
         const asset = owned.get(target);
@@ -299,14 +301,36 @@ try {
       assert.deepEqual(shared.owners, owners, `shared-asset owners are exact: ${shared.path}`);
       assert.equal(digest(await readFile(path.join(root, shared.path))), shared.sha256, `shared bytes match manifest: ${shared.path}`);
     }
-    for (const directory of [home, xdgHome, codexHome, hermesHome, isolatedTmp]) {
+    const codexGlobalEntry = path.join(codexHome, 'skills', 'triad', 'SKILL.md');
+    const codexPreflight = path.join(codexHome, 'triad-plus', 'host-entry-preflight.mjs');
+    const bindingKey = digest(Buffer.from(await realpath(root)));
+    const codexBinding = path.join(codexHome, 'triad-plus', 'bindings', `${bindingKey}.json`);
+    assert.ok((await readFile(codexGlobalEntry, 'utf8')).includes('host-entry-preflight.mjs'));
+    assert.ok(setup.stdout.includes(`CREATE ${codexPreflight}`), 'the exact installed trusted preflight path is included in the preview');
+    assert.ok(setup.stdout.includes(`CREATE ${codexBinding}`), 'the exact workspace-specific owner binding path is included in the preview');
+    const globalFiles = await filesUnder(codexHome);
+    assert.deepEqual(globalFiles, [
+      'skills/triad/SKILL.md',
+      `triad-plus/bindings/${bindingKey}.json`,
+      'triad-plus/host-entry-preflight.mjs',
+    ].sort(), 'the approved Codex skill, trusted preflight and exact workspace binding are the only global files installed');
+    const codexRecord = multi.adapters.find((record) => record.id === 'codex');
+    const codexGlobalAssets = codexRecord.managed_assets.filter((asset) => asset.scope === 'global');
+    assert.deepEqual(codexGlobalAssets.map((asset) => asset.path).sort(), [codexBinding, codexPreflight, codexGlobalEntry].sort(), 'manifest records every exact trusted global file');
+    const binding = JSON.parse(await readFile(codexBinding, 'utf8'));
+    assert.equal(binding.workspace, await realpath(root), 'the binding records the canonical owner-selected workspace');
+    assert.deepEqual(binding.expected_project_assets, codexRecord.managed_assets
+      .filter((asset) => asset.scope === 'project')
+      .map(({ path: assetPath, kind, sha256 }) => ({ path: assetPath, kind, sha256 }))
+      .sort((left, right) => left.path.localeCompare(right.path)));
+    for (const directory of [home, xdgHome, hermesHome, isolatedTmp]) {
       assert.deepEqual(await filesUnder(directory), [], `local-only setup wrote no global files under ${directory}`);
     }
     const isolatedHostEnv = { HOME: home, XDG_CONFIG_HOME: xdgHome, CODEX_HOME: codexHome, HERMES_HOME: hermesHome, PATH: hostlessPath };
     const fixtureBeforeDiagnostics = await treeSnapshot(fixture);
     const list = runCli(['adapter', 'list', '--control', root], root, isolatedHostEnv);
     assert.equal(list.status, 0, `${list.stderr}\n${list.stdout}`);
-    for (const id of recordedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=not_configured host=unavailable`), `${id} keeps installed assets distinct from its absent host binary`);
+    for (const id of recordedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=${id === 'codex' ? 'installed' : 'not_configured'} host=unavailable`), `${id} records the selected global entry separately from host availability`);
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter list and isolated global locations are read-only');
     const manifestBytesBeforeDoctor = await readFile(manifestPath);
     const doctor = runCli(['adapter', 'doctor', '--control', root], root, isolatedHostEnv);
@@ -315,6 +339,307 @@ try {
     assert.match(doctor.stdout, /host=unavailable/);
     assert.deepEqual(await readFile(manifestPath), manifestBytesBeforeDoctor, 'adapter doctor is read-only');
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter doctor and isolated global locations leave all fixture files unchanged');
+
+    // The managed-block regression must come from a real first-run wizard
+    // install, with Codex primary, the optional global entry, and READY inputs.
+    const managedRoot = path.join(fixture, 'MANAGED-BLOCK-FIRST-RUN');
+    const managedHome = path.join(fixture, 'managed-home');
+    const managedCodexHome = path.join(fixture, 'managed-codex-home');
+    const managedHostlessPath = path.join(fixture, 'managed-hostless-bin');
+    await mkdir(managedRoot, { recursive: true });
+    for (const directory of [managedHome, managedCodexHome, managedHostlessPath]) await mkdir(directory, { recursive: true });
+    for (const command of ['git', 'python3']) {
+      const executable = spawnSync('which', [command], { encoding: 'utf8' });
+      assert.equal(executable.status, 0, `the local ${command} fixture executable is available`);
+      await symlink(executable.stdout.trim(), path.join(managedHostlessPath, command));
+    }
+    await writeFile(path.join(managedRoot, 'PRD.md'), '# Managed block first-run fixture\n');
+    await mkdir(path.join(managedRoot, '.loop'), { recursive: true });
+    await writeFile(path.join(managedRoot, '.loop', 'quality-gates.yaml'), [
+      'version: 2',
+      'gates:',
+      '  - id: required-fixture-check',
+      '    command: true',
+      '    required: true',
+      '    executor: control-plane',
+      '    timeout_seconds: 2',
+      '',
+    ].join('\n'));
+    const managedTeamBytes = Buffer.from(`${JSON.stringify(teamConfiguration(), null, 2)}\n`);
+    await mkdir(path.join(managedRoot, '.triad-plus'), { recursive: true });
+    await writeFile(path.join(managedRoot, '.triad-plus', 'team.json'), managedTeamBytes);
+    const managedRepo = path.join(managedRoot, 'product');
+    await makeRepo(managedRepo, 'managed block product fixture\n');
+    const managedWorktree = path.join(managedRoot, 'worktrees', 'product-feature');
+    await mkdir(path.dirname(managedWorktree), { recursive: true });
+    git(managedRepo, ['worktree', 'add', '-b', 'triad/product-feature', managedWorktree, 'main']);
+    const managedAnswers = [
+      line(''), line(''), key('space'), key('enter'), line('product'), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('install'),
+    ];
+    const managedSetup = terminalInput(managedRoot, managedAnswers, {
+      HOME: managedHome,
+      CODEX_HOME: managedCodexHome,
+      PATH: managedHostlessPath,
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    });
+    assert.equal(managedSetup.status, 0, `${managedSetup.stderr}\n${managedSetup.stdout}`);
+    assert.match(managedSetup.stdout, /primary Codex \(codex\)/);
+    assert.match(managedSetup.stdout, /Readiness: READY/);
+    assert.ok(managedSetup.stdout.includes(`CREATE ${path.join(managedCodexHome, 'skills', 'triad', 'SKILL.md')}`), 'the wizard approved the optional Codex global skill');
+    assert.deepEqual(await readFile(path.join(managedRoot, '.triad-plus', 'team.json')), managedTeamBytes, 'the first-run wizard preserves the configured team');
+    const managedManifestPath = path.join(managedRoot, '.triad-plus', 'installation.json');
+    const managedManifestBytes = await readFile(managedManifestPath);
+    const managedManifest = JSON.parse(managedManifestBytes);
+    validateInstallationManifest(managedManifest);
+    const managedCodexRecord = managedManifest.adapters.find((record) => record.id === 'codex');
+    assert.equal(managedCodexRecord.managed_assets.find((asset) => asset.scope === 'project' && asset.path === 'AGENTS.md')?.kind, 'managed_block');
+    const managedAgentsPath = path.join(managedRoot, 'AGENTS.md');
+    const startMarker = '<!-- triad-plus:managed-instructions:start -->';
+    const endMarker = '<!-- triad-plus:managed-instructions:end -->';
+    const managedAgentsBytes = await readFile(managedAgentsPath);
+    const managedEntryPath = path.join(managedRoot, '.triad-runtime', 'triad-host-entry.mjs');
+    const managedEntryBytes = await readFile(managedEntryPath);
+    const managedPreflight = path.join(managedCodexHome, 'triad-plus', 'host-entry-preflight.mjs');
+    const managedBindingKey = digest(Buffer.from(await realpath(managedRoot)));
+    const managedBindingPath = path.join(managedCodexHome, 'triad-plus', 'bindings', `${managedBindingKey}.json`);
+    const managedBindingBytes = await readFile(managedBindingPath);
+    const managedRuntimeEnv = {
+      HOME: managedHome,
+      CODEX_HOME: managedCodexHome,
+      PATH: managedHostlessPath,
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+    };
+    const runManagedPreflight = () => run(process.execPath, [managedPreflight, '--adapter', 'codex'], managedRoot, managedRuntimeEnv);
+    const runManagedEntry = () => run(process.execPath, [managedEntryPath, '--adapter', 'codex'], managedRoot, managedRuntimeEnv);
+    const assertManagedReady = (label) => {
+      const preflight = runManagedPreflight();
+      assert.equal(preflight.status, 0, `${label}: ${preflight.stderr}\n${preflight.stdout}`);
+      assert.match(preflight.stdout, /READY: codex Triad\+ workspace validated/);
+      const entry = runManagedEntry();
+      assert.equal(entry.status, 0, `${label}: ${entry.stderr}\n${entry.stdout}`);
+      assert.match(entry.stdout, /READY: codex Triad\+ workspace validated/);
+    };
+    const assertManagedBlocked = (label) => {
+      const preflight = runManagedPreflight();
+      assert.equal(preflight.status, 2, `${label}: ${preflight.stderr}\n${preflight.stdout}`);
+      assert.match(preflight.stderr, /BLOCKED: Triad not started/);
+      const entry = runManagedEntry();
+      assert.equal(entry.status, 2, `${label}: ${entry.stderr}\n${entry.stdout}`);
+      assert.match(`${entry.stderr}\n${entry.stdout}`, /BLOCKED: Triad not started/);
+    };
+    assertManagedReady('fresh first-run wizard install validates READY');
+
+    const ownerEditedAgents = Buffer.concat([
+      Buffer.from('# Owner-authored header remains outside the managed block.\n\n'),
+      managedAgentsBytes,
+      Buffer.from('\n## Owner-authored footer remains outside the managed block.\n'),
+    ]);
+    await writeFile(managedAgentsPath, ownerEditedAgents);
+    assertManagedReady('owner edits outside the managed block stay READY');
+    const changedInsideBlock = Buffer.from(ownerEditedAgents.toString('utf8').replace('## Triad+ role-run overlay', '## Altered managed overlay'));
+    await writeFile(managedAgentsPath, changedInsideBlock);
+    assertManagedBlocked('a modified managed block is BLOCKED');
+
+    await writeFile(managedAgentsPath, Buffer.concat([ownerEditedAgents, Buffer.from(`\n${startMarker}\n`)]));
+    assertManagedBlocked('duplicate markers are BLOCKED');
+    await writeFile(managedAgentsPath, Buffer.from(ownerEditedAgents.toString('utf8').replace(endMarker, '<!-- removed managed end -->')));
+    assertManagedBlocked('a missing marker is BLOCKED');
+    const malformedMarkers = ownerEditedAgents.toString('utf8')
+      .replace(startMarker, '<!-- temporary marker -->')
+      .replace(endMarker, startMarker)
+      .replace('<!-- temporary marker -->', endMarker);
+    await writeFile(managedAgentsPath, malformedMarkers);
+    assertManagedBlocked('out-of-order markers are BLOCKED');
+    await writeFile(managedAgentsPath, ownerEditedAgents);
+
+    const managedSentinel = path.join(fixture, 'untrusted-managed-validator-ran.txt');
+    await writeFile(managedEntryPath, `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(managedSentinel)}, 'executed');\n`);
+    const alteredMarkerManifest = JSON.parse(managedManifestBytes);
+    alteredMarkerManifest.adapters.find((record) => record.id === 'codex')
+      .managed_assets.find((asset) => asset.scope === 'project' && asset.path === 'AGENTS.md').start_marker = '<!-- attacker:start -->';
+    await writeInstallationManifest(managedRoot, buildMultiAdapterManifest({
+      triadVersion: alteredMarkerManifest.triad_version,
+      installedAt: alteredMarkerManifest.installed_at,
+      updatedAt: new Date().toISOString(),
+      adapters: alteredMarkerManifest.adapters,
+    }));
+    const alteredMarkerPreflight = runManagedPreflight();
+    assert.equal(alteredMarkerPreflight.status, 2, `${alteredMarkerPreflight.stderr}\n${alteredMarkerPreflight.stdout}`);
+    assert.match(alteredMarkerPreflight.stderr, /canonical AGENTS\.md marker contract/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed manifest marker definition cannot load local validator code');
+    await writeFile(managedManifestPath, managedManifestBytes);
+
+    const alteredBinding = JSON.parse(managedBindingBytes);
+    alteredBinding.expected_project_assets.find((asset) => asset.path === 'AGENTS.md').start_marker = '<!-- attacker:start -->';
+    await writeFile(managedBindingPath, `${JSON.stringify(alteredBinding, null, 2)}\n`);
+    const alteredBindingPreflight = runManagedPreflight();
+    assert.equal(alteredBindingPreflight.status, 2, `${alteredBindingPreflight.stderr}\n${alteredBindingPreflight.stdout}`);
+    assert.match(alteredBindingPreflight.stderr, /canonical AGENTS\.md marker contract/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed owner-binding marker definition cannot load local validator code');
+    await writeFile(managedBindingPath, managedBindingBytes);
+
+    const alteredBindingHash = JSON.parse(managedBindingBytes);
+    alteredBindingHash.expected_project_assets.find((asset) => asset.path === 'AGENTS.md').sha256 = digest(ownerEditedAgents);
+    await writeFile(managedBindingPath, `${JSON.stringify(alteredBindingHash, null, 2)}\n`);
+    const alteredBindingHashPreflight = runManagedPreflight();
+    assert.equal(alteredBindingHashPreflight.status, 2, `${alteredBindingHashPreflight.stderr}\n${alteredBindingHashPreflight.stdout}`);
+    assert.match(alteredBindingHashPreflight.stderr, /project-managed asset list differs from the owner-bound manifest/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed owner-binding hash cannot load local validator code');
+    await writeFile(managedBindingPath, managedBindingBytes);
+
+    const alteredHashManifest = JSON.parse(managedManifestBytes);
+    const agentsAsset = alteredHashManifest.adapters.find((record) => record.id === 'codex')
+      .managed_assets.find((asset) => asset.scope === 'project' && asset.path === 'AGENTS.md');
+    agentsAsset.sha256 = digest(ownerEditedAgents);
+    await writeInstallationManifest(managedRoot, buildMultiAdapterManifest({
+      triadVersion: alteredHashManifest.triad_version,
+      installedAt: alteredHashManifest.installed_at,
+      updatedAt: new Date().toISOString(),
+      adapters: alteredHashManifest.adapters,
+    }));
+    const alteredHashPreflight = runManagedPreflight();
+    assert.equal(alteredHashPreflight.status, 2, `${alteredHashPreflight.stderr}\n${alteredHashPreflight.stdout}`);
+    assert.match(alteredHashPreflight.stderr, /project-managed asset list differs from the owner-bound manifest/);
+    assert.equal(await readFile(managedSentinel).then(() => true, () => false), false, 'a changed managed-block hash cannot load local validator code');
+    await writeFile(managedEntryPath, managedEntryBytes);
+    await writeFile(managedManifestPath, managedManifestBytes);
+    await writeFile(managedAgentsPath, managedAgentsBytes);
+    assertManagedReady('restored wizard-generated install remains READY');
+
+    // Selecting a global entry is still only a plan: cancelling the exact
+    // final preview must leave both local and user-level files untouched.
+    const cancelRoot = path.join(fixture, 'GLOBAL-CANCEL-CONTROL');
+    const cancelRepo = path.join(cancelRoot, 'product');
+    const cancelCodexHome = path.join(fixture, 'codex-cancel-home');
+    await mkdir(cancelRoot);
+    await mkdir(cancelCodexHome);
+    await makeRepo(cancelRepo, 'cancel fixture product state\n');
+    const globalCancel = terminalInput(cancelRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('cancel'),
+    ], { HOME: path.join(fixture, 'home-global-cancel'), CODEX_HOME: cancelCodexHome });
+    assert.equal(globalCancel.status, 0, `${globalCancel.stderr}\n${globalCancel.stdout}`);
+    assert.match(globalCancel.stdout, /CREATE .*skills[/\\]triad[/\\]SKILL\.md/);
+    assert.match(globalCancel.stdout, /Cancelled\. No files were changed\./);
+    assert.deepEqual(await filesUnder(cancelCodexHome), [], 'final-preview cancellation creates no global file');
+    assert.equal(await readFile(path.join(cancelRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(cancelRoot, 'project.yaml')).then(() => true, () => false), false);
+
+    // A different pre-existing global command is a preflight conflict and the
+    // wizard must preserve it without creating any local workspace assets.
+    const collisionBridgeRoot = path.join(fixture, 'GLOBAL-COLLISION-CONTROL');
+    const collisionBridgeRepo = path.join(collisionBridgeRoot, 'product');
+    const collisionCodexHome = path.join(fixture, 'codex-collision-home');
+    const collisionBridgeEntry = path.join(collisionCodexHome, 'skills', 'triad', 'SKILL.md');
+    const collisionBridgeBytes = '# Owner managed Codex skill\n';
+    await mkdir(collisionBridgeRoot);
+    await mkdir(path.dirname(collisionBridgeEntry), { recursive: true });
+    await makeRepo(collisionBridgeRepo, 'collision fixture product state\n');
+    await writeFile(collisionBridgeEntry, collisionBridgeBytes);
+    const globalCollision = terminalInput(collisionBridgeRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'),
+    ], { HOME: path.join(fixture, 'home-global-collision'), CODEX_HOME: collisionCodexHome });
+    assert.equal(globalCollision.status, 0, `${globalCollision.stderr}\n${globalCollision.stdout}`);
+    assert.match(globalCollision.stdout, /Global entry collision; existing bytes differ, no files were changed/);
+    assert.equal(await readFile(collisionBridgeEntry, 'utf8'), collisionBridgeBytes, 'pre-existing global owner file remains byte-identical');
+    assert.equal(await readFile(path.join(collisionBridgeRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(collisionBridgeRoot, 'project.yaml')).then(() => true, () => false), false);
+
+    // A legacy same-name prompt is not migrated, replaced, or deleted. The
+    // owner gets an explicit collision report before any workspace files are
+    // installed and can back up the old prompt or skip the native entry.
+    const legacyPromptRoot = path.join(fixture, 'GLOBAL-LEGACY-PROMPT-COLLISION');
+    const legacyPromptRepo = path.join(legacyPromptRoot, 'product');
+    const legacyCodexHome = path.join(fixture, 'codex-legacy-prompt-home');
+    const legacyPromptPath = path.join(legacyCodexHome, 'prompts', 'triad.md');
+    const legacyPromptBytes = '# Existing owner-authored Codex prompt; preserve exactly.\n';
+    await mkdir(legacyPromptRoot);
+    await mkdir(path.dirname(legacyPromptPath), { recursive: true });
+    await makeRepo(legacyPromptRepo, 'legacy prompt collision fixture\n');
+    await writeFile(legacyPromptPath, legacyPromptBytes);
+    const legacyPromptCollision = terminalInput(legacyPromptRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'),
+    ], { HOME: path.join(fixture, 'home-legacy-prompt'), CODEX_HOME: legacyCodexHome });
+    assert.equal(legacyPromptCollision.status, 0, `${legacyPromptCollision.stderr}\n${legacyPromptCollision.stdout}`);
+    await saveTranscript('legacy-codex-prompt-collision', legacyPromptCollision);
+    assert.match(legacyPromptCollision.stdout, /Legacy Codex prompt collision/);
+    assert.match(legacyPromptCollision.stdout, /preserved byte-for-byte and is not migrated or deleted/);
+    assert.match(legacyPromptCollision.stdout, /No files were changed/);
+    assert.equal(await readFile(legacyPromptPath, 'utf8'), legacyPromptBytes, 'legacy prompt remains byte-identical');
+    assert.equal(await readFile(path.join(legacyCodexHome, 'skills/triad/SKILL.md')).then(() => true, () => false), false, 'native skill is not installed alongside a colliding legacy prompt');
+    assert.equal(await readFile(path.join(legacyPromptRoot, '.triad-plus/installation.json')).then(() => true, () => false), false, 'legacy collision writes no installation manifest');
+
+    // A different file appearing after the preview is never overwritten.
+    const raceRoot = path.join(fixture, 'GLOBAL-RACE-CONTROL');
+    const raceRepo = path.join(raceRoot, 'product');
+    const raceCodexHome = path.join(fixture, 'codex-race-home');
+    const raceGlobalEntry = path.join(raceCodexHome, 'skills', 'triad', 'SKILL.md');
+    await mkdir(raceRoot);
+    await mkdir(raceCodexHome);
+    await makeRepo(raceRepo, 'race fixture product state\n');
+    const globalRace = terminalInput(raceRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('install'),
+    ], {
+      HOME: path.join(fixture, 'home-global-race'),
+      CODEX_HOME: raceCodexHome,
+      TRIAD_TEST_INJECT_CONFLICT: raceGlobalEntry,
+    });
+    assert.equal(globalRace.status, 2, `${globalRace.stderr}\n${globalRace.stdout}`);
+    assert.match(`${globalRace.stdout}\n${globalRace.stderr}`, /Global entry (?:changed|appeared) after preview.*refusing to overwrite/);
+    assert.equal(await readFile(raceGlobalEntry, 'utf8'), 'introduced after preview\n', 'late owner content remains untouched');
+    const raceManifest = JSON.parse(await readFile(path.join(raceRoot, '.triad-plus', 'installation.json'), 'utf8'));
+    assert.equal(raceManifest.scopes.global, false, 'an unapproved or conflicting global file is never claimed by the local manifest');
+
+    // Direct global init is blocked so it cannot bypass exact-path consent.
+    const secondWorkspace = path.join(fixture, 'SECOND-CONTROL-WORKSPACE');
+    await mkdir(secondWorkspace);
+    const bypass = runCli(['init', '--host', 'codex', '--control', secondWorkspace, '--global'], secondWorkspace, isolatedHostEnv);
+    assert.equal(bypass.status, 2, `${bypass.stderr}\n${bypass.stdout}`);
+    assert.match(bypass.stderr, /only through the interactive setup wizard/);
+    assert.equal(await readFile(path.join(secondWorkspace, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'), 'blocked direct init leaves the approved global skill unchanged');
+
+    // A Codex user profile is shared: the wizard may reuse only byte-identical
+    // global files in a second Control Workspace, then removal of that local
+    // adapter must preserve the global file for the first workspace.
+    const secondRepo = path.join(secondWorkspace, 'product');
+    await makeRepo(secondRepo, 'second workspace fixture stays in temp storage\n');
+    const firstBindingBeforeSecondInstall = await readFile(codexBinding);
+    const secondInstall = terminalInput(secondWorkspace, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('install'),
+    ], isolatedHostEnv);
+    assert.equal(secondInstall.status, 0, `${secondInstall.stderr}\n${secondInstall.stdout}`);
+    assert.match(secondInstall.stdout, /REUSE identical .*skills[/\\]triad[/\\]SKILL\.md/);
+    assert.match(secondInstall.stdout, /Triad\+ setup completed\./);
+    const secondBindingKey = digest(Buffer.from(await realpath(secondWorkspace)));
+    const secondBinding = path.join(codexHome, 'triad-plus', 'bindings', `${secondBindingKey}.json`);
+    assert.notEqual(secondBinding, codexBinding, 'each approved workspace receives its own owner-binding target');
+    assert.ok(secondInstall.stdout.includes(`CREATE ${secondBinding}`), 'second workspace consent preview names its own exact binding file');
+    assert.deepEqual(await readFile(codexBinding), firstBindingBeforeSecondInstall, 'adding a workspace leaves the first workspace binding byte-identical');
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'));
+    const secondPreflight = run(process.execPath, [path.join(codexHome, 'triad-plus/host-entry-preflight.mjs'), '--adapter', 'codex'], secondWorkspace, isolatedHostEnv);
+    assert.equal(secondPreflight.status, 2, 'incomplete second workspace is rejected by its local validator after binding succeeds');
+    assert.match(secondPreflight.stderr, /BLOCKED: Triad not started/);
+    assert.doesNotMatch(secondPreflight.stderr, /owner-bound Control Workspace/, 'second workspace resolves its separate binding rather than inheriting the first');
+    const removeSecond = runCli(['adapter', 'remove', 'codex', '--control', secondWorkspace, '--apply'], secondWorkspace, isolatedHostEnv);
+    assert.equal(removeSecond.status, 0, `${removeSecond.stderr}\n${removeSecond.stdout}`);
+    assert.match(removeSecond.stdout, /Global entry files are preserved/);
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'), 'removing one workspace never removes the shared global skill');
+    const firstAfterSecondRemoval = JSON.parse(await readFile(manifestPath, 'utf8'));
+    assert.equal(firstAfterSecondRemoval.adapters.find((record) => record.id === 'codex').scope_status.global, 'installed', 'the other workspace retains its valid global owner record');
 
     // Screen A/B: multi-select two colliding slugs, visit Back, and verify both
     // repository and harness selections survive the round trip before cancel.
@@ -333,7 +658,7 @@ try {
       key('down'), key('space'), key('up'), key('space'), key('escape'), // OpenCode primary, Codex second; back
       key('enter'), // both repositories remain checked
       line(''), line(''), line(''), line(''), line(''), line(''), line(''), line(''),
-      key('enter'), line('n'), line('cancel'), // both adapters remain checked; cancel exact plan
+      key('enter'), key('enter'), line('n'), line('cancel'), // both adapters remain checked; skip global files and cancel exact plan
     ];
     const multiSelection = terminalInput(multiRoot, multiAnswers, { HOME: path.join(fixture, 'home-multi') });
     assert.equal(multiSelection.status, 0, `${multiSelection.stderr}\n${multiSelection.stdout}`);
@@ -426,7 +751,7 @@ try {
       line(''), line(''), key('down'), key('enter'), line('./missing'), key('enter'), line('./ketchup2'), key('enter'),
       line(''), line(''), line('bad..branch'), line(''),
       line('y'), key('enter'), line(''), line(''), line('triad/ketchup2-feature'), line(''),
-      key('space'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('enter'), line('n'), line('install'),
     ];
     const retryRun = terminalInput(retryRoot, retryAnswers, {
       HOME: path.join(fixture, 'home-path-recovery'),
@@ -453,7 +778,7 @@ try {
     await mkdir(greenHome);
     const greenAnswers = [
       line(''), line(''), key('down'), key('enter'), line('1'), line('sample-app'), line(''), line(''), line(''), line(''),
-      key('space'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('enter'), line('n'), line('install'),
     ];
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
@@ -495,7 +820,7 @@ try {
     const ownerCommand = '# Owner command\n';
     await writeFile(path.join(collisionRoot, '.opencode', 'commands', 'triad.md'), ownerCommand);
     const collision = terminalInput(collisionRoot, [
-      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('enter'), line('n'),
+      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('enter'), key('enter'), line('n'),
     ], { HOME: path.join(fixture, 'home-collision') });
     assert.equal(collision.status, 0, `${collision.stderr}\n${collision.stdout}`);
     await saveTranscript('preflight-collision', collision);
@@ -509,7 +834,7 @@ try {
     await mkdir(partialRoot);
     const conflict = path.join(partialRoot, '.agents', 'skills', 'triad-loop-bootstrap', 'SKILL.md');
     const partialAnswers = [
-      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('up'), key('space'), key('enter'), line('n'), line('install'),
+      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('up'), key('space'), key('enter'), key('enter'), line('n'), line('install'),
     ];
     const partial = terminalInput(partialRoot, partialAnswers, {
       HOME: path.join(fixture, 'home-partial'),

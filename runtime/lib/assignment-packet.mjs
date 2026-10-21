@@ -117,7 +117,7 @@ function normalizeRepositoryMappings(value) {
  * external worktree. This accepts project.yaml's stable JSON/YAML shapes and
  * is deliberately not a second general-purpose project parser.
  */
-function parseRepositoryMappings(source) {
+export function parseRepositoryMappings(source) {
   try {
     const parsed = JSON.parse(source);
     const root = objectLike(parsed) ? parsed : {};

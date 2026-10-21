@@ -224,7 +224,7 @@ try {
     { id: 'linked', path: symlinkPath, base_branch: 'main', project_branch: 'triad/linked-feature', worktree: 'worktrees/linked-feature' },
   ]), /symlink/);
   assert.equal(await readFile(configPlan.path, 'utf8'), stableSnapshot);
-  assert.match(projectLaunchHint({ id: 'codex' }, container).join('\n'), /was not installed/);
+  assert.match(projectLaunchHint({ id: 'codex' }, container).join('\n'), /optional user-level \$triad was not selected/);
   const teamPreview = formatSetupPreview({
     root: emptyRoot,
     repositories: greenfield,

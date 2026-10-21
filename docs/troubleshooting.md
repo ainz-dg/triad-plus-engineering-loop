@@ -58,6 +58,32 @@ baselines, worktree, branch, and candidate. Do not treat it as a passing test.
 If Evaluator+ is unavailable, check `roles.evaluator.enabled` in the team file.
 An Evaluator+ failure is post-run information, not an automatic repair request.
 
+## Codex and Hermes entry bridge
+
+The optional `$triad` Codex skill and Hermes `/triad` wrapper invoke an installed
+built-ins-only global preflight before the local validator. Setup writes a
+workspace-specific binding only after the owner approves the exact preview;
+the binding pins the canonical Control Workspace, local manifest, and expected
+project/global runtime hashes. A self-authored local manifest alone is not
+trusted. The preflight checks the current directory and runs a temporary
+snapshot of the verified validator, so a changed local validator is not
+executed. A `BLOCKED` result means Triad has not started; there is no workspace
+search or delegated work. Open/restart the host from the exact bound workspace
+or approve setup from the desired workspace. This remains post-LLM; neither
+skill can enforce a pre-LLM host boundary.
+
+The Codex skill is installed at
+`$CODEX_HOME/skills/triad/SKILL.md`. The former
+`$CODEX_HOME/prompts/triad.md` custom prompt is left byte-for-byte untouched and
+is not automatically migrated. If it exists, the wizard reports the collision
+and blocks the optional Codex skill entry; back it up under another name or
+skip the global Codex entry, then retry.
+
+The guard also stops on an invalid installation manifest or asset hash,
+missing/unsafe local adapter files, empty PRD, invalid quality gates, or missing
+declared repository/worktree Git roots. Correct those inputs deliberately and
+rerun; it does not infer or initialize them.
+
 ## Safe uninstall
 
 Uninstall is a dry run unless `--apply` is supplied:

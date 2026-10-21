@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 export const sharedSkillNames = [
   'triad-loop-bootstrap',
@@ -24,14 +25,33 @@ function hostHome(...parts) {
   return join(homedir(), ...parts);
 }
 
-function hermesProfileHome() {
-  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
+function bindingFile(home, controlRoot, bindingWorkspace = null) {
+  let workspace = bindingWorkspace ?? resolve(controlRoot);
+  if (!bindingWorkspace) {
+    try { workspace = realpathSync(workspace); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const key = createHash('sha256').update(workspace).digest('hex');
+  return join(home, 'triad-plus', 'bindings', `${key}.json`);
+}
+
+export function hermesProfileHome() {
+  if (process.env.HERMES_HOME) return resolve(process.env.HERMES_HOME);
   const root = hostHome('.hermes');
+  const activeProfile = join(root, 'active_profile');
+  let info;
   try {
-    const profile = readFileSync(join(root, 'active_profile'), 'utf8').trim();
-    if (profile) return join(root, 'profiles', profile);
-  } catch {}
-  return root;
+    info = lstatSync(activeProfile);
+  } catch (error) {
+    if (error.code === 'ENOENT') return root;
+    throw new Error(`Unable to inspect Hermes active profile marker: ${error.message}`);
+  }
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Hermes active profile marker is not a regular file: ${activeProfile}`);
+  const profile = readFileSync(activeProfile, 'utf8').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile) || profile === '.' || profile === '..') {
+    throw new Error(`Hermes active profile name is unsafe in ${activeProfile}`);
+  }
+  return join(root, 'profiles', profile);
 }
 
 function projectRuntimeAssets(id) {
@@ -56,10 +76,11 @@ const definitions = [
     id: 'codex',
     label: 'Codex',
     binary: 'codex',
-    entry: '/prompts:triad',
+    entry: '$triad',
     lifecycle: { kind: 'SubagentStop', agentType: 'triad_developer', requiresAsync: true },
     modelBinding: 'global-profiles',
     globalEntry: true,
+    globalEntryDescription: 'a Codex-native $triad skill with a bound trusted preflight',
     projectAssets: [
       { source: 'adapters/codex/run-role.mjs', destination: '.triad-runtime/adapters/codex/run-role.mjs', file: true },
       { source: 'adapters/codex/reviewer-result.mjs', destination: '.triad-runtime/adapters/codex/reviewer-result.mjs', file: true },
@@ -67,9 +88,12 @@ const definitions = [
       ...projectRuntimeAssets('codex')
     ],
     globalAssets: [
-      { source: 'adapters/codex/prompts/triad.md', destination: ({ codexHome }) => join(codexHome, 'prompts', 'triad.md'), file: true },
-      sharedSkills(({ codexHome }) => join(codexHome, 'skills'))
+      { source: 'adapters/codex/skills/triad/SKILL.md', destination: ({ codexHome }) => join(codexHome, 'skills', 'triad', 'SKILL.md'), file: true },
+      { source: 'runtime/triad-host-entry-preflight.mjs', destination: ({ codexHome }) => join(codexHome, 'triad-plus', 'host-entry-preflight.mjs'), file: true }
     ],
+    legacyGlobalPaths({ codexHome }) {
+      return [join(codexHome, 'prompts', 'triad.md')];
+    },
     projectPaths(controlRoot) {
       return [
         join(controlRoot, '.triad-runtime', 'adapters', 'codex', 'run-role.mjs'),
@@ -78,8 +102,15 @@ const definitions = [
         join(controlRoot, '.triad-runtime')
       ];
     },
-    globalPaths({ codexHome }) {
-      return [join(codexHome, 'prompts', 'triad.md'), ...sharedSkillNames.map((name) => join(codexHome, 'skills', name))];
+    globalPaths({ codexHome, controlRoot, bindingWorkspace }) {
+      return [
+        join(codexHome, 'skills', 'triad', 'SKILL.md'),
+        join(codexHome, 'triad-plus', 'host-entry-preflight.mjs'),
+        bindingFile(codexHome, controlRoot, bindingWorkspace)
+      ];
+    },
+    globalBindingPath({ codexHome, controlRoot, bindingWorkspace }) {
+      return bindingFile(codexHome, controlRoot, bindingWorkspace);
     },
     roleModelPaths({ codexHome }) {
       return roleDefinitions.map((role) => join(codexHome, 'agents', `triad_${role.id}.toml`));
@@ -219,19 +250,27 @@ const definitions = [
     lifecycle: null,
     modelBinding: 'team-record',
     globalEntry: true,
+    globalEntryDescription: 'the active-profile /triad wrapper and bound Hermes preflight',
     projectAssets: [
       ...projectRuntimeAssets('hermes')
     ],
     globalAssets: [
       { source: 'adapters/hermes/skills/triad', destination: () => join(hermesProfileHome(), 'skills', 'triad') },
-      sharedSkills(() => join(hermesProfileHome(), 'skills'))
+      { source: 'runtime/triad-host-entry-preflight.mjs', destination: () => hostHome('.hermes', 'triad-plus', 'host-entry-preflight.mjs'), file: true }
     ],
     projectPaths(controlRoot) {
       return [join(controlRoot, '.triad-runtime')];
     },
-    globalPaths() {
+    globalPaths({ controlRoot, bindingWorkspace }) {
       const root = join(hermesProfileHome(), 'skills');
-      return [join(root, 'triad'), ...sharedSkillNames.map((name) => join(root, name))];
+      return [
+        join(root, 'triad'),
+        hostHome('.hermes', 'triad-plus', 'host-entry-preflight.mjs'),
+        bindingFile(hostHome('.hermes'), controlRoot, bindingWorkspace)
+      ];
+    },
+    globalBindingPath({ controlRoot, bindingWorkspace }) {
+      return bindingFile(hostHome('.hermes'), controlRoot, bindingWorkspace);
     }
   },
   {

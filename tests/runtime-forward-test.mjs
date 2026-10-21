@@ -262,7 +262,7 @@ try {
   assert.match(await readFile(path.join(repositoryRoot, "adapters", "copilot", "runtime.json"), "utf8"), /"id":\s*"copilot"/);
   const orchestratorContracts = await Promise.all([
     "skills/triad-loop-orchestrator/SKILL.md",
-    "adapters/codex/prompts/triad.md",
+    "adapters/codex/skills/triad/SKILL.md",
     "adapters/claude-code/.claude/commands/triad.md",
     "adapters/opencode/.opencode/commands/triad.md",
     "adapters/opencode/.opencode/agents/triad-orchestrator.md",
