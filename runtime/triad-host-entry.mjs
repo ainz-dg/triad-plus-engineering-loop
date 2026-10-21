@@ -23,7 +23,7 @@ function git(cwd, args) {
 
 async function expectedGlobalEntry(adapter) {
   if (adapter === 'codex') {
-    return path.resolve(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'prompts', 'triad.md');
+    return path.resolve(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'skills', 'triad', 'SKILL.md');
   }
   const hermesHome = process.env.HERMES_HOME || path.join(homedir(), '.hermes');
   if (process.env.HERMES_HOME) return path.resolve(hermesHome, 'skills', 'triad', 'SKILL.md');
@@ -157,7 +157,14 @@ async function validateHostEntry({ adapter, cwd = process.cwd() }) {
   if (record) {
     const assets = record.managed_assets ?? [];
     const projectAssets = assets.filter((asset) => asset.scope === 'project');
-    const runtimeMetadata = projectAssets.find((asset) => asset.path.endsWith('/adapter.json') && asset.path.startsWith('.triad-runtime/'));
+    const perAdapterMetadata = projectAssets.find((asset) => asset.path === `.triad-runtime/adapters/${adapter}/adapter.json`);
+    const singletonMetadata = projectAssets.find((asset) => asset.path === '.triad-runtime/adapter.json');
+    // Schema v1 has only the primary singleton. In schema v2 prefer the
+    // selected adapter's own record even if a shared singleton is also listed
+    // in its assets; the latter can correctly continue to name the primary.
+    const runtimeMetadata = manifest.schema_version === 2
+      ? perAdapterMetadata ?? singletonMetadata
+      : singletonMetadata;
     if (!runtimeMetadata) problems.push(`${adapter} local adapter metadata is missing`);
     else {
       const metadataPath = await regularFile(root, runtimeMetadata.path, problems, `${adapter} local adapter metadata`);
@@ -169,8 +176,8 @@ async function validateHostEntry({ adapter, cwd = process.cwd() }) {
       }
     }
     const neededAssets = adapter === 'codex'
-      ? ['.triad-runtime/adapters/codex/run-role.mjs', '.agents/skills/triad-loop-orchestrator/SKILL.md']
-      : ['.triad-runtime/triad-runtime-capabilities.mjs', runtimeMetadata.path];
+      ? ['.triad-runtime/adapters/codex/run-role.mjs', '.agents/skills/triad-loop-orchestrator/SKILL.md', runtimeMetadata?.path].filter(Boolean)
+      : ['.triad-runtime/triad-runtime-capabilities.mjs', runtimeMetadata?.path].filter(Boolean);
     const byPath = new Map(projectAssets.map((asset) => [asset.path, asset]));
     for (const needed of neededAssets) if (!byPath.has(needed)) problems.push(`${adapter} local adapter asset is not recorded: ${needed}`);
     for (const asset of projectAssets) {

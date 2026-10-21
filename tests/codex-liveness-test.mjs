@@ -9,7 +9,7 @@ const sharedContract = fs.readFileSync(
   "utf8",
 );
 const codexContract = fs.readFileSync(
-  path.join(root, "adapters/codex/prompts/triad.md"),
+  path.join(root, "adapters/codex/skills/triad/SKILL.md"),
   "utf8",
 );
 
@@ -26,7 +26,7 @@ function requireContract(text, phrase, label) {
 
 for (const [label, contract] of [
   ["shared Orchestrator skill", shared],
-  ["Codex Orchestrator prompt", codex],
+  ["Codex Orchestrator skill", codex],
 ]) {
   requireContract(contract, "MUST NOT end its owner-facing turn while", label);
   requireContract(contract, "delegated Developer or Reviewer assignment", label);
@@ -48,9 +48,9 @@ requireContract(
 requireContract(
   codex,
   "immediately call `wait_agent` again in the same Orchestrator turn",
-  "Codex Orchestrator prompt",
+  "Codex Orchestrator skill",
 );
-requireContract(codex, "invoke explicit `triad-verify`", "Codex Orchestrator prompt");
+requireContract(codex, "invoke explicit `triad-verify`", "Codex Orchestrator skill");
 
 // A small executable model of the required host-wait semantics. This is not a
 // replacement for the live Codex gate; it prevents the contract from drifting

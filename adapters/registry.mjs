@@ -69,7 +69,7 @@ const definitions = [
     lifecycle: { kind: 'SubagentStop', agentType: 'triad_developer', requiresAsync: true },
     modelBinding: 'global-profiles',
     globalEntry: true,
-    globalEntryDescription: 'one global prompt file',
+    globalEntryDescription: 'one global Codex-native skill ($triad)',
     projectAssets: [
       { source: 'adapters/codex/run-role.mjs', destination: '.triad-runtime/adapters/codex/run-role.mjs', file: true },
       { source: 'adapters/codex/reviewer-result.mjs', destination: '.triad-runtime/adapters/codex/reviewer-result.mjs', file: true },
@@ -77,8 +77,11 @@ const definitions = [
       ...projectRuntimeAssets('codex')
     ],
     globalAssets: [
-      { source: 'adapters/codex/prompts/triad.md', destination: ({ codexHome }) => join(codexHome, 'prompts', 'triad.md'), file: true }
+      { source: 'adapters/codex/skills/triad/SKILL.md', destination: ({ codexHome }) => join(codexHome, 'skills', 'triad', 'SKILL.md'), file: true }
     ],
+    legacyGlobalPaths({ codexHome }) {
+      return [join(codexHome, 'prompts', 'triad.md')];
+    },
     projectPaths(controlRoot) {
       return [
         join(controlRoot, '.triad-runtime', 'adapters', 'codex', 'run-role.mjs'),
@@ -88,7 +91,7 @@ const definitions = [
       ];
     },
     globalPaths({ codexHome }) {
-      return [join(codexHome, 'prompts', 'triad.md')];
+      return [join(codexHome, 'skills', 'triad', 'SKILL.md')];
     },
     roleModelPaths({ codexHome }) {
       return roleDefinitions.map((role) => join(codexHome, 'agents', `triad_${role.id}.toml`));

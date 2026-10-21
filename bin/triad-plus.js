@@ -2216,6 +2216,12 @@ async function planGlobalEntryAdapters(adapters, selectedAdapters, controlRoot) 
   for (const adapter of adapters) {
     if (!selectedIds.has(adapter.id)) continue;
     if (!adapter.globalEntry || !adapter.globalAssets?.length) throw new Error(`${adapter.id} does not declare an approved global entry bridge.`);
+    for (const legacyPath of adapter.legacyGlobalPaths?.(installContext) ?? []) {
+      const legacyInfo = await safeGlobalAssetInfo(legacyPath);
+      if (legacyInfo) {
+        throw new Error(`Legacy Codex prompt collision at ${legacyPath}; it is preserved byte-for-byte and is not migrated or deleted. Back it up under a different name or deselect the Codex global entry, then retry. No files were changed.`);
+      }
+    }
     const pairs = await materializedAssetPairs(adapter.globalAssets, controlRoot, installContext);
     const managedAssets = await plannedAdapterRecords(pairs, controlRoot, 'global');
     const created = [];

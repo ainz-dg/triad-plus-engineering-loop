@@ -236,7 +236,7 @@ try {
     assert.doesNotMatch(setup.stdout, /repo-1/);
     assert.match(setup.stdout, /Attempt-bound multi-harness dispatch remains unsupported/);
     assert.match(setup.stdout, /Optional; only exact files shown in the final preview can be installed/);
-    assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'prompts', 'triad.md')}`), 'the final preview names the exact absolute Codex prompt path');
+    assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
     assert.match(setup.stdout, /Readiness: NOT READY/);
     assert.match(setup.stdout, /\/triad/);
     assert.equal(await readFile(path.join(root, 'PRD.md'), 'utf8'), prd);
@@ -301,9 +301,9 @@ try {
       assert.deepEqual(shared.owners, owners, `shared-asset owners are exact: ${shared.path}`);
       assert.equal(digest(await readFile(path.join(root, shared.path))), shared.sha256, `shared bytes match manifest: ${shared.path}`);
     }
-    const codexGlobalEntry = path.join(codexHome, 'prompts', 'triad.md');
+    const codexGlobalEntry = path.join(codexHome, 'skills', 'triad', 'SKILL.md');
     assert.ok((await readFile(codexGlobalEntry, 'utf8')).includes('triad-host-entry.mjs --adapter codex'));
-    assert.deepEqual(await filesUnder(codexHome), ['prompts/triad.md'], 'the exact selected Codex entry is the only global file installed');
+    assert.deepEqual(await filesUnder(codexHome), ['skills/triad/SKILL.md'], 'the exact selected Codex-native skill is the only global file installed');
     for (const directory of [home, xdgHome, hermesHome, isolatedTmp]) {
       assert.deepEqual(await filesUnder(directory), [], `local-only setup wrote no global files under ${directory}`);
     }
@@ -335,7 +335,7 @@ try {
       key('space'), key('enter'), key('space'), key('enter'), line('n'), line('cancel'),
     ], { HOME: path.join(fixture, 'home-global-cancel'), CODEX_HOME: cancelCodexHome });
     assert.equal(globalCancel.status, 0, `${globalCancel.stderr}\n${globalCancel.stdout}`);
-    assert.match(globalCancel.stdout, /CREATE .*prompts[/\\]triad\.md/);
+    assert.match(globalCancel.stdout, /CREATE .*skills[/\\]triad[/\\]SKILL\.md/);
     assert.match(globalCancel.stdout, /Cancelled\. No files were changed\./);
     assert.deepEqual(await filesUnder(cancelCodexHome), [], 'final-preview cancellation creates no global file');
     assert.equal(await readFile(path.join(cancelRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
@@ -346,8 +346,8 @@ try {
     const collisionBridgeRoot = path.join(fixture, 'GLOBAL-COLLISION-CONTROL');
     const collisionBridgeRepo = path.join(collisionBridgeRoot, 'product');
     const collisionCodexHome = path.join(fixture, 'codex-collision-home');
-    const collisionBridgeEntry = path.join(collisionCodexHome, 'prompts', 'triad.md');
-    const collisionBridgeBytes = '# Owner managed Codex prompt\n';
+    const collisionBridgeEntry = path.join(collisionCodexHome, 'skills', 'triad', 'SKILL.md');
+    const collisionBridgeBytes = '# Owner managed Codex skill\n';
     await mkdir(collisionBridgeRoot);
     await mkdir(path.dirname(collisionBridgeEntry), { recursive: true });
     await makeRepo(collisionBridgeRepo, 'collision fixture product state\n');
@@ -363,11 +363,37 @@ try {
     assert.equal(await readFile(path.join(collisionBridgeRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
     assert.equal(await readFile(path.join(collisionBridgeRoot, 'project.yaml')).then(() => true, () => false), false);
 
+    // A legacy same-name prompt is not migrated, replaced, or deleted. The
+    // owner gets an explicit collision report before any workspace files are
+    // installed and can back up the old prompt or skip the native entry.
+    const legacyPromptRoot = path.join(fixture, 'GLOBAL-LEGACY-PROMPT-COLLISION');
+    const legacyPromptRepo = path.join(legacyPromptRoot, 'product');
+    const legacyCodexHome = path.join(fixture, 'codex-legacy-prompt-home');
+    const legacyPromptPath = path.join(legacyCodexHome, 'prompts', 'triad.md');
+    const legacyPromptBytes = '# Existing owner-authored Codex prompt; preserve exactly.\n';
+    await mkdir(legacyPromptRoot);
+    await mkdir(path.dirname(legacyPromptPath), { recursive: true });
+    await makeRepo(legacyPromptRepo, 'legacy prompt collision fixture\n');
+    await writeFile(legacyPromptPath, legacyPromptBytes);
+    const legacyPromptCollision = terminalInput(legacyPromptRoot, [
+      line(''), line(''), key('space'), key('enter'),
+      line(''), line(''), line(''), line(''),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'),
+    ], { HOME: path.join(fixture, 'home-legacy-prompt'), CODEX_HOME: legacyCodexHome });
+    assert.equal(legacyPromptCollision.status, 0, `${legacyPromptCollision.stderr}\n${legacyPromptCollision.stdout}`);
+    await saveTranscript('legacy-codex-prompt-collision', legacyPromptCollision);
+    assert.match(legacyPromptCollision.stdout, /Legacy Codex prompt collision/);
+    assert.match(legacyPromptCollision.stdout, /preserved byte-for-byte and is not migrated or deleted/);
+    assert.match(legacyPromptCollision.stdout, /No files were changed/);
+    assert.equal(await readFile(legacyPromptPath, 'utf8'), legacyPromptBytes, 'legacy prompt remains byte-identical');
+    assert.equal(await readFile(path.join(legacyCodexHome, 'skills/triad/SKILL.md')).then(() => true, () => false), false, 'native skill is not installed alongside a colliding legacy prompt');
+    assert.equal(await readFile(path.join(legacyPromptRoot, '.triad-plus/installation.json')).then(() => true, () => false), false, 'legacy collision writes no installation manifest');
+
     // A different file appearing after the preview is never overwritten.
     const raceRoot = path.join(fixture, 'GLOBAL-RACE-CONTROL');
     const raceRepo = path.join(raceRoot, 'product');
     const raceCodexHome = path.join(fixture, 'codex-race-home');
-    const raceGlobalEntry = path.join(raceCodexHome, 'prompts', 'triad.md');
+    const raceGlobalEntry = path.join(raceCodexHome, 'skills', 'triad', 'SKILL.md');
     await mkdir(raceRoot);
     await mkdir(raceCodexHome);
     await makeRepo(raceRepo, 'race fixture product state\n');
@@ -393,7 +419,7 @@ try {
     assert.equal(bypass.status, 2, `${bypass.stderr}\n${bypass.stdout}`);
     assert.match(bypass.stderr, /only through the interactive setup wizard/);
     assert.equal(await readFile(path.join(secondWorkspace, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
-    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/prompts/triad.md'), 'utf8'), 'blocked direct init leaves the approved global file unchanged');
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'), 'blocked direct init leaves the approved global skill unchanged');
 
     // A Codex user profile is shared: the wizard may reuse only byte-identical
     // global files in a second Control Workspace, then removal of that local
@@ -406,13 +432,13 @@ try {
       key('space'), key('enter'), key('space'), key('enter'), line('n'), line('install'),
     ], isolatedHostEnv);
     assert.equal(secondInstall.status, 0, `${secondInstall.stderr}\n${secondInstall.stdout}`);
-    assert.match(secondInstall.stdout, /REUSE identical .*prompts[/\\]triad\.md/);
+    assert.match(secondInstall.stdout, /REUSE identical .*skills[/\\]triad[/\\]SKILL\.md/);
     assert.match(secondInstall.stdout, /Triad\+ setup completed\./);
-    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/prompts/triad.md'), 'utf8'));
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'));
     const removeSecond = runCli(['adapter', 'remove', 'codex', '--control', secondWorkspace, '--apply'], secondWorkspace, isolatedHostEnv);
     assert.equal(removeSecond.status, 0, `${removeSecond.stderr}\n${removeSecond.stdout}`);
     assert.match(removeSecond.stdout, /Global entry files are preserved/);
-    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/prompts/triad.md'), 'utf8'), 'removing one workspace never removes the shared global entry');
+    assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'), 'removing one workspace never removes the shared global skill');
     const firstAfterSecondRemoval = JSON.parse(await readFile(manifestPath, 'utf8'));
     assert.equal(firstAfterSecondRemoval.adapters.find((record) => record.id === 'codex').scope_status.global, 'installed', 'the other workspace retains its valid global owner record');
 

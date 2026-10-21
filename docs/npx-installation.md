@@ -55,13 +55,17 @@ The registered adapters are OpenCode, Codex, Claude Code, GitHub Copilot,
 Antigravity, and Hermes Agent.
 
 After project adapters are selected, the wizard can optionally install the
-Codex `$triad` prompt and/or Hermes `/triad` wrapper at user level. It resolves
-and displays every absolute file target (Codex:
-`CODEX_HOME/prompts/triad.md`; Hermes: the active profile's `skills/triad/`
+Codex-native `$triad` skill and/or Hermes `/triad` wrapper at user level. It
+resolves and displays every absolute file target (Codex:
+`CODEX_HOME/skills/triad/SKILL.md`; Hermes: the active profile's `skills/triad/`
 wrapper files, or `~/.hermes/skills/triad/` only when no active profile marker
 exists). Byte-identical existing files are labeled for reuse; a different
-existing file is a preflight conflict and is never overwritten. Skipping this
-step writes no user-level files. An optional team-identity/model configuration
+existing file is a preflight conflict and is never overwritten. The legacy
+Codex `$CODEX_HOME/prompts/triad.md` file is never migrated, overwritten, or
+deleted; if present, the wizard reports the name collision and blocks the
+optional native skill install until the owner backs it up under another name
+or deselects the Codex global entry. Skipping this step writes no user-level
+files. An optional team-identity/model configuration
 may also be requested. The final preview covers the Control Workspace, mapping
 changes, selected project and global assets, primary runtime adapter, and
 initial readiness. Type `install` to apply that exact plan; any other answer

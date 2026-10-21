@@ -60,7 +60,7 @@ An Evaluator+ failure is post-run information, not an automatic repair request.
 
 ## Codex and Hermes entry bridge
 
-The optional `$triad` Codex prompt and Hermes `/triad` wrapper check only the
+The optional `$triad` Codex skill and Hermes `/triad` wrapper check only the
 current directory. A `BLOCKED` result means Triad has not started; the wrapper
 does not search other workspaces and makes no workspace, host-setting, or
 delegation changes. Open/restart the host from the intended Control Workspace,
@@ -68,6 +68,13 @@ run the setup wizard from that exact workspace, or cancel. A supplied
 `--workspace` path must match the host's current directory; if the host cannot
 rebind, restart it there. The wrapper is model-level and cannot enforce a
 pre-LLM boundary.
+
+The Codex skill is installed at
+`$CODEX_HOME/skills/triad/SKILL.md`. The former
+`$CODEX_HOME/prompts/triad.md` custom prompt is left byte-for-byte untouched and
+is not automatically migrated. If it exists, the wizard reports the collision
+and blocks the optional Codex skill entry; back it up under another name or
+skip the global Codex entry, then retry.
 
 The guard also stops on an invalid installation manifest or asset hash,
 missing/unsafe local adapter files, empty PRD, invalid quality gates, or missing

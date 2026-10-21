@@ -124,8 +124,8 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null } = {})
 
   const globalAssets = [];
   if (adapter === 'codex') {
-    const source = path.join(repositoryRoot, 'adapters/codex/prompts/triad.md');
-    const target = path.join(codexHome, 'prompts/triad.md');
+    const source = path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md');
+    const target = path.join(codexHome, 'skills/triad/SKILL.md');
     await mkdir(path.dirname(target), { recursive: true });
     await cp(source, target);
     globalAssets.push({ scope: 'global', path: target, kind: 'file', sha256: digest(await readFile(target)) });
@@ -167,6 +167,100 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null } = {})
   return { adapter, base, root, home, codexHome, hermesHome, env, repo, worktree, globalAssets };
 }
 
+async function makeOpenCodePrimaryMultiAdapterWorkspace(name) {
+  const base = path.join(fixture, name);
+  const root = path.join(base, 'control');
+  const home = path.join(base, 'home');
+  const codexHome = path.join(base, 'codex-home');
+  const hermesHome = path.join(base, 'hermes-home');
+  await mkdir(root, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await mkdir(codexHome, { recursive: true });
+  await mkdir(hermesHome, { recursive: true });
+  const env = { HOME: home, CODEX_HOME: codexHome, HERMES_HOME: hermesHome, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' };
+
+  for (const args of [
+    ['init', '--host', 'opencode', '--control', root],
+    ['adapter', 'add', 'codex', '--control', root, '--apply'],
+    ['adapter', 'add', 'hermes', '--control', root, '--apply'],
+  ]) {
+    const result = runCli(args, root, env);
+    assert.equal(result.status, 0, `${args.join(' ')} failed: ${result.stderr}\n${result.stdout}`);
+  }
+
+  const repo = path.join(root, 'product');
+  const worktree = path.join(root, 'worktrees', 'sample-feature');
+  await makeRepo(repo);
+  await mkdir(path.dirname(worktree), { recursive: true });
+  git(repo, ['worktree', 'add', '-b', 'triad/sample-feature', worktree, 'main']);
+  await writeFile(path.join(root, 'project.yaml'), [
+    'project:',
+    '  id: multi-host-entry-fixture',
+    'repositories:',
+    '  - id: sample',
+    '    path: ./product',
+    '    base_branch: main',
+    '    project_branch: triad/sample-feature',
+    '    worktree: ./worktrees/sample-feature',
+    '',
+  ].join('\n'));
+  await writeFile(path.join(root, 'PRD.md'), '# Multi-adapter host-entry fixture\n');
+  await mkdir(path.join(root, '.loop'), { recursive: true });
+  await writeFile(path.join(root, '.loop/quality-gates.yaml'), [
+    'version: 2',
+    'gates:',
+    '  - id: fixture-check',
+    '    command: true',
+    '    required: true',
+    '    executor: control-plane',
+    '    timeout_seconds: 2',
+    '',
+  ].join('\n'));
+
+  const codexSource = path.join(repositoryRoot, 'adapters/codex/skills/triad');
+  const codexTarget = path.join(codexHome, 'skills/triad');
+  await cp(codexSource, codexTarget, { recursive: true });
+  const hermesSource = path.join(repositoryRoot, 'adapters/hermes/skills/triad');
+  const hermesTarget = path.join(hermesHome, 'skills/triad');
+  await cp(hermesSource, hermesTarget, { recursive: true });
+  const codexGlobalAssets = [{
+    scope: 'global', path: path.join(codexTarget, 'SKILL.md'), kind: 'file',
+    sha256: digest(await readFile(path.join(codexTarget, 'SKILL.md'))),
+  }];
+  const hermesGlobalAssets = await Promise.all((await listFiles(hermesTarget)).map(async (relative) => ({
+    scope: 'global', path: path.join(hermesTarget, relative), kind: 'file',
+    sha256: digest(await readFile(path.join(hermesTarget, relative))),
+  })));
+
+  const loaded = await loadInstallationManifest(root);
+  assert.equal(loaded.manifest.schema_version, 2);
+  const primaryMetadata = loaded.manifest.adapters.find((entry) => entry.id === 'opencode')
+    .managed_assets.find((asset) => asset.scope === 'project' && asset.path === '.triad-runtime/adapter.json');
+  assert.ok(primaryMetadata, 'OpenCode owns the singleton primary runtime metadata');
+  const now = new Date().toISOString();
+  const adapters = loaded.manifest.adapters.map((record) => {
+    if (!['codex', 'hermes'].includes(record.id)) return record;
+    const globalAssets = record.id === 'codex' ? codexGlobalAssets : hermesGlobalAssets;
+    return {
+      ...record,
+      updated_at: now,
+      scopes: { ...record.scopes, global: true },
+      scope_status: { ...record.scope_status, global: 'installed' },
+      // Shared primary metadata can be present in an adapter's validated asset
+      // inventory. It must not override that adapter's own runtime metadata.
+      managed_assets: [...record.managed_assets, primaryMetadata, ...globalAssets],
+    };
+  });
+  await writeInstallationManifest(root, buildMultiAdapterManifest({
+    triadVersion: loaded.manifest.triad_version,
+    installedAt: loaded.manifest.installed_at,
+    updatedAt: now,
+    adapters,
+  }));
+
+  return { adapter: 'codex', base, root, home, codexHome, hermesHome, env, repo, worktree };
+}
+
 async function assertBlockedWithoutWrites(workspace, label, mutate, expected) {
   await mutate();
   const before = await snapshot(workspace.base);
@@ -176,7 +270,7 @@ async function assertBlockedWithoutWrites(workspace, label, mutate, expected) {
   assert.deepEqual(await snapshot(workspace.base), before, `${label} does not mutate the workspace or profile`);
 }
 
-async function validateInEnvironment(workspace, cwd = workspace.root) {
+async function validateInEnvironment(workspace, cwd = workspace.root, adapter = workspace.adapter) {
   const names = ['HOME', 'CODEX_HOME', 'HERMES_HOME'];
   const prior = new Map(names.map((name) => [name, process.env[name]]));
   for (const name of names) {
@@ -184,7 +278,7 @@ async function validateInEnvironment(workspace, cwd = workspace.root) {
     if (value === null || value === undefined) delete process.env[name];
     else process.env[name] = value;
   }
-  try { return await validateHostEntry({ adapter: workspace.adapter, cwd }); }
+  try { return await validateHostEntry({ adapter, cwd }); }
   finally {
     for (const [name, value] of prior) {
       if (value === undefined) delete process.env[name];
@@ -198,7 +292,7 @@ try {
   const validCodex = await validateInEnvironment(codex);
   assert.equal(validCodex.ready, true, validCodex.problems.join('\n'));
   assert.equal(runEntry('codex', codex.root, codex.env).status, 0);
-  assert.deepEqual(await listFiles(codex.codexHome), ['prompts/triad.md'], 'Codex global entry owns one user file, not project skills or role profiles');
+  assert.deepEqual(await listFiles(codex.codexHome), ['skills/triad/SKILL.md'], 'Codex global entry owns one native skill file, not project skills or role profiles');
   const beforeBlockedUpgrade = await snapshot(codex.base);
   const blockedUpgrade = runCli(['upgrade', '--host', 'codex', '--control', codex.root, '--global'], codex.root, codex.env);
   assert.equal(blockedUpgrade.status, 2);
@@ -278,7 +372,7 @@ try {
 
   const globalAsset = codex.globalAssets[0];
   const globalBytes = await readFile(globalAsset.path);
-  await assertBlockedWithoutWrites(codex, 'global prompt hash drift', async () => {
+  await assertBlockedWithoutWrites(codex, 'global native skill hash drift', async () => {
     await writeFile(globalAsset.path, `${globalBytes}\nmodified\n`);
   }, /global entry hash differs from installation manifest/);
   await writeFile(globalAsset.path, globalBytes);
@@ -342,6 +436,47 @@ try {
 
   const noProfileWorkspace = await makeWorkspace('hermes', 'hermes-default-profile');
   assert.equal((await validateInEnvironment(noProfileWorkspace)).ready, true);
+
+  const multi = await makeOpenCodePrimaryMultiAdapterWorkspace('opencode-primary-codex-hermes-secondary');
+  const multiManifest = (await loadInstallationManifest(multi.root)).manifest;
+  assert.deepEqual(multiManifest.adapters.map((entry) => entry.id), ['codex', 'hermes', 'opencode']);
+  assert.equal(JSON.parse(await readFile(path.join(multi.root, '.triad-runtime/adapter.json'), 'utf8')).id, 'opencode');
+  for (const adapter of ['codex', 'hermes']) {
+    const record = multiManifest.adapters.find((entry) => entry.id === adapter);
+    assert.ok(record.managed_assets.some((asset) => asset.path === `.triad-runtime/adapters/${adapter}/adapter.json`), `${adapter} owns its own local runtime metadata`);
+    assert.ok(record.managed_assets.some((asset) => asset.path === '.triad-runtime/adapter.json'), `${adapter} also validates the shared OpenCode singleton without treating it as its identity`);
+    const view = { ...multi, adapter };
+    const valid = await validateInEnvironment(view);
+    assert.equal(valid.ready, true, `${adapter} secondary guard passes: ${valid.problems.join('; ')}`);
+    assert.equal(runEntry(adapter, multi.root, multi.env).status, 0, `${adapter} native entry guard succeeds in the multi-adapter fixture`);
+  }
+  const withoutHermes = buildMultiAdapterManifest({
+    triadVersion: multiManifest.triad_version,
+    installedAt: multiManifest.installed_at,
+    updatedAt: new Date().toISOString(),
+    adapters: multiManifest.adapters.filter((entry) => entry.id !== 'hermes'),
+  });
+  await writeInstallationManifest(multi.root, withoutHermes);
+  const missingMultiAdapter = await validateInEnvironment(multi, multi.root, 'hermes');
+  assert.equal(missingMultiAdapter.ready, false);
+  assert.match(missingMultiAdapter.problems.join('\n'), /project-local hermes adapter is not installed/);
+  await writeInstallationManifest(multi.root, multiManifest);
+
+  const codexSecondary = { ...multi, adapter: 'codex' };
+  const codexSecondaryMetadata = path.join(multi.root, '.triad-runtime/adapters/codex/adapter.json');
+  const codexSecondaryBytes = await readFile(codexSecondaryMetadata);
+  await assertBlockedWithoutWrites(codexSecondary, 'multi-adapter malformed secondary metadata', async () => {
+    await writeFile(codexSecondaryMetadata, '{invalid json\n');
+  }, /codex local adapter metadata is malformed/);
+  await writeFile(codexSecondaryMetadata, codexSecondaryBytes);
+  await assertBlockedWithoutWrites(codexSecondary, 'multi-adapter secondary metadata identity mismatch', async () => {
+    await writeFile(codexSecondaryMetadata, '{"id":"opencode"}\n');
+  }, /codex local adapter metadata belongs to opencode/);
+  await writeFile(codexSecondaryMetadata, codexSecondaryBytes);
+  await assertBlockedWithoutWrites(codexSecondary, 'multi-adapter secondary metadata hash mismatch', async () => {
+    await writeFile(codexSecondaryMetadata, '{"id":"codex","tampered":true}\n');
+  }, /managed asset .*hash differs from installation manifest/);
+  await writeFile(codexSecondaryMetadata, codexSecondaryBytes);
 
   const unreadyProduct = runEntry('codex', codex.repo, codex.env);
   assert.equal(unreadyProduct.status, 2);

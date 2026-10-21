@@ -509,7 +509,7 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
   if (adapter.id === 'copilot') return [rootLine, 'GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.'];
   if (adapter.id === 'antigravity') return [rootLine, 'Antigravity local assets are installed; native discovery still needs a host smoke test.'];
   if (adapter.id === 'codex') return [rootLine, globalEntryInstalled
-    ? 'Codex user-level entry: $triad. Reopen Codex from the Control Workspace; the entry validates this exact workspace before Triad work.'
+    ? 'Codex user-level native skill: $triad. Reopen Codex from the Control Workspace; the skill validates this exact workspace before Triad work.'
     : 'Codex project-local skill assets are installed; optional user-level $triad was not selected.'];
   if (adapter.id === 'hermes') return [rootLine, globalEntryInstalled
     ? 'Hermes user-level entry: /triad in the active profile. Restart Hermes from the Control Workspace; the entry validates this exact workspace before Triad work.'

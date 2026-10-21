@@ -8,9 +8,11 @@ Usage:
 
 This legacy helper installs project-local skills only. For a global $triad
 entry, use `npx triad-plus` and select Codex under “Optional global entry
-bridge”; the wizard previews `$CODEX_HOME/prompts/triad.md` and installs it only
-after the exact `install` confirmation. Global entries are not written by this
-script.
+bridge”; the wizard previews `$CODEX_HOME/skills/triad/SKILL.md` and installs
+it only after the exact `install` confirmation. An existing legacy
+`$CODEX_HOME/prompts/triad.md` is never changed or deleted and blocks native
+skill installation until the owner backs it up or deselects the Codex global
+entry. Global entries are not written by this script.
 EOF
 }
 
@@ -39,7 +41,7 @@ if [[ "$project_install" == true ]]; then
   done
   [[ -e "$project_root/.triad-runtime" ]] && collisions+=(".triad-runtime")
 else
-  [[ -e "$codex_home/prompts/triad.md" ]] && collisions+=("$codex_home/prompts/triad.md")
+  [[ -e "$codex_home/skills/triad/SKILL.md" ]] && collisions+=("$codex_home/skills/triad/SKILL.md")
   for skill_name in "${skill_names[@]}"; do
     [[ -e "$codex_home/skills/$skill_name" ]] && collisions+=("$codex_home/skills/$skill_name")
   done

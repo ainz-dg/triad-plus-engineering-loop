@@ -1,8 +1,9 @@
 # Triad+ Codex adapter
 
-Codex custom prompts live in the selected user's prompt directory, so the
-global command is `$triad`. The prompt places the current conversation in the
-Orchestrator role; it does not create a hidden coordinator session.
+The optional global `$triad` entry is a Codex-native skill at
+`$CODEX_HOME/skills/triad/SKILL.md` (default
+`$HOME/.codex/skills/triad/SKILL.md`). It places the current conversation in
+the Orchestrator role; it does not create a hidden coordinator session.
 
 Use the interactive installer from the intended Control Workspace:
 
@@ -12,10 +13,17 @@ npx triad-plus
 
 Select Codex as a project adapter. To expose `$triad`, also select Codex under
 **Optional global entry bridge**. The final preview shows the exact absolute
-file `$CODEX_HOME/prompts/triad.md` (default `$HOME/.codex/prompts/triad.md`)
-and the installer creates it only after the exact `install` confirmation.
-That is the only Codex global file managed by this bridge; shared Triad skills
-and role profiles remain project-local or separately user-configured.
+file `$CODEX_HOME/skills/triad/SKILL.md` (default
+`$HOME/.codex/skills/triad/SKILL.md`) and the installer creates it only after
+the exact `install` confirmation. That is the only Codex global file managed
+by this bridge; shared Triad skills and role profiles remain project-local or
+separately user-configured.
+
+The old `$CODEX_HOME/prompts/triad.md` custom prompt is not migrated,
+overwritten, or deleted. If present, it is reported as a legacy-name collision
+and the optional native Codex skill install is blocked until the owner backs
+up that prompt under another name or deselects the Codex global entry. The
+wizard never claims that the old prompt was migrated.
 
 For non-interactive project-only installation, use `init --host codex
 --control <path>` without `--global`. Direct `init/upgrade --global` and the
@@ -28,7 +36,7 @@ Start Codex from the Control Workspace root and invoke:
 $triad <PRD path or project request>
 ```
 
-The global prompt runs `.triad-runtime/triad-host-entry.mjs --adapter codex`
+The global skill runs `.triad-runtime/triad-host-entry.mjs --adapter codex`
 before any Triad work. It validates the exact current directory, local
 installation manifest and hashes, project configuration, PRD, gates, and
 declared repositories/worktrees. On failure it states that Triad did not start,

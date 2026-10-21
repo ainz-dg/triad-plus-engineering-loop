@@ -5,7 +5,7 @@ host-specific entry points and configuration behavior.
 
 | Runtime | Prerequisite | Entry point | Verification | Hook limitation |
 | --- | --- | --- | --- | --- |
-| Codex | Codex CLI | `$triad` (optional user-level prompt) | Explicit dispatch by default; experimental async hook opt-in | Hook is optional, requires trusted configuration, and is not selected by `auto`. |
+| Codex | Codex CLI | `$triad` (optional user-level native skill) | Explicit dispatch by default; experimental async hook opt-in | Hook is optional, requires trusted configuration, and is not selected by `auto`. |
 | Claude Code | Claude Code CLI | `/triad` | Explicit dispatch; hook when validated | Hook is optional and requires trusted configuration. |
 | OpenCode | OpenCode | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
 | Antigravity | Antigravity | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
@@ -13,7 +13,7 @@ host-specific entry points and configuration behavior.
 | GitHub Copilot | GitHub Copilot CLI and desktop app | `/triad` when the project skill is exposed, otherwise `/agent` → `triad-orchestrator` | Explicit dispatch | No adapter hook; desktop app supports the complete validated lifecycle. |
 
 Run `npx triad-plus` for the first-install wizard. It can optionally install
-the Codex `$triad` prompt or Hermes `/triad` wrapper after displaying each
+the Codex `$triad` skill or Hermes `/triad` wrapper after displaying each
 exact absolute target and requiring the final `install` confirmation. Direct
 global `init`/`upgrade` and legacy global scripts refuse these two entries.
 `doctor` reports the runtime binary, adapter assets, verifier, team file, and

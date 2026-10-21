@@ -2,7 +2,7 @@
 
 Run `npx triad-plus` and select Codex as a project adapter. To add the optional
 user-level `$triad` entry, select Codex on the **Optional global entry bridge**
-screen, review the exact absolute `CODEX_HOME/prompts/triad.md` target, then
+screen, review the exact absolute `CODEX_HOME/skills/triad/SKILL.md` target, then
 type `install` at the final preview. No global file is written when that
 optional entry is skipped. Direct global `init`/`upgrade` and the legacy
 `install.sh --global` path refuse to bypass this consent.
