@@ -29,8 +29,6 @@ Every Triad+ mandate and pull request must include a **Documentation impact**
 analysis in its review evidence and PR body. Identify the user-facing behavior
 in scope, the documentation reviewed, the files changed (or state that no
 documentation change is needed and why), and any remaining documentation gap.
-If implementation is blocked, prepare a separate docs-only draft PR for the
-applicable policy; do not merge or publish it without owner authorization.
 
 Triad+ is feature-frozen around its public Core: Orchestrator, Developer, and
 Reviewer, with optional post-run Evaluator+. Do not add workflow engines,
