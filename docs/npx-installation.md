@@ -56,11 +56,16 @@ Antigravity, and Hermes Agent.
 
 After project adapters are selected, the wizard can optionally install the
 Codex-native `$triad` skill and/or Hermes `/triad` wrapper at user level. It
-resolves and displays every absolute file target (Codex:
-`CODEX_HOME/skills/triad/SKILL.md`; Hermes: the active profile's `skills/triad/`
-wrapper files, or `~/.hermes/skills/triad/` only when no active profile marker
-exists). Byte-identical existing files are labeled for reuse; a different
-existing file is a preflight conflict and is never overwritten. The legacy
+resolves and displays every absolute file target (Codex: the native skill plus
+`CODEX_HOME/triad-plus/host-entry-preflight.mjs`; Hermes: the active profile's
+`skills/triad/` wrapper plus `~/.hermes/triad-plus/host-entry-preflight.mjs`).
+It also displays an exact workspace-specific binding path for each selected
+entry. That binding pins the canonical Control Workspace, its local manifest,
+and expected project/global runtime bytes, and is written only after the owner
+approves the exact final preview. Byte-identical shared bridge files are
+labeled for reuse; workspace bindings are separate, so another approved
+workspace does not replace an existing binding. A different existing file is
+a preflight conflict and is never overwritten. The legacy
 Codex `$CODEX_HOME/prompts/triad.md` file is never migrated, overwritten, or
 deleted; if present, the wizard reports the name collision and blocks the
 optional native skill install until the owner backs it up under another name

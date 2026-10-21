@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
-import { lstatSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export const sharedSkillNames = [
@@ -22,6 +23,16 @@ const regularRoles = roleDefinitions.filter((role) => role.core);
 
 function hostHome(...parts) {
   return join(homedir(), ...parts);
+}
+
+function bindingFile(home, controlRoot, bindingWorkspace = null) {
+  let workspace = bindingWorkspace ?? resolve(controlRoot);
+  if (!bindingWorkspace) {
+    try { workspace = realpathSync(workspace); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const key = createHash('sha256').update(workspace).digest('hex');
+  return join(home, 'triad-plus', 'bindings', `${key}.json`);
 }
 
 export function hermesProfileHome() {
@@ -69,7 +80,7 @@ const definitions = [
     lifecycle: { kind: 'SubagentStop', agentType: 'triad_developer', requiresAsync: true },
     modelBinding: 'global-profiles',
     globalEntry: true,
-    globalEntryDescription: 'one global Codex-native skill ($triad)',
+    globalEntryDescription: 'a Codex-native $triad skill with a bound trusted preflight',
     projectAssets: [
       { source: 'adapters/codex/run-role.mjs', destination: '.triad-runtime/adapters/codex/run-role.mjs', file: true },
       { source: 'adapters/codex/reviewer-result.mjs', destination: '.triad-runtime/adapters/codex/reviewer-result.mjs', file: true },
@@ -77,7 +88,8 @@ const definitions = [
       ...projectRuntimeAssets('codex')
     ],
     globalAssets: [
-      { source: 'adapters/codex/skills/triad/SKILL.md', destination: ({ codexHome }) => join(codexHome, 'skills', 'triad', 'SKILL.md'), file: true }
+      { source: 'adapters/codex/skills/triad/SKILL.md', destination: ({ codexHome }) => join(codexHome, 'skills', 'triad', 'SKILL.md'), file: true },
+      { source: 'runtime/triad-host-entry-preflight.mjs', destination: ({ codexHome }) => join(codexHome, 'triad-plus', 'host-entry-preflight.mjs'), file: true }
     ],
     legacyGlobalPaths({ codexHome }) {
       return [join(codexHome, 'prompts', 'triad.md')];
@@ -90,8 +102,15 @@ const definitions = [
         join(controlRoot, '.triad-runtime')
       ];
     },
-    globalPaths({ codexHome }) {
-      return [join(codexHome, 'skills', 'triad', 'SKILL.md')];
+    globalPaths({ codexHome, controlRoot, bindingWorkspace }) {
+      return [
+        join(codexHome, 'skills', 'triad', 'SKILL.md'),
+        join(codexHome, 'triad-plus', 'host-entry-preflight.mjs'),
+        bindingFile(codexHome, controlRoot, bindingWorkspace)
+      ];
+    },
+    globalBindingPath({ codexHome, controlRoot, bindingWorkspace }) {
+      return bindingFile(codexHome, controlRoot, bindingWorkspace);
     },
     roleModelPaths({ codexHome }) {
       return roleDefinitions.map((role) => join(codexHome, 'agents', `triad_${role.id}.toml`));
@@ -231,19 +250,27 @@ const definitions = [
     lifecycle: null,
     modelBinding: 'team-record',
     globalEntry: true,
-    globalEntryDescription: 'the /triad wrapper files in the active profile',
+    globalEntryDescription: 'the active-profile /triad wrapper and bound Hermes preflight',
     projectAssets: [
       ...projectRuntimeAssets('hermes')
     ],
     globalAssets: [
-      { source: 'adapters/hermes/skills/triad', destination: () => join(hermesProfileHome(), 'skills', 'triad') }
+      { source: 'adapters/hermes/skills/triad', destination: () => join(hermesProfileHome(), 'skills', 'triad') },
+      { source: 'runtime/triad-host-entry-preflight.mjs', destination: () => hostHome('.hermes', 'triad-plus', 'host-entry-preflight.mjs'), file: true }
     ],
     projectPaths(controlRoot) {
       return [join(controlRoot, '.triad-runtime')];
     },
-    globalPaths() {
+    globalPaths({ controlRoot, bindingWorkspace }) {
       const root = join(hermesProfileHome(), 'skills');
-      return [join(root, 'triad')];
+      return [
+        join(root, 'triad'),
+        hostHome('.hermes', 'triad-plus', 'host-entry-preflight.mjs'),
+        bindingFile(hostHome('.hermes'), controlRoot, bindingWorkspace)
+      ];
+    },
+    globalBindingPath({ controlRoot, bindingWorkspace }) {
+      return bindingFile(hostHome('.hermes'), controlRoot, bindingWorkspace);
     }
   },
   {

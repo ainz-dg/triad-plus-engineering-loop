@@ -509,10 +509,10 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
   if (adapter.id === 'copilot') return [rootLine, 'GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.'];
   if (adapter.id === 'antigravity') return [rootLine, 'Antigravity local assets are installed; native discovery still needs a host smoke test.'];
   if (adapter.id === 'codex') return [rootLine, globalEntryInstalled
-    ? 'Codex user-level native skill: $triad. Reopen Codex from the Control Workspace; the skill validates this exact workspace before Triad work.'
+    ? 'Codex user-level native skill: $triad. Reopen Codex from this exact Control Workspace; its global preflight checks the consent-bound workspace and runtime hashes before local code runs.'
     : 'Codex project-local skill assets are installed; optional user-level $triad was not selected.'];
   if (adapter.id === 'hermes') return [rootLine, globalEntryInstalled
-    ? 'Hermes user-level entry: /triad in the active profile. Restart Hermes from the Control Workspace; the entry validates this exact workspace before Triad work.'
+    ? 'Hermes user-level entry: /triad in the active profile. Restart Hermes from this exact Control Workspace; its global preflight checks the consent-bound workspace and runtime hashes before local code runs.'
     : 'Hermes project-local runtime is installed; optional user-level /triad was not selected.'];
   return [rootLine, `Native entry: ${adapter.entry ?? 'not declared'}.`];
 }
@@ -544,7 +544,7 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
       ] : []),
     ]),
     globalEntryPlans.size
-      ? 'Host scope: project-local assets plus the exact user-level entry files listed below; no credentials, account settings, or unrelated profile files will be changed.'
+      ? 'Host scope: project-local assets plus the exact user-level entry and workspace-binding files listed below; the binding is written only after this exact plan is approved. No credentials, account settings, or unrelated profile files will be changed.'
       : 'Host scope: project-local only; no user-level/global files, credentials, or account settings will be changed.',
     'Workspace/asset directories after approval:',
     `  ${root} (create only if absent)`,

@@ -13,11 +13,13 @@ npx triad-plus
 
 Select Codex as a project adapter. To expose `$triad`, also select Codex under
 **Optional global entry bridge**. The final preview shows the exact absolute
-file `$CODEX_HOME/skills/triad/SKILL.md` (default
-`$HOME/.codex/skills/triad/SKILL.md`) and the installer creates it only after
-the exact `install` confirmation. That is the only Codex global file managed
-by this bridge; shared Triad skills and role profiles remain project-local or
-separately user-configured.
+skill, preflight, and workspace-specific binding files. The binding pins the
+canonical Control Workspace path, its installation manifest, and the expected
+project/global runtime hashes; the installer writes it only after the exact
+`install` confirmation. A separate binding is created for each approved
+Control Workspace, so shared global skill files can be reused without changing
+another workspace's trust binding. Shared Triad skills and role profiles
+remain project-local or separately user-configured.
 
 The old `$CODEX_HOME/prompts/triad.md` custom prompt is not migrated,
 overwritten, or deleted. If present, it is reported as a legacy-name collision
@@ -36,13 +38,20 @@ Start Codex from the Control Workspace root and invoke:
 $triad <PRD path or project request>
 ```
 
-The global skill runs `.triad-runtime/triad-host-entry.mjs --adapter codex`
-before any Triad work. It validates the exact current directory, local
-installation manifest and hashes, project configuration, PRD, gates, and
-declared repositories/worktrees. On failure it states that Triad did not start,
-does not search other workspaces, and offers an explicit path, setup wizard, or
-cancel. This is a post-LLM model-level gate; it cannot claim pre-LLM host
-enforcement. If Codex cannot rebind to the selected root, restart it there.
+The global skill first runs the installed built-ins-only
+`$CODEX_HOME/triad-plus/host-entry-preflight.mjs` bridge. The exact binding is
+under `$CODEX_HOME/triad-plus/bindings/` and is created only after the setup
+preview is approved. The bridge checks that the current canonical directory
+matches that owner-approved path, validates the binding against the local
+installation manifest, and checks every bound project/global runtime hash. It
+then runs a temporary snapshot of the bound validator, not the mutable local
+validator path, which validates project configuration, PRD, gates, and declared
+repositories/worktrees. A self-authored local manifest cannot replace the
+separate workspace binding. On failure it states that Triad did not start, does
+not search other workspaces, and requires opening/restarting Codex from the
+bound root or approving setup there. This remains post-LLM: Codex has already
+selected and read the skill, so this is not pre-LLM host enforcement. If Codex
+cannot rebind to the selected root, restart it there.
 
 Before it starts work, configure the four named role profiles described in
 [`docs/codex-replication.md`](../../docs/codex-replication.md). The adapter

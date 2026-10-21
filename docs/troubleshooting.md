@@ -60,14 +60,17 @@ An Evaluator+ failure is post-run information, not an automatic repair request.
 
 ## Codex and Hermes entry bridge
 
-The optional `$triad` Codex skill and Hermes `/triad` wrapper check only the
-current directory. A `BLOCKED` result means Triad has not started; the wrapper
-does not search other workspaces and makes no workspace, host-setting, or
-delegation changes. Open/restart the host from the intended Control Workspace,
-run the setup wizard from that exact workspace, or cancel. A supplied
-`--workspace` path must match the host's current directory; if the host cannot
-rebind, restart it there. The wrapper is model-level and cannot enforce a
-pre-LLM boundary.
+The optional `$triad` Codex skill and Hermes `/triad` wrapper invoke an installed
+built-ins-only global preflight before the local validator. Setup writes a
+workspace-specific binding only after the owner approves the exact preview;
+the binding pins the canonical Control Workspace, local manifest, and expected
+project/global runtime hashes. A self-authored local manifest alone is not
+trusted. The preflight checks the current directory and runs a temporary
+snapshot of the verified validator, so a changed local validator is not
+executed. A `BLOCKED` result means Triad has not started; there is no workspace
+search or delegated work. Open/restart the host from the exact bound workspace
+or approve setup from the desired workspace. This remains post-LLM; neither
+skill can enforce a pre-LLM host boundary.
 
 The Codex skill is installed at
 `$CODEX_HOME/skills/triad/SKILL.md`. The former

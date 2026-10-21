@@ -10,7 +10,7 @@ import { validateInstallationManifest } from '../runtime/lib/installation-manife
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repositoryRoot, 'bin', 'triad-plus.js');
-const fixture = await mkdtemp(path.join(os.tmpdir(), 'triad-setup-cli-'));
+const fixture = await realpath(await mkdtemp(path.join(os.tmpdir(), 'triad-setup-cli-')));
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const pseudoTerminalAvailable = ['darwin', 'linux'].includes(process.platform)
   && spawnSync('python3', ['--version'], { encoding: 'utf8' }).status === 0;
@@ -302,8 +302,27 @@ try {
       assert.equal(digest(await readFile(path.join(root, shared.path))), shared.sha256, `shared bytes match manifest: ${shared.path}`);
     }
     const codexGlobalEntry = path.join(codexHome, 'skills', 'triad', 'SKILL.md');
-    assert.ok((await readFile(codexGlobalEntry, 'utf8')).includes('triad-host-entry.mjs --adapter codex'));
-    assert.deepEqual(await filesUnder(codexHome), ['skills/triad/SKILL.md'], 'the exact selected Codex-native skill is the only global file installed');
+    const codexPreflight = path.join(codexHome, 'triad-plus', 'host-entry-preflight.mjs');
+    const bindingKey = digest(Buffer.from(await realpath(root)));
+    const codexBinding = path.join(codexHome, 'triad-plus', 'bindings', `${bindingKey}.json`);
+    assert.ok((await readFile(codexGlobalEntry, 'utf8')).includes('host-entry-preflight.mjs'));
+    assert.ok(setup.stdout.includes(`CREATE ${codexPreflight}`), 'the exact installed trusted preflight path is included in the preview');
+    assert.ok(setup.stdout.includes(`CREATE ${codexBinding}`), 'the exact workspace-specific owner binding path is included in the preview');
+    const globalFiles = await filesUnder(codexHome);
+    assert.deepEqual(globalFiles, [
+      'skills/triad/SKILL.md',
+      `triad-plus/bindings/${bindingKey}.json`,
+      'triad-plus/host-entry-preflight.mjs',
+    ].sort(), 'the approved Codex skill, trusted preflight and exact workspace binding are the only global files installed');
+    const codexRecord = multi.adapters.find((record) => record.id === 'codex');
+    const codexGlobalAssets = codexRecord.managed_assets.filter((asset) => asset.scope === 'global');
+    assert.deepEqual(codexGlobalAssets.map((asset) => asset.path).sort(), [codexBinding, codexPreflight, codexGlobalEntry].sort(), 'manifest records every exact trusted global file');
+    const binding = JSON.parse(await readFile(codexBinding, 'utf8'));
+    assert.equal(binding.workspace, await realpath(root), 'the binding records the canonical owner-selected workspace');
+    assert.deepEqual(binding.expected_project_assets, codexRecord.managed_assets
+      .filter((asset) => asset.scope === 'project')
+      .map(({ path: assetPath, kind, sha256 }) => ({ path: assetPath, kind, sha256 }))
+      .sort((left, right) => left.path.localeCompare(right.path)));
     for (const directory of [home, xdgHome, hermesHome, isolatedTmp]) {
       assert.deepEqual(await filesUnder(directory), [], `local-only setup wrote no global files under ${directory}`);
     }
@@ -426,6 +445,7 @@ try {
     // adapter must preserve the global file for the first workspace.
     const secondRepo = path.join(secondWorkspace, 'product');
     await makeRepo(secondRepo, 'second workspace fixture stays in temp storage\n');
+    const firstBindingBeforeSecondInstall = await readFile(codexBinding);
     const secondInstall = terminalInput(secondWorkspace, [
       line(''), line(''), key('space'), key('enter'),
       line(''), line(''), line(''), line(''),
@@ -434,7 +454,16 @@ try {
     assert.equal(secondInstall.status, 0, `${secondInstall.stderr}\n${secondInstall.stdout}`);
     assert.match(secondInstall.stdout, /REUSE identical .*skills[/\\]triad[/\\]SKILL\.md/);
     assert.match(secondInstall.stdout, /Triad\+ setup completed\./);
+    const secondBindingKey = digest(Buffer.from(await realpath(secondWorkspace)));
+    const secondBinding = path.join(codexHome, 'triad-plus', 'bindings', `${secondBindingKey}.json`);
+    assert.notEqual(secondBinding, codexBinding, 'each approved workspace receives its own owner-binding target');
+    assert.ok(secondInstall.stdout.includes(`CREATE ${secondBinding}`), 'second workspace consent preview names its own exact binding file');
+    assert.deepEqual(await readFile(codexBinding), firstBindingBeforeSecondInstall, 'adding a workspace leaves the first workspace binding byte-identical');
     assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'));
+    const secondPreflight = run(process.execPath, [path.join(codexHome, 'triad-plus/host-entry-preflight.mjs'), '--adapter', 'codex'], secondWorkspace, isolatedHostEnv);
+    assert.equal(secondPreflight.status, 2, 'incomplete second workspace is rejected by its local validator after binding succeeds');
+    assert.match(secondPreflight.stderr, /BLOCKED: Triad not started/);
+    assert.doesNotMatch(secondPreflight.stderr, /owner-bound Control Workspace/, 'second workspace resolves its separate binding rather than inheriting the first');
     const removeSecond = runCli(['adapter', 'remove', 'codex', '--control', secondWorkspace, '--apply'], secondWorkspace, isolatedHostEnv);
     assert.equal(removeSecond.status, 0, `${removeSecond.stderr}\n${removeSecond.stdout}`);
     assert.match(removeSecond.stdout, /Global entry files are preserved/);

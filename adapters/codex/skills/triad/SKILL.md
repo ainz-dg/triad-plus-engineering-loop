@@ -5,19 +5,22 @@ description: Start or resume a Triad+ Engineering Loop from a PRD, target reposi
 
 This Codex-native skill is a user-level entry point, not a pre-LLM security
 boundary. Before any Triad analysis, filesystem change, or role delegation,
-run the installed project-local validator from the current directory:
+run the installed global preflight from the current directory:
 
 ```bash
-node .triad-runtime/triad-host-entry.mjs --adapter codex
+node "${CODEX_HOME:-$HOME/.codex}/triad-plus/host-entry-preflight.mjs" --adapter codex
 ```
 
-Continue only when it prints `READY`. On `BLOCKED`, Triad has not started: do
-not search for another workspace, inspect neighboring projects, change state,
-or delegate. Ask the owner for the exact Control Workspace path, then have them
-reopen/restart Codex from that directory; offer the Triad+ setup wizard there
-or cancel. If Codex cannot rebind its working directory, require a restart
-from the workspace root. This is a post-LLM gate, not host-level pre-LLM
-enforcement.
+Continue only when it prints `READY`. The installed, built-ins-only preflight
+checks the exact owner-approved Control Workspace path, its installation
+manifest, and byte hashes bound during the consent-gated setup before running a
+temporary snapshot of the local validator. The local manifest alone is not
+treated as owner trust. On `BLOCKED`, Triad has not started: do not search for
+another workspace, inspect neighboring projects, change state, or delegate.
+Ask the owner to open/restart Codex from the exact Control Workspace used to
+approve setup, or rerun the consent-gated setup there. This remains post-LLM:
+Codex has selected and read this skill before it can invoke the preflight; it
+does not provide host-level pre-LLM enforcement.
 
 Treat the text accompanying `$triad` as the owner request. Operate a Triad+
 Engineering Loop for that request.

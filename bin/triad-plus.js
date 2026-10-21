@@ -125,6 +125,20 @@ async function exists(target) {
   try { await access(target); return true; } catch { return false; }
 }
 
+async function canonicalProspectivePath(target) {
+  let base = resolve(target);
+  const suffix = [];
+  while (!(await exists(base))) {
+    const parent = dirname(base);
+    if (parent === base) break;
+    suffix.unshift(basename(base));
+    base = parent;
+  }
+  const canonicalBase = await realpath(base);
+  if (suffix.length && !(await stat(base)).isDirectory()) throw new Error(`Control Workspace parent is not a directory: ${base}`);
+  return resolve(canonicalBase, ...suffix);
+}
+
 async function requireDirectory(target) {
   if (!(await exists(target))) return mkdir(target, { recursive: true });
   if (!(await stat(target)).isDirectory()) throw new Error(`Control path is not a directory: ${target}`);
@@ -2209,8 +2223,35 @@ async function collectGlobalEntrySelection(prompt, adapters, initialSelection = 
   return { ...result, adapters: result.selected.map((id) => available.find((adapter) => adapter.id === id)).filter(Boolean) };
 }
 
+function hostEntryBindingText(adapterId, workspace, manifest, globalAssets) {
+  const record = adapterRecords(manifest).find((entry) => entry.id === adapterId);
+  if (!record) throw new Error(`Cannot bind ${adapterId} global entry; its project adapter is not installed in the Control Workspace.`);
+  const expectedProjectAssets = (record.managed_assets ?? [])
+    .filter((asset) => asset.scope === 'project')
+    .map(({ path: assetPath, kind, sha256 }) => ({ path: assetPath, kind, sha256 }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const expectedGlobalAssets = [...globalAssets]
+    .map(({ path: assetPath, kind, sha256 }) => ({ path: resolve(assetPath), kind, sha256 }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return `${JSON.stringify({
+    schema_version: 1,
+    adapter: adapterId,
+    workspace,
+    installation_manifest: '.triad-plus/installation.json',
+    expected_project_assets: expectedProjectAssets,
+    expected_global_assets: expectedGlobalAssets,
+  }, null, 2)}\n`;
+}
+
 async function planGlobalEntryAdapters(adapters, selectedAdapters, controlRoot) {
-  const installContext = context(controlRoot);
+  const bindingWorkspace = await canonicalProspectivePath(controlRoot);
+  if (selectedAdapters.length && bindingWorkspace !== resolve(controlRoot)) {
+    throw new Error(`Global entry setup requires the canonical Control Workspace path ${bindingWorkspace}; no files were changed.`);
+  }
+  const installContext = { ...context(controlRoot), bindingWorkspace };
+  const loadedInstallation = await exists(installationManifestPath(controlRoot))
+    ? await loadInstallationManifest(controlRoot)
+    : null;
   const selectedIds = new Set(selectedAdapters.map((adapter) => adapter.id));
   const plans = new Map();
   for (const adapter of adapters) {
@@ -2238,7 +2279,20 @@ async function planGlobalEntryAdapters(adapters, selectedAdapters, controlRoot) 
       }
       reused.push(managedAssets[index].path);
     }
-    plans.set(adapter.id, { adapterId: adapter.id, pairs, managedAssets, created, reused });
+    const bindingTarget = adapter.globalBindingPath?.(installContext);
+    if (!bindingTarget) throw new Error(`${adapter.id} global bridge does not declare its owner-binding path.`);
+    const absoluteBindingTarget = resolve(bindingTarget);
+    const bindingInfo = await safeGlobalAssetInfo(absoluteBindingTarget);
+    if (!bindingInfo) created.push(absoluteBindingTarget);
+    else {
+      if (!loadedInstallation) throw new Error(`Global host-entry binding collision; no installed Control Workspace manifest can verify it: ${absoluteBindingTarget}`);
+      const bindingText = hostEntryBindingText(adapter.id, bindingWorkspace, loadedInstallation.manifest, managedAssets);
+      if (await sha256File(absoluteBindingTarget) !== sha256Text(bindingText)) {
+        throw new Error(`Global host-entry binding collision; existing owner binding differs, no files were changed: ${absoluteBindingTarget}`);
+      }
+      reused.push(absoluteBindingTarget);
+    }
+    plans.set(adapter.id, { adapterId: adapter.id, pairs, managedAssets, bindingTarget: absoluteBindingTarget, created, reused });
   }
   return plans;
 }
@@ -2296,6 +2350,28 @@ async function applyGlobalEntryPlans(controlRoot, globalEntryPlans) {
         }
         await copyFile(pair.source, pair.target, fsConstants.COPYFILE_EXCL);
         created.push({ target: pair.target, sha256: expected.sha256 });
+      }
+
+      const loadedForBinding = await loadInstallationManifest(controlRoot);
+      if (!loadedForBinding) throw new Error('Control Workspace installation manifest disappeared before global host-entry binding.');
+      const bindingWorkspace = await realpath(controlRoot);
+      const bindingText = hostEntryBindingText(plan.adapterId, bindingWorkspace, loadedForBinding.manifest, plan.managedAssets);
+      const bindingDigest = sha256Text(bindingText);
+      let bindingInfo = await safeGlobalAssetInfo(plan.bindingTarget);
+      if (bindingInfo) {
+        if (await sha256File(plan.bindingTarget) !== bindingDigest) throw new Error(`Global host-entry binding changed after preview; refusing to overwrite: ${plan.bindingTarget}`);
+      } else {
+        await ensureSafeGlobalParents(plan.bindingTarget);
+        bindingInfo = await safeGlobalAssetInfo(plan.bindingTarget);
+        if (bindingInfo) {
+          if (await sha256File(plan.bindingTarget) !== bindingDigest) throw new Error(`Global host-entry binding appeared after preview with different bytes; refusing to overwrite: ${plan.bindingTarget}`);
+        } else {
+          await writeFile(plan.bindingTarget, bindingText, { encoding: 'utf8', flag: 'wx' });
+          created.push({ target: plan.bindingTarget, sha256: bindingDigest });
+        }
+      }
+      if (!plan.managedAssets.some((asset) => asset.path === plan.bindingTarget)) {
+        plan.managedAssets.push({ scope: 'global', path: plan.bindingTarget, kind: 'file', sha256: bindingDigest });
       }
     }
 

@@ -31,6 +31,10 @@ function runEntry(adapter, cwd, env = {}, extraArgs = []) {
   return run(process.execPath, [path.join(repositoryRoot, 'runtime/triad-host-entry.mjs'), '--adapter', adapter, ...extraArgs], cwd, env);
 }
 
+function runPreflight(workspace, cwd = workspace.root, extra = {}) {
+  return run(process.execPath, [workspace.preflightPath, '--adapter', workspace.adapter], cwd, { ...workspace.env, ...extra });
+}
+
 function git(cwd, args) {
   const result = run('git', ['-C', cwd, ...args], cwd, { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' });
   assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
@@ -123,6 +127,11 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null } = {})
   ].join('\n'));
 
   const globalAssets = [];
+  const preflightSource = path.join(repositoryRoot, 'runtime/triad-host-entry-preflight.mjs');
+  const bridgeRoot = adapter === 'codex' ? path.join(codexHome, 'triad-plus') : path.join(hermesHome, 'triad-plus');
+  const preflightPath = path.join(bridgeRoot, 'host-entry-preflight.mjs');
+  await mkdir(bridgeRoot, { recursive: true });
+  await cp(preflightSource, preflightPath);
   if (adapter === 'codex') {
     const source = path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md');
     const target = path.join(codexHome, 'skills/triad/SKILL.md');
@@ -145,10 +154,32 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null } = {})
       globalAssets.push({ scope: 'global', path: target, kind: 'file', sha256: digest(await readFile(target)) });
     }
   }
+  globalAssets.push({ scope: 'global', path: preflightPath, kind: 'file', sha256: digest(await readFile(preflightPath)) });
 
   const loaded = await loadInstallationManifest(root);
   assert.equal(loaded.manifest.schema_version, 1);
   const now = new Date().toISOString();
+  const workspacePath = await realpath(root);
+  const bindingKey = digest(Buffer.from(workspacePath));
+  const bindingPath = path.join(bridgeRoot, 'bindings', `${bindingKey}.json`);
+  const expectedProjectAssets = loaded.manifest.managed_assets
+    .filter((asset) => asset.scope === 'project')
+    .map(({ path: assetPath, kind, sha256 }) => ({ path: assetPath, kind, sha256 }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const expectedGlobalAssets = globalAssets
+    .map(({ path: assetPath, kind, sha256 }) => ({ path: path.resolve(assetPath), kind, sha256 }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const bindingBytes = Buffer.from(`${JSON.stringify({
+    schema_version: 1,
+    adapter,
+    workspace: workspacePath,
+    installation_manifest: '.triad-plus/installation.json',
+    expected_project_assets: expectedProjectAssets,
+    expected_global_assets: expectedGlobalAssets,
+  }, null, 2)}\n`);
+  await mkdir(path.dirname(bindingPath), { recursive: true });
+  await writeFile(bindingPath, bindingBytes);
+  globalAssets.push({ scope: 'global', path: bindingPath, kind: 'file', sha256: digest(bindingBytes) });
   const record = {
     id: adapter,
     installed_at: loaded.manifest.installed_at,
@@ -164,7 +195,7 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null } = {})
     adapters: [record],
   });
   await writeInstallationManifest(root, multi);
-  return { adapter, base, root, home, codexHome, hermesHome, env, repo, worktree, globalAssets };
+  return { adapter, base, root, home, codexHome, hermesHome, env, repo, worktree, globalAssets, preflightPath, bindingPath };
 }
 
 async function makeOpenCodePrimaryMultiAdapterWorkspace(name) {
@@ -292,7 +323,12 @@ try {
   const validCodex = await validateInEnvironment(codex);
   assert.equal(validCodex.ready, true, validCodex.problems.join('\n'));
   assert.equal(runEntry('codex', codex.root, codex.env).status, 0);
-  assert.deepEqual(await listFiles(codex.codexHome), ['skills/triad/SKILL.md'], 'Codex global entry owns one native skill file, not project skills or role profiles');
+  assert.equal(runPreflight(codex).status, 0, 'trusted preflight runs a bound temporary validator snapshot');
+  assert.deepEqual(await listFiles(codex.codexHome), [
+    'skills/triad/SKILL.md',
+    `triad-plus/bindings/${digest(Buffer.from(codex.root))}.json`,
+    'triad-plus/host-entry-preflight.mjs',
+  ].sort(), 'Codex global entry owns only the native skill and managed preflight/binding files');
   const beforeBlockedUpgrade = await snapshot(codex.base);
   const blockedUpgrade = runCli(['upgrade', '--host', 'codex', '--control', codex.root, '--global'], codex.root, codex.env);
   assert.equal(blockedUpgrade.status, 2);
@@ -308,6 +344,9 @@ try {
   assert.match(wrongCwd.stderr, /No other workspace was searched/);
   assert.match(wrongCwd.stderr, /setup wizard there, or cancel/);
   assert.deepEqual(await snapshot(codex.base), wrongCwdBefore, 'wrong cwd performs no search or writes');
+  const preflightWrongCwd = runPreflight(codex, invalidRoot);
+  assert.equal(preflightWrongCwd.status, 2);
+  assert.match(preflightWrongCwd.stderr, /owner-bound Control Workspace/);
   const explicitMismatch = runEntry('codex', invalidRoot, codex.env, ['--workspace', codex.root]);
   assert.equal(explicitMismatch.status, 2);
   assert.match(explicitMismatch.stderr, /Reopen\/restart the host from that exact workspace/);
@@ -324,6 +363,30 @@ try {
     await writeFile(codexLocalAsset, `${codexLocalAssetBytes}\nmodified\n`);
   }, /hash differs from installation manifest/);
   await writeFile(codexLocalAsset, codexLocalAssetBytes);
+
+  const validatorPath = path.join(codex.root, '.triad-runtime/triad-host-entry.mjs');
+  const validatorBytes = await readFile(validatorPath);
+  const sentinelPath = path.join(codex.base, 'malicious-validator-ran.txt');
+  const maliciousValidator = `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(sentinelPath)}, 'executed');\n`;
+  const originalManifestBytes = await readFile(path.join(codex.root, '.triad-plus/installation.json'));
+  const originalManifest = JSON.parse(originalManifestBytes);
+  const codexRecord = originalManifest.adapters.find((record) => record.id === 'codex');
+  const validatorAsset = codexRecord.managed_assets.find((asset) => asset.scope === 'project' && asset.path === '.triad-runtime/triad-host-entry.mjs');
+  assert.ok(validatorAsset, 'fixture records the validator in the owner-bound project asset list');
+  await writeFile(validatorPath, maliciousValidator);
+  validatorAsset.sha256 = digest(Buffer.from(maliciousValidator));
+  await writeInstallationManifest(codex.root, buildMultiAdapterManifest({
+    triadVersion: originalManifest.triad_version,
+    installedAt: originalManifest.installed_at,
+    updatedAt: new Date().toISOString(),
+    adapters: originalManifest.adapters,
+  }));
+  const blockedMaliciousPreflight = runPreflight(codex, codex.root, { SENTINEL_PATH: sentinelPath });
+  assert.equal(blockedMaliciousPreflight.status, 2);
+  assert.match(blockedMaliciousPreflight.stderr, /project-managed asset list differs from the owner-bound manifest/);
+  assert.equal(await readFile(sentinelPath).then(() => true, () => false), false, 'a self-edited local manifest cannot authorize execution of a malicious runtime sentinel');
+  await writeFile(validatorPath, validatorBytes);
+  await writeFile(path.join(codex.root, '.triad-plus/installation.json'), originalManifestBytes);
 
   const prdBytes = await readFile(path.join(codex.root, 'PRD.md'));
   await assertBlockedWithoutWrites(codex, 'empty PRD', async () => {
@@ -410,6 +473,7 @@ try {
   const hermes = await makeWorkspace('hermes', 'hermes-active-profile', { activeHermesProfile: 'team-profile' });
   const validHermes = await validateInEnvironment(hermes);
   assert.equal(validHermes.ready, true, validHermes.problems.join('\n'));
+  assert.equal(runPreflight(hermes).status, 0, 'Hermes preflight runs only the owner-bound runtime snapshot');
   assert.deepEqual(await listFiles(path.join(hermes.hermesHome, 'profiles/team-profile/skills/triad')),
     (await listFiles(path.join(repositoryRoot, 'adapters/hermes/skills/triad'))).sort(),
     'Hermes owns only the approved wrapper directory in the active profile');

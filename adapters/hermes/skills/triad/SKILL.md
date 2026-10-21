@@ -7,19 +7,22 @@ description: Start or resume a Triad run in Hermes Agent from a PRD source, decl
 
 This is a user-level entry point, not a pre-LLM security boundary. Before any
 Triad analysis, filesystem change, or role delegation, run the installed
-project-local validator from the current directory:
+global preflight from the current directory:
 
 ```bash
-node .triad-runtime/triad-host-entry.mjs --adapter hermes
+node "$HOME/.hermes/triad-plus/host-entry-preflight.mjs" --adapter hermes
 ```
 
-Continue only when it prints `READY`. On `BLOCKED`, Triad has not started: do
-not search for another workspace, inspect neighboring projects, change state,
-or delegate. Ask the owner for the exact Control Workspace path, then have them
-reopen/restart Hermes from that directory; offer the Triad+ setup wizard there
-or cancel. If Hermes cannot rebind its working directory, require a restart
-from the workspace root. The validator is a post-LLM gate; this skill cannot
-claim host-level pre-LLM enforcement.
+Continue only when it prints `READY`. The installed, built-ins-only preflight
+checks the exact owner-approved Control Workspace path, its installation
+manifest, and byte hashes bound during the consent-gated setup before running a
+temporary snapshot of the local validator. The local manifest alone is not
+treated as owner trust. On `BLOCKED`, Triad has not started: do not search for
+another workspace, inspect neighboring projects, change state, or delegate.
+Ask the owner to open/restart Hermes from the exact Control Workspace used to
+approve setup, or rerun the consent-gated setup there. This remains post-LLM:
+Hermes has selected and read this skill before it can invoke the preflight; it
+does not provide host-level pre-LLM enforcement.
 
 Only after the validator passes, operate the current Hermes session as the
 Triad Orchestrator. Load
