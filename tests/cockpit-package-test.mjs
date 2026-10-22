@@ -65,6 +65,10 @@ await mkdir(app);
 const install = spawnSync(npm, ["install", "--prefix", app, "--offline", "--no-audit", "--no-fund", "--ignore-scripts", tarball], { cwd: app, encoding: "utf8" });
 assert.equal(install.status, 0, install.stderr);
 const installedRoot = path.join(app, "node_modules", "triad-plus");
+assert.equal(JSON.parse(await readFile(path.join(installedRoot, "package.json"), "utf8")).bin["triad-pr-plan"], "bin/triad-pr-plan.js");
+const planHelp = spawnSync(process.execPath, [path.join(installedRoot, "bin", "triad-pr-plan.js"), "--help"], { encoding: "utf8" });
+assert.equal(planHelp.status, 0, planHelp.stderr);
+assert.match(planHelp.stdout, /auto\|single\|compact\|review-friendly/);
 const installedEntries = await readdir(path.join(app, "node_modules"));
 assert.deepEqual(installedEntries.filter((name) => !name.startsWith(".")), ["triad-plus"], "installing triad-plus pulls in no other package");
 
