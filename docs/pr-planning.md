@@ -17,6 +17,12 @@ repository entry includes its declared `id`, `path`, `worktree`, `base_branch`,
 includes its selected state, dependencies and expected/changed paths; completed
 Cards additionally carry final commit metadata, passing verifier evidence,
 independent Reviewer approval, test summary, and documentation-impact review.
+For each draft group, preflight requires the complete `base_commit..HEAD` commit
+set to equal exactly one distinct `final.commit` from every approved Card in
+that group. Extra commits fail closed even when they only touch paths already
+present in the approved Card delta. The CLI is an opt-in post-run delivery
+primitive: the Orchestrator does not yet generate this snapshot or schedule
+draft creation automatically during its loop.
 
 When a mode produces more than one group for a repository, `group_bindings`
 may map each deterministic group id to its own `branch`, `worktree`,
@@ -40,7 +46,9 @@ snapshot or plan drifts. `draft` without `--execute` performs read-only Git
 preflight (including remote-ref checks) and makes no GitHub CLI calls. `draft --execute` requires the
 previous owner approval, an already-pushed clean group branch, an unchanged
 remote base, a matching repository remote, complete byte-bound evidence, and
-available GitHub CLI authentication. It creates GitHub draft PRs only and
+available GitHub CLI authentication. It also checks that the complete branch
+commit range still matches the approved Card commit set. It creates GitHub
+draft PRs only and
 records each result locally. A plan/group marker makes retries idempotent;
 unmatched existing PRs or cross-PR dependencies fail closed for manual
 recovery. It never pushes branches, merges, publishes releases, or installs or

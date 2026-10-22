@@ -440,6 +440,33 @@ async function integrationSnapshot(fixture) {
   }
 }
 
+// A later unreviewed commit touching an already-approved path advances the
+// branch and remote, but cannot be smuggled into a draft PR by path equality.
+{
+  const fixture = await gitFixture();
+  try {
+    const { source, plan } = await integrationSnapshot(fixture);
+    const group = plan.groups.find((entry) => entry.card_ids.includes("CARD-1"));
+    const worktree = fixture.worktrees.find((candidate) => gitOut(["branch", "--show-current"], candidate) === group.branch);
+    await writeFile(path.join(worktree, "card-1.txt"), "unreviewed follow-up touching an approved path\n");
+    git(["add", "card-1.txt"], worktree);
+    git(["commit", "-qm", "unreviewed follow-up"], worktree);
+    const rogueHead = gitOut(["rev-parse", "HEAD"], worktree);
+    git(["push", "-qu", "origin", group.branch], worktree);
+    assert.equal(gitOut(["ls-remote", "origin", "refs/heads/" + group.branch], worktree).split(/\s+/)[0], rogueHead);
+
+    const fake = makeGhRunner({ repoRoot: fixture.repo });
+    await assert.rejects(
+      prepareDraftPullRequests(plan, source, { execute: true, runner: fake.runner, projectRoot: fixture.root }),
+      { code: "pr_group_commit_set_mismatch" },
+    );
+    assert.equal(fake.creates, 0);
+    assert.equal(fake.calls.some((call) => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "create"), false);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+}
+
 // Tampered or incomplete verification and Reviewer records are never publishable.
 {
   const fixture = await gitFixture();

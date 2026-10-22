@@ -471,6 +471,18 @@ async function preflightGroup(group, snapshot, runner, gh, checkHost, projectRoo
   }))].sort();
   const expectedPaths = cardsExpectedPaths.length ? cardsExpectedPaths : [...group.expected_paths].sort();
   if (stableHash(actualPaths) !== stableHash(expectedPaths)) fail("pr_group_delta_mismatch", "Branch diff does not equal the expected grouped Card delta", { group_id: group.id, expected: expectedPaths, actual: actualPaths });
+  const expectedCommits = group.card_ids.map((id) => snapshot.cards.find((entry) => idOf(entry) === id)?.final?.commit);
+  if (expectedCommits.some((commit) => !GIT_SHA.test(commit ?? "")) || new Set(expectedCommits).size !== expectedCommits.length) {
+    fail("pr_group_commit_set_mismatch", "Each approved Card must bind one distinct final commit", { group_id: group.id, expected: expectedCommits });
+  }
+  const actualCommits = runChecked("git", ["rev-list", "--reverse", group.base_commit + ".." + head], worktree, runner).split(/\r?\n/).filter(Boolean);
+  if (actualCommits.length !== expectedCommits.length || stableHash([...actualCommits].sort()) !== stableHash([...expectedCommits].sort())) {
+    fail("pr_group_commit_set_mismatch", "Branch commit range does not exactly match one approved final commit per Card", {
+      group_id: group.id,
+      expected: expectedCommits,
+      actual: actualCommits,
+    });
+  }
   for (const id of group.card_ids) {
     const card = snapshot.cards.find((entry) => idOf(entry) === id);
     for (const dependency of depsOf(card).filter((dep) => !includedCards.has(dep))) {

@@ -121,8 +121,10 @@ If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencod
 and [troubleshooting](docs/troubleshooting.md).
 
 For deterministic, owner-approved draft PR grouping and creation from verified
-Triad snapshots, see [PR planning](docs/pr-planning.md). Draft creation is
-opt-in; merge, release, push, and force-push actions are outside that tool.
+Triad snapshots, see [PR planning](docs/pr-planning.md). This is an opt-in
+post-run delivery primitive: the Orchestrator does not yet generate snapshots
+or schedule draft creation automatically. Draft creation is opt-in; merge,
+release, push, and force-push actions are outside that tool.
 
 ## Installation version and safe uninstall
 
