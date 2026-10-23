@@ -68,6 +68,26 @@ commits, the CLI stops at a concrete preflight blocker; it does not improvise a
 branch lifecycle. The Orchestrator turns that blocker into the exact manual
 handoff. This preserves the existing manual post-run workflow.
 
+## Capability matrix and compact walkthrough
+
+| Capability | Status in this slice | Boundary |
+| --- | --- | --- |
+| Pre-run structural owner approval | Working, opt-in | Exact Cards, grouping, dependencies, repositories, and delivery bindings are approved once; existing projects are not implicitly opted in. |
+| Post-run evidence refresh and validation | Working | Byte-bound queue/project/Card/Assignment/verifier/Reviewer/docs evidence and final commits are rechecked; candidate content must match the final commit tree. |
+| Draft PRs for approved groups | Working when exact branches/worktrees are prepared | Exact base-to-head Card commit sets, branch, base, and remote are preflighted; creation is draft-only and retry-idempotent. |
+| Group worktree creation, cherry-pick, and branch push | Manual / not implemented | The current project setup declares one project branch/worktree per repository; this slice does not add a grouped branch lifecycle. Missing exact group worktrees therefore need a concrete manual handoff. |
+| Stacked PR dependencies | Unsupported | Cross-PR dependencies fail closed; stacked execution is not added. |
+| Merge, release, or package publication | Not authorized / not implemented | The command creates draft PRs only. |
+
+Walkthrough: (1) snapshot canonical Cards and repository bindings, then run
+`intent` and record the owner's structural digest approval before any Developer
+assignment; (2) run the unchanged Card lifecycle; (3) refresh a terminal
+snapshot from canonical evidence and run `preview --intent`; (4) run
+`draft --execute` only after evidence and Git preflight pass. A group that lacks
+its exact prepared branch/worktree stops before any PR write. The CLI shows
+expected path count versus the configured review limit as a review-burden
+proxy; no wall-clock overhead benchmark was collected in this slice.
+
 The JSON snapshot contains `project_id`, `canonical_card_ids`, `repositories`,
 `cards`, and `source`. `source` names the current `work-queue.yaml` and
 `project.yaml` paths and SHA-256 values, plus a `files` manifest containing
