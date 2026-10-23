@@ -146,7 +146,7 @@ if (pseudoTerminalAvailable) {
   });
   assert.equal(scrolled.status, 0, `${scrolled.stderr}\n${scrolled.stdout}`);
   await saveTranscript('scrolling-checklist', scrolled);
-  assert.match(scrolled.stdout, /TRIAD\+/);
+  assert.match(stripAnsi(scrolled.stdout), /TRIAD\+/);
   assert.match(scrolled.stdout, /Select product repositories/);
   assert.match(scrolled.stdout, /Cancelled\. No files were changed\./);
   assert.equal((scrolled.stdout.match(/ENGINEERING LOOP/g) ?? []).length, 1, 'the brand mark is written once and remains readable in scrollback');
