@@ -120,11 +120,14 @@ The Orchestrator first shows the feature cards, then delegates the bounded work.
 If a tutorial step is unclear, see the [OpenCode guide](docs/runtimes.md#opencode)
 and [troubleshooting](docs/troubleshooting.md).
 
-For deterministic, owner-approved draft PR grouping and creation from verified
-Triad snapshots, see [PR planning](docs/pr-planning.md). This is an opt-in
-post-run delivery primitive: the Orchestrator does not yet generate snapshots
-or schedule draft creation automatically. Draft creation is opt-in; merge,
-release, push, and force-push actions are outside that tool.
+For optional [PR planning](docs/pr-planning.md), the Orchestrator can present
+`auto`, `single`, `compact`, or `review-friendly` groups **before** development
+and record the owner's explicit approval of the delivery structure once.
+**After** independent verification and Reviewer approval, `triad-pr-plan`
+checks fresh evidence and can create only the authorized **draft PRs**.
+This is not end-to-end automatic delivery: snapshot preparation and grouped
+branches/worktrees/pushes still require explicit workflow steps; stacked PRs,
+automatic merge, and release are not supported.
 
 ## Installation version and safe uninstall
 
