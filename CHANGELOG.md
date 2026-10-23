@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.22.0 — 2026-10-23
+
+Opt-in host entries and post-run draft PR planning, following `v1.21.0`,
+covering PRs #27–#31.
+
+- Clarify the distinction between first-run structural preview, `doctor`, and
+  declared-gate verification; refresh the OpenCode walkthrough and require
+  documentation impact analysis in review expectations.
+- Add consent-gated, opt-in Codex `$triad` and Hermes `/triad` user-level
+  entries with a trusted global preflight. This remains model-instructed, not a
+  pre-LLM host-enforced boundary; full native Codex READY/BLOCKED and Hermes
+  discovery are not proven.
+- Add opt-in `triad-pr-plan` for deterministic post-run grouping and
+  owner-approved, draft-only PR creation. Operators must still prepare source
+  snapshots and group worktrees/branches/pushes; automatic stacked PRs and
+  in-loop scheduling are not provided.
+- Add structural pre-run approval for Card grouping and strengthen per-Card
+  canonical baseline and final-candidate validation for multi-Card draft PRs.
+- Release notes: [Triad+ 1.22.0](docs/releases/1.22.0.md).
+
 ## 1.21.0 — 2026-10-20
 
 Onboarding TUI usability update, following `v1.20.1`, with PR #25.
