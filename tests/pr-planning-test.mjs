@@ -692,6 +692,133 @@ async function attachCanonicalDeliveryEvidence(fixture, source) {
   }
 }
 
+// Sequential Cards in one approved group retain the PR's group base while
+// each canonical verifier candidate is bound to its own approved baseline.
+{
+  const fixture = await gitFixture();
+  try {
+    const worktree = fixture.worktrees[0];
+    const branch = gitOut(["branch", "--show-current"], worktree);
+    const firstCommit = gitOut(["rev-parse", "HEAD"], worktree);
+    await writeFile(path.join(worktree, "card-2.txt"), "approved second Card candidate\n");
+    git(["add", "card-2.txt"], worktree);
+    git(["commit", "-qm", "approved Card 2"], worktree);
+    const secondCommit = gitOut(["rev-parse", "HEAD"], worktree);
+    git(["push", "-qu", "origin", branch], worktree);
+
+    const cards = [
+      readyCard("CARD-1", branch, worktree, firstCommit, fixture.base, "card-1.txt"),
+      readyCard("CARD-2", branch, worktree, secondCommit, firstCommit, "card-2.txt"),
+    ];
+    for (const entry of cards) entry.review_group = "sequential";
+    cards[1].depends_on = ["CARD-1"];
+    cards[0].final.candidate_fingerprint = (await calculateCandidateFingerprintAtCommit(worktree, { baseCommit: fixture.base, commit: firstCommit })).value;
+    cards[1].final.candidate_fingerprint = (await calculateCandidateFingerprintAtCommit(worktree, { baseCommit: firstCommit, commit: secondCommit })).value;
+
+    const source = snapshot(cards, [{
+      ...repository(), path: fixture.repo, worktree, base_commit: fixture.base,
+    }]);
+    const digest = (value) => createHash("sha256").update(value).digest("hex");
+    for (const entry of cards) {
+      entry.source_path = "features/" + entry.id + ".md";
+      const dependency = entry.id === "CARD-2" ? "CARD-1" : "none";
+      const cardText = "# " + entry.id + " — " + entry.title + "\n\n- Target repository: repo-a\n- Dependencies: " + dependency + "\n";
+      entry.source_sha256 = digest(cardText);
+      await mkdir(path.dirname(path.join(fixture.root, entry.source_path)), { recursive: true });
+      await writeFile(path.join(fixture.root, entry.source_path), cardText);
+      source.source.files.push({ path: entry.source_path, sha256: entry.source_sha256 });
+    }
+
+    const preview = buildPrPlan(source, { mode: "review-friendly" });
+    assert.equal(preview.groups.length, 1);
+    const bindings = { [preview.groups[0].id]: {
+      branch, worktree, base_branch: "main", base_commit: fixture.base, remote: "origin", remote_url: GITHUB_URL,
+    } };
+    const preRun = structuredClone(source);
+    for (const entry of preRun.cards) {
+      entry.status = "ready";
+      delete entry.final;
+      delete entry.verifier;
+      delete entry.reviewer;
+      delete entry.docs_impact;
+      delete entry.test_summary;
+    }
+    const intentPlan = buildPrPlan(preRun, { mode: "review-friendly", bindings });
+    const structuralApproval = createStructuralApproval(intentPlan, preRun, { owner: "Ainz Ooal Gown" });
+    await attachCanonicalDeliveryEvidence(fixture, source);
+
+    const makePlan = (candidate) => {
+      const plan = buildPrPlan(candidate, { mode: "review-friendly", bindings });
+      plan.structural_approval = { ...structuralApproval.approval };
+      plan.plan_sha256 = prPlanSha256(plan);
+      return plan;
+    };
+    const plan = makePlan(source);
+    assert.equal(validatePrPlan(plan, source).valid, true);
+    assert.equal(plan.groups[0].base_commit, fixture.base, "the PR base remains the approved group base");
+
+    const fake = makeGhRunner();
+    const dryRun = await prepareDraftPullRequests(plan, source, { runner: fake.runner, projectRoot: fixture.root });
+    assert.equal(dryRun.status, "dry_run");
+    assert.equal(dryRun.draft_count, 1);
+    assert.equal(dryRun.groups[0].head, secondCommit);
+    assert.equal(fake.creates, 0);
+    const created = await prepareDraftPullRequests(plan, source, { execute: true, runner: fake.runner, projectRoot: fixture.root });
+    assert.equal(created.status, "created");
+    assert.equal(created.drafts.length, 1);
+    assert.equal(created.drafts[0].base_branch, "main");
+    assert.equal(fake.creates, 1);
+    const createCall = fake.calls.find((call) => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "create");
+    assert.ok(createCall);
+    assert.equal(createCall.args.includes("--draft"), true);
+    assert.equal(createCall.args[createCall.args.indexOf("--base") + 1], "main");
+
+    const tamperedBaseline = structuredClone(source);
+    tamperedBaseline.cards.find((entry) => entry.id === "CARD-2").final.base_commit = fixture.base;
+    const tamperedBaselineFake = makeGhRunner();
+    await assert.rejects(
+      prepareDraftPullRequests(makePlan(tamperedBaseline), tamperedBaseline, { execute: true, runner: tamperedBaselineFake.runner, projectRoot: fixture.root }),
+      { code: "pr_card_commit_candidate_mismatch" },
+    );
+    assert.equal(tamperedBaselineFake.creates, 0);
+    assert.equal(tamperedBaselineFake.calls.some((call) => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "create"), false);
+
+    const staleBaseline = structuredClone(source);
+    staleBaseline.cards.find((entry) => entry.id === "CARD-2").final.base_commit = "f".repeat(40);
+    const staleBaselineFake = makeGhRunner();
+    await assert.rejects(
+      prepareDraftPullRequests(makePlan(staleBaseline), staleBaseline, { execute: true, runner: staleBaselineFake.runner, projectRoot: fixture.root }),
+      { code: "pr_card_baseline_invalid" },
+    );
+    assert.equal(staleBaselineFake.creates, 0);
+    assert.equal(staleBaselineFake.calls.some((call) => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "create"), false);
+
+    const unrelatedBaseline = structuredClone(source);
+    unrelatedBaseline.cards.find((entry) => entry.id === "CARD-2").final.base_commit = gitOut(["rev-parse", "HEAD"], fixture.worktrees[1]);
+    const unrelatedBaselineFake = makeGhRunner();
+    await assert.rejects(
+      prepareDraftPullRequests(makePlan(unrelatedBaseline), unrelatedBaseline, { execute: true, runner: unrelatedBaselineFake.runner, projectRoot: fixture.root }),
+      { code: "pr_card_baseline_invalid" },
+    );
+    assert.equal(unrelatedBaselineFake.creates, 0);
+    assert.equal(unrelatedBaselineFake.calls.some((call) => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "create"), false);
+
+    await writeFile(path.join(worktree, "card-2.txt"), "unreviewed extra change to an approved path\n");
+    git(["add", "card-2.txt"], worktree);
+    git(["commit", "-qm", "unreviewed rogue commit"], worktree);
+    git(["push", "-qu", "origin", branch], worktree);
+    const rogueFake = makeGhRunner();
+    await assert.rejects(
+      prepareDraftPullRequests(plan, source, { execute: true, runner: rogueFake.runner, projectRoot: fixture.root }),
+      { code: "pr_group_commit_set_mismatch" },
+    );
+    assert.equal(rogueFake.creates, 0);
+    assert.equal(rogueFake.calls.some((call) => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "create"), false);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+}
+
 // Blocked/rework Cards, branch drift, missing upstream, moved base, and missing host auth never create PRs.
 {
   const fixture = await gitFixture();

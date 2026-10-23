@@ -648,7 +648,7 @@ async function preflightGroup(group, snapshot, runner, gh, checkHost, projectRoo
     const final = card?.final ?? {};
     if (final.repository !== group.target_repository || final.branch !== group.branch) fail("pr_card_binding_mismatch", "Card " + id + " does not match its approved repository/branch", { group_id: group.id });
     if (path.resolve(projectRoot, final.worktree ?? ".") !== path.resolve(projectRoot, group.worktree)) fail("pr_card_binding_mismatch", "Card " + id + " worktree does not match its approved group worktree", { group_id: group.id });
-    if (final.base_commit !== group.base_commit) fail("pr_card_binding_mismatch", "Card " + id + " base commit differs from approved base", { group_id: group.id });
+    if (!GIT_SHA.test(final.base_commit ?? "")) fail("pr_card_baseline_invalid", "Card " + id + " has no valid independently bound baseline commit", { group_id: group.id, card_id: id });
   }
   const worktree = await realpath(path.resolve(projectRoot, group.worktree)).catch(() => null);
   if (!worktree) fail("pr_worktree_missing", "Group worktree does not exist: " + group.worktree, { group_id: group.id });
@@ -669,23 +669,42 @@ async function preflightGroup(group, snapshot, runner, gh, checkHost, projectRoo
   const expectedPaths = cardsExpectedPaths.length ? cardsExpectedPaths : [...group.expected_paths].sort();
   if (stableHash(actualPaths) !== stableHash(expectedPaths)) fail("pr_group_delta_mismatch", "Branch diff does not equal the expected grouped Card delta", { group_id: group.id, expected: expectedPaths, actual: actualPaths });
   const expectedCommits = group.card_ids.map((id) => snapshot.cards.find((entry) => idOf(entry) === id)?.final?.commit);
-  if (expectedCommits.some((commit) => !GIT_SHA.test(commit ?? "")) || new Set(expectedCommits).size !== expectedCommits.length) {
+  const normalizedExpectedCommits = expectedCommits.map((commit) => String(commit ?? "").toLowerCase());
+  if (expectedCommits.some((commit) => !GIT_SHA.test(commit ?? "")) || new Set(normalizedExpectedCommits).size !== expectedCommits.length) {
     fail("pr_group_commit_set_mismatch", "Each approved Card must bind one distinct final commit", { group_id: group.id, expected: expectedCommits });
   }
   const actualCommits = runChecked("git", ["rev-list", "--reverse", group.base_commit + ".." + head], worktree, runner).split(/\r?\n/).filter(Boolean);
-  if (actualCommits.length !== expectedCommits.length || stableHash([...actualCommits].sort()) !== stableHash([...expectedCommits].sort())) {
+  if (actualCommits.length !== expectedCommits.length || stableHash(actualCommits.map((commit) => commit.toLowerCase()).sort()) !== stableHash(normalizedExpectedCommits.sort())) {
     fail("pr_group_commit_set_mismatch", "Branch commit range does not exactly match one approved final commit per Card", {
       group_id: group.id,
       expected: expectedCommits,
       actual: actualCommits,
     });
   }
+  const approvedGroupCommits = new Set([group.base_commit.toLowerCase(), ...actualCommits.map((commit) => commit.toLowerCase())]);
+  for (const id of group.card_ids) {
+    const card = snapshot.cards.find((entry) => idOf(entry) === id);
+    const baseline = card.final.base_commit;
+    const normalizedBaseline = baseline.toLowerCase();
+    const resolvedBaseline = runner("git", ["rev-parse", "--verify", baseline + "^{commit}"], worktree);
+    if (resolvedBaseline.status !== 0 || String(resolvedBaseline.stdout ?? "").trim().toLowerCase() !== normalizedBaseline) {
+      fail("pr_card_baseline_invalid", "Card " + id + " baseline does not resolve to the recorded commit", { group_id: group.id, card_id: id, baseline });
+    }
+    if (!approvedGroupCommits.has(normalizedBaseline)) {
+      fail("pr_card_baseline_invalid", "Card " + id + " baseline is not the group base or an approved Card commit in the group ancestry", { group_id: group.id, card_id: id, baseline });
+    }
+    const baseIsAncestor = runner("git", ["merge-base", "--is-ancestor", group.base_commit, baseline], worktree);
+    const baselineIsBeforeFinal = runner("git", ["merge-base", "--is-ancestor", baseline, card.final.commit], worktree);
+    if (baseIsAncestor.status !== 0 || baselineIsBeforeFinal.status !== 0 || normalizedBaseline === card.final.commit.toLowerCase()) {
+      fail("pr_card_baseline_invalid", "Card " + id + " baseline is stale, non-ancestral, or not before its final commit", { group_id: group.id, card_id: id, baseline, commit: card.final.commit });
+    }
+  }
   if (canonicalVerifiers) {
     for (const id of group.card_ids) {
       const evidence = canonicalVerifiers.get(id);
-      const commit = snapshot.cards.find((card) => idOf(card) === id)?.final?.commit;
-      const committed = await calculateCandidateFingerprintAtCommit(worktree, { baseCommit: group.base_commit, commit });
-      if (!candidateManifestsBind(evidence?.candidate_manifest, committed.manifest, { expectedBaseCommit: group.base_commit })) {
+      const final = snapshot.cards.find((card) => idOf(card) === id)?.final;
+      const committed = await calculateCandidateFingerprintAtCommit(worktree, { baseCommit: final.base_commit, commit: final.commit });
+      if (!candidateManifestsBind(evidence?.candidate_manifest, committed.manifest, { expectedBaseCommit: final.base_commit })) {
         fail("pr_card_commit_candidate_mismatch", "Final commit content differs from the independently verified candidate for Card " + id, { group_id: group.id, card_id: id });
       }
     }

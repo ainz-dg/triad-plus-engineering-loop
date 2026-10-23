@@ -97,10 +97,14 @@ declared `id`, `path`, `worktree`, `base_branch`, `project_branch`,
 selected state, dependencies, expected/changed paths, and source binding;
 completed Cards additionally carry final commit metadata, passing verifier
 evidence, independent Reviewer approval, test summary, and documentation-impact
-review. For each draft group, preflight requires the complete
-`base_commit..HEAD` commit set to equal exactly one distinct `final.commit`
-from every approved Card in that group. Extra commits fail closed even when
-they only touch paths already present in the approved Card delta.
+review. For each draft group, the group's `base_commit` remains the PR base and
+preflight requires the complete `base_commit..HEAD` commit set to equal exactly
+one distinct `final.commit` from every approved Card in that group. A Card's
+candidate is independently checked from its own `final.base_commit`; that
+baseline must be the group base or an earlier approved Card commit in the same
+ancestry, and must be an ancestor of the Card's final commit. Extra commits
+fail closed even when they only touch paths already present in the approved
+Card delta.
 
 When a mode produces more than one group for a repository, `group_bindings`
 maps each deterministic group id to its own `branch`, `worktree`, `base_branch`,
