@@ -1,21 +1,58 @@
 import { paint } from './terminal.mjs';
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+function cellWidth(cluster) {
+  if (/\p{Extended_Pictographic}/u.test(cluster) || /[\u{1f1e6}-\u{1f1ff}]{2}/u.test(cluster)) return 2;
+  let width = 0;
+  for (const character of cluster) {
+    const codePoint = character.codePointAt(0);
+    if (/\p{Mark}/u.test(character) || codePoint === 0x200d || (codePoint >= 0xfe00 && codePoint <= 0xfe0f)) continue;
+    if ((codePoint >= 0x1100 && codePoint <= 0x115f)
+      || codePoint === 0x2329 || codePoint === 0x232a
+      || (codePoint >= 0x2e80 && codePoint <= 0xa4cf)
+      || (codePoint >= 0xac00 && codePoint <= 0xd7a3)
+      || (codePoint >= 0xf900 && codePoint <= 0xfaff)
+      || (codePoint >= 0xfe10 && codePoint <= 0xfe19)
+      || (codePoint >= 0xfe30 && codePoint <= 0xfe6f)
+      || (codePoint >= 0xff00 && codePoint <= 0xff60)
+      || (codePoint >= 0xffe0 && codePoint <= 0xffe6)
+      || (codePoint >= 0x1f300 && codePoint <= 0x1faff)
+      || (codePoint >= 0x20000 && codePoint <= 0x3fffd)) return 2;
+    width += 1;
+  }
+  return width;
+}
+
+function takeCells(characters, budget, fromEnd = false) {
+  const selected = [];
+  let width = 0;
+  const source = fromEnd ? [...characters].reverse() : characters;
+  for (const character of source) {
+    const nextWidth = cellWidth(character);
+    if (width + nextWidth > budget) break;
+    selected.push(character);
+    width += nextWidth;
+  }
+  return fromEnd ? selected.reverse() : selected;
+}
+
 function clip(value, width) {
   width = Math.max(1, Math.floor(width));
-  const chars = Array.from(String(value));
-  if (chars.length <= width) return chars.join('');
+  const chars = Array.from(graphemes.segment(String(value)), (entry) => entry.segment);
+  if (chars.reduce((total, character) => total + cellWidth(character), 0) <= width) return chars.join('');
   if (width <= 1) return '…'.slice(0, width);
-  if (width <= 5) return `${chars.slice(0, width - 1).join('')}…`;
+  if (width <= 5) return `${takeCells(chars, width - 1).join('')}…`;
   const left = Math.ceil((width - 1) / 2);
   const right = Math.floor((width - 1) / 2);
-  return `${chars.slice(0, left).join('')}…${chars.slice(-right).join('')}`;
+  return `${takeCells(chars, left).join('')}…${takeCells(chars, right, true).join('')}`;
 }
 
 function clipEnd(value, width) {
-  const chars = Array.from(String(value));
-  if (chars.length <= width) return chars.join('');
+  const chars = Array.from(graphemes.segment(String(value)), (entry) => entry.segment);
+  if (chars.reduce((total, character) => total + cellWidth(character), 0) <= width) return chars.join('');
   if (width <= 1) return '…'.slice(0, width);
-  return `${chars.slice(0, width - 1).join('')}…`;
+  return `${takeCells(chars, width - 1).join('')}…`;
 }
 
 function style(value, tone, output) {
@@ -64,7 +101,7 @@ export async function selectChecklist({
   const useScreenControls = output.isTTY && process.env.TERM !== 'dumb';
   const originalRawMode = Boolean(input.isRaw);
   const headerLineCount = header ? header.trimEnd().split('\n').length : 0;
-  const bodyStartRow = headerLineCount + 1;
+  let renderedLineCount = 0;
   let settled = false;
 
   return new Promise((resolve, reject) => {
@@ -127,9 +164,15 @@ export async function selectChecklist({
       lines.push('', clip(hint, width));
       if (message) lines.push(style(message, 'error', output));
       if (useScreenControls) {
-        // Keep the brand header fixed and replace only the menu region. A single
-        // write avoids the visible blank frame caused by clear-then-redraw.
-        output.write(`\u001b[${bodyStartRow};1H${lines.join('\n')}\n\u001b[J`);
+        // Anchor subsequent frames to the live cursor rather than an absolute
+        // row: readline prompts may have scrolled since the one-time brand mark.
+        // Clear each bounded frame row so shorter content cannot leave residue.
+        // One buffered write avoids a blank frame while retaining the header.
+        const frameHeight = Math.max(renderedLineCount, lines.length);
+        const cursor = renderedLineCount ? `\u001b[${renderedLineCount}A\r` : '\r';
+        const frame = Array.from({ length: frameHeight }, (_, index) => `\u001b[2K${lines[index] ?? ''}`).join('\n');
+        output.write(`${cursor}${frame}\n`);
+        renderedLineCount = frameHeight;
       } else {
         output.write(`${lines.join('\n')}\n`);
       }

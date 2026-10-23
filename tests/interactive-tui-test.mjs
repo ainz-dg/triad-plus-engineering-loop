@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { selectChecklist } from '../runtime/lib/interactive-tui.mjs';
 import { formatRetroPixelHeader } from '../runtime/lib/terminal.mjs';
+import { terminalScreen } from './terminal-screen-emulator.mjs';
 
 const originalTerm = process.env.TERM;
 const originalNoColor = process.env.NO_COLOR;
@@ -41,6 +42,7 @@ class FakeOutput {
 function start(options = {}) {
   const input = new FakeInput();
   const output = new FakeOutput();
+  if (options.columns) output.columns = options.columns;
   if (options.failAt) output.failAt = options.failAt;
   const promise = selectChecklist({
     step: 'Triad+ / 2 of 5 — Product repositories',
@@ -122,9 +124,67 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   keys(session.input, '\u001b[B');
   const redraws = session.output.writes.slice(1);
   assert.ok(redraws.length >= 2);
-  assert.ok(redraws.every((write) => write.startsWith('\u001b[2;1H')), 'each frame begins below the static header');
+  assert.ok(redraws[0].startsWith('\r\u001b[2K'), 'the first frame begins at the live prompt cursor');
+  assert.ok(redraws.slice(1).every((write) => /^\u001b\[\d+A\r\u001b\[2K/.test(write)), 'redraws return to the previous frame relative to the live cursor');
   assert.doesNotMatch(redraws.join(''), /\u001b\[2J/, 'redraw does not clear the visible screen first');
+  assert.doesNotMatch(redraws.join(''), /\u001b\[J/, 'redraw clears only its bounded rows');
   assert.doesNotMatch(redraws.join(''), /TRIAD\+/, 'the static header is not duplicated by menu redraws');
+  keys(session.input, '\u001b');
+  await session.promise;
+}
+
+// A selected row can shrink when the former primary is unchecked. Assert the
+// visible cells, not the ANSI source string, so no suffix survives the redraw.
+{
+  const session = start({
+    header: 'TRIAD+\n',
+    items: [
+      { kind: 'checkbox', id: 'one', label: 'First option' },
+      { kind: 'checkbox', id: 'two', label: 'Second option' },
+    ],
+  });
+  keys(session.input, ' \u001b[B \u001b[A ');
+  const result = terminalScreen(session.output.writes.join(''), { rows: 16, columns: 48 }).join('\n');
+  assert.doesNotMatch(result, /› \[ \] First option · primary/, 'the old longer primary suffix is erased from the rendered cells');
+  keys(session.input, '\u001b');
+  await session.promise;
+}
+
+// Optional inline errors can disappear on the next frame without leaving a
+// stale message row in the rendered terminal cells.
+{
+  const session = start({ minimum: 1 });
+  keys(session.input, '\r ');
+  const result = terminalScreen(session.output.writes.join(''), { rows: 16, columns: 48 }).join('\n');
+  assert.doesNotMatch(result, /Select a row with Space/, 'a cleared inline error is absent from the visible terminal cells');
+  keys(session.input, '\u001b');
+  await session.promise;
+}
+
+// Wide graphemes are clipped by terminal cells, so their text cannot wrap into
+// the next menu row and corrupt the list layout.
+{
+  const session = start({ columns: 40, items: [
+    { kind: 'checkbox', id: 'wide', label: '界'.repeat(30) },
+    { kind: 'checkbox', id: 'second', label: 'second option' },
+  ] });
+  keys(session.input, '\u001b[B');
+  const screen = terminalScreen(session.output.writes.join(''), { rows: 16, columns: 40 });
+  assert.ok(screen[5].includes('› [ ] second option'), `wide text stays on one row:\n${screen.join('\n')}`);
+  keys(session.input, '\u001b');
+  await session.promise;
+}
+
+// A long list scrolls its visible window with focus and keeps the viewport
+// index readable after multiple relative redraws.
+{
+  const session = start({ items: Array.from({ length: 12 }, (_, index) => ({
+    kind: 'checkbox', id: `item-${index + 1}`, label: `option ${index + 1}`,
+  })) });
+  keys(session.input, '\u001b[B'.repeat(8));
+  const screen = terminalScreen(session.output.writes.join(''), { rows: 16, columns: 48 }).join('\n');
+  assert.match(screen, /Options 5–9 of 12/);
+  assert.match(screen, /› \[ \] option 9/);
   keys(session.input, '\u001b');
   await session.promise;
 }
