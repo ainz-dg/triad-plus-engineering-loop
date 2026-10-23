@@ -90,6 +90,40 @@ function terminalInput(cwd, actions, env) {
   });
 }
 
+// The initial interactive entry renders the approved color mark before its
+// first choice; the menu remains usable and the static header is not replayed.
+if (pseudoTerminalAvailable) {
+  const retroRoot = path.join(fixture, 'RETRO-HEADER-CONTROL');
+  await mkdir(retroRoot);
+  const originalNoColor = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
+  const retro = terminalInput(retroRoot, [line('n'), line(''), key('escape')], {
+    HOME: path.join(fixture, 'home-retro-header'),
+    TERM: 'xterm-256color',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TRIAD_TEST_PTY_COLS: '80',
+    TRIAD_TEST_PTY_ROWS: '24',
+  });
+  if (originalNoColor !== undefined) process.env.NO_COLOR = originalNoColor;
+  assert.equal(retro.status, 0, `${retro.stderr}\n${retro.stdout}`);
+  await saveTranscript('retro-pixel-header', retro);
+  if (process.env.TRIAD_RETRO_PTY_EVIDENCE) {
+    const evidencePath = path.resolve(process.env.TRIAD_RETRO_PTY_EVIDENCE);
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, retro.stdout.replaceAll('\u001b', '<ESC>').replaceAll('\r', '<CR>'));
+  }
+  assert.match(retro.stdout, /\u001b\[38;2;124;140;255m/, 'interactive PTY uses the exact violet');
+  assert.match(retro.stdout, /\u001b\[38;2;53;195;177m/, 'interactive PTY uses the exact turquoise');
+  assert.match(retro.stdout, /\u001b\[38;2;245;185;94m/, 'interactive PTY uses the exact amber');
+  assert.match(retro.stdout, /Choose \[N\]ew workspace/, 'the first menu choice appears immediately');
+  assert.match(retro.stdout, /Select product repositories/, 'the next interactive screen remains available');
+  assert.equal((retro.stdout.match(/ENGINEERING LOOP/g) ?? []).length, 1, 'the header is printed once across menu redraws');
+  assert.doesNotMatch(retro.stdout, /\u001b\[2J/, 'redraws do not clear the display before painting');
+  assert.match(retro.stdout, /Cancelled\. No files were changed\./);
+  assert.equal(await readFile(path.join(retroRoot, 'project.yaml')).then(() => true, () => false), false);
+}
+
 async function saveTranscript(name, result) {
   const directory = process.env.TRIAD_SETUP_TRANSCRIPT_DIR;
   if (!directory) return;
@@ -719,6 +753,7 @@ try {
     });
     assert.equal(narrow.status, 0, `${narrow.stderr}\n${narrow.stdout}`);
     assert.doesNotMatch(narrow.stdout, /\u001b\[/, 'TERM=dumb and NO_COLOR stay readable without ANSI controls');
+    assert.match(narrow.stdout, /TRIAD\+ \/ Engineering Loop/, 'short dumb terminals use a one-line identity fallback');
     assert.match(narrow.stdout, /…/, 'long paths are clipped to the terminal width');
     assert.match(narrow.stdout, /Cancelled\. No files were changed\./);
     assert.equal(await readFile(path.join(narrowRoot, 'project.yaml')).then(() => true, () => false), false);
@@ -734,7 +769,9 @@ try {
       NO_COLOR: '1',
     });
     assert.equal(noColor.status, 0, `${noColor.stderr}\n${noColor.stdout}`);
-    assert.match(noColor.stdout, /\u001b\[2J/, 'interactive navigation remains available in a colorless terminal');
+    assert.match(noColor.stdout, /\u001b\[11;1H/, 'interactive navigation redraws below its static header');
+    assert.match(noColor.stdout, /ENGINEERING LOOP/, 'the colorless mark remains readable');
+    assert.doesNotMatch(noColor.stdout, /\u001b\[2J/, 'redraw does not clear the display before painting');
     assert.doesNotMatch(noColor.stdout, /\u001b\[[0-9;]*m/, 'NO_COLOR suppresses all ANSI style codes including cleanup reset');
     assert.match(noColor.stdout, /Cancelled\. No files were changed\./);
 

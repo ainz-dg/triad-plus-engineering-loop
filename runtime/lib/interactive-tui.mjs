@@ -38,6 +38,7 @@ export async function selectChecklist({
   selectionSummary = (selected) => `${selected.length} selected`,
   hint = '↑↓ move · Space toggle · Enter continue · Esc cancel',
   initialMessage = '',
+  header = '',
   input = process.stdin,
   output = process.stdout,
 }) {
@@ -62,6 +63,8 @@ export async function selectChecklist({
   let escapeTimer = null;
   const useScreenControls = output.isTTY && process.env.TERM !== 'dumb';
   const originalRawMode = Boolean(input.isRaw);
+  const headerLineCount = header ? header.trimEnd().split('\n').length : 0;
+  const bodyStartRow = headerLineCount + 1;
   let settled = false;
 
   return new Promise((resolve, reject) => {
@@ -82,7 +85,7 @@ export async function selectChecklist({
     const finish = (value) => { cleanup(); resolve(value); };
     const fail = (error) => { cleanup(); reject(error); };
     const selectedIds = () => [...order];
-    const visibleCount = () => Math.max(1, Math.min(14, (Number(output.rows) || 24) - 11));
+    const visibleCount = () => Math.max(1, Math.min(14, (Number(output.rows) || 24) - 11 - headerLineCount));
 
     const render = (full = true) => {
       const rows = visibleCount();
@@ -123,8 +126,13 @@ export async function selectChecklist({
       if (items.length > rows) lines.push(`Options ${scrollTop + 1}–${Math.min(items.length, scrollTop + rows)} of ${items.length}`);
       lines.push('', clip(hint, width));
       if (message) lines.push(style(message, 'error', output));
-      if (useScreenControls) output.write('\u001b[2J\u001b[H');
-      output.write(`${lines.join('\n')}\n`);
+      if (useScreenControls) {
+        // Keep the brand header fixed and replace only the menu region. A single
+        // write avoids the visible blank frame caused by clear-then-redraw.
+        output.write(`\u001b[${bodyStartRow};1H${lines.join('\n')}\n\u001b[J`);
+      } else {
+        output.write(`${lines.join('\n')}\n`);
+      }
       message = '';
     };
 

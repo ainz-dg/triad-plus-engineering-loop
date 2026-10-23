@@ -21,7 +21,8 @@ import {
 import {
   formatDoctorLine,
   formatDoctorSection,
-  formatSetupSummary
+  formatSetupSummary,
+  formatRetroPixelHeader,
 } from '../runtime/lib/terminal.mjs';
 import {
   buildInstallationManifest,
@@ -1924,14 +1925,14 @@ async function cockpit(options) {
   await launchCockpit({ control: options.control, port: options.port, noOpen: options.noOpen });
 }
 
-function interactivePrompt() {
+function interactivePrompt({ header = '' } = {}) {
   let readline = createInterface({ input: process.stdin, output: process.stdout });
   return {
     question(message) { return readline.question(message); },
     async checklist(options) {
       readline.close();
       try {
-        return await selectChecklist({ ...options, input: process.stdin, output: process.stdout });
+        return await selectChecklist({ ...options, header, input: process.stdin, output: process.stdout });
       } finally {
         readline = createInterface({ input: process.stdin, output: process.stdout });
       }
@@ -2576,7 +2577,8 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
 
 async function interactiveInit() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The interactive wizard needs a terminal. Use init in a non-interactive shell.');
-  const prompt = interactivePrompt();
+  const header = formatRetroPixelHeader({ stream: process.stdout });
+  const prompt = interactivePrompt({ header });
   try {
     const currentDirectory = resolve(process.cwd());
     let currentManifest = null;
@@ -2584,7 +2586,7 @@ async function interactiveInit() {
     try { currentManifest = await loadInstallationManifest(currentDirectory); }
     catch (error) { currentManifestError = error; }
     const defaultMode = currentManifest ? 'm' : 'n';
-    process.stdout.write('\nTriad+\n');
+    process.stdout.write(`${header}\n`);
     if (currentManifest) {
       process.stdout.write(`Detected a valid ${currentManifest.manifest.schema_version === 1 ? 'schema-v1' : 'schema-v2'} installation manifest in the current Control Workspace.\n`);
     } else if (currentManifestError) {

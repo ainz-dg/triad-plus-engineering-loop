@@ -22,8 +22,101 @@ const toneCodes = {
   hint: ANSI.dim
 };
 
+const retroColors = {
+  violet: '#7C8CFF',
+  turquoise: '#35C3B1',
+  amber: '#F5B95E',
+};
+
+const retroGlyphs = {
+  t: ['████████╗', '╚══██╔══╝', '   ██║   ', '   ██║   ', '   ██║   ', '   ╚═╝   '],
+  r: ['██████╗  ', '██╔══██╗ ', '██████╔╝ ', '██╔══██╗ ', '██║  ██║ ', '╚═╝  ╚═╝ '],
+  i: ['██╗', '██║', '██║', '██║', '██║', '╚═╝'],
+  a: [' █████╗  ', '██╔══██╗ ', '███████║ ', '██╔══██║ ', '██║  ██║ ', '╚═╝  ╚═╝ '],
+  d: ['██████╗  ', '██╔══██╗ ', '██║  ██║ ', '██║  ██║ ', '██████╔╝ ', '╚═════╝  '],
+};
+
 export function colorEnabled(stream = process.stdout) {
   return Boolean(stream?.isTTY) && process.env.NO_COLOR === undefined;
+}
+
+function paintHex(value, hex, stream) {
+  const text = String(value);
+  if (!colorEnabled(stream)) return text;
+  const digits = hex.slice(1);
+  const red = Number.parseInt(digits.slice(0, 2), 16);
+  const green = Number.parseInt(digits.slice(2, 4), 16);
+  const blue = Number.parseInt(digits.slice(4, 6), 16);
+  return `\u001b[38;2;${red};${green};${blue}m${text}\u001b[39m`;
+}
+
+function center(text, columns) {
+  const visibleText = String(text).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+  const width = Array.from(visibleText).length;
+  return `${' '.repeat(Math.max(0, Math.floor((columns - width) / 2)))}${text}`;
+}
+
+function plainRetroHeader(columns) {
+  const label = 'TRIAD+ / Engineering Loop';
+  return columns >= Array.from(label).length ? label : 'TRIAD+';
+}
+
+function compactRetroHeader(stream, columns, includeTagline) {
+  const name = [
+    paintHex('TRI', retroColors.violet, stream),
+    paintHex('AD', retroColors.turquoise, stream),
+    paintHex('+', retroColors.amber, stream),
+  ].join('');
+  const rows = [
+    center(name, columns),
+    center(`  ${paintHex('●', retroColors.violet, stream)}  `, columns),
+    center(` / ✓ \\ `, columns),
+    center(`${paintHex('●', retroColors.turquoise, stream)}─────${paintHex('●', retroColors.amber, stream)}`, columns),
+  ];
+  if (includeTagline) rows.push(center('ENGINEERING LOOP', columns));
+  return rows.join('\n');
+}
+
+function fullRetroHeader(stream, columns, includeTagline) {
+  const rows = [];
+  for (let row = 0; row < 6; row += 1) {
+    const chunks = [
+      [retroGlyphs.t[row], retroColors.violet],
+      [retroGlyphs.r[row], retroColors.violet],
+      [retroGlyphs.i[row], retroColors.violet],
+      [retroGlyphs.a[row], retroColors.turquoise],
+      [retroGlyphs.d[row], retroColors.turquoise],
+    ];
+    const suffix = row === 0 ? '   +' : '    ';
+    const plain = chunks.map(([text]) => text).join('  ') + suffix;
+    const padding = Math.max(0, Math.floor((columns - Array.from(plain).length) / 2));
+    const colored = chunks.map(([text, color]) => paintHex(text, color, stream)).join('  ')
+      + (row === 0 ? `   ${paintHex('+', retroColors.amber, stream)}` : '    ');
+    rows.push(`${' '.repeat(padding)}${colored}`);
+  }
+  rows.push(center(`    ${paintHex('●', retroColors.violet, stream)}`, columns));
+  rows.push(center('   / ✓ \\', columns));
+  rows.push(center(`  ${paintHex('●', retroColors.turquoise, stream)}─────${paintHex('●', retroColors.amber, stream)}`, columns));
+  if (includeTagline) rows.push(center('ENGINEERING LOOP', columns));
+  return rows.join('\n');
+}
+
+/** Render the non-blocking retro identity used by the interactive first-run menu. */
+export function formatRetroPixelHeader({
+  stream = process.stdout,
+  columns = Number(stream?.columns) || 80,
+  rows = Number(stream?.rows) || 24,
+  term = process.env.TERM,
+  locale = process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG || '',
+} = {}) {
+  if (!stream?.isTTY) return '';
+  if (rows < 12) return plainRetroHeader(columns);
+  if (term === 'dumb' || columns < 40 || !/(?:utf-8|utf8)/i.test(locale)) {
+    return plainRetroHeader(columns);
+  }
+  if (columns >= 72 && rows >= 22) return fullRetroHeader(stream, columns, rows >= 24);
+  if (columns >= 40 && columns <= 71 && rows >= 14) return compactRetroHeader(stream, columns, rows >= 18);
+  return plainRetroHeader(columns);
 }
 
 export function paint(value, tone, { stream = process.stdout } = {}) {

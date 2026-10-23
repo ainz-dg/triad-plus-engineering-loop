@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { selectChecklist } from '../runtime/lib/interactive-tui.mjs';
+import { formatRetroPixelHeader } from '../runtime/lib/terminal.mjs';
 
 const originalTerm = process.env.TERM;
+const originalNoColor = process.env.NO_COLOR;
 process.env.TERM = 'xterm-256color';
+delete process.env.NO_COLOR;
 
 class FakeInput extends EventEmitter {
   isTTY = true;
@@ -54,7 +57,48 @@ function keys(input, value) {
   input.emit('data', Buffer.from(value));
 }
 
+function stripAnsi(value) {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 const selectionSummary = (selected) => `${selected.length} selected${selected[0] ? ` · primary ${selected[0]}` : ''}`;
+
+// The approved six-row pixel mark uses the SVG palette and never paints a background.
+{
+  const output = new FakeOutput();
+  const header = formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'xterm-256color', locale: 'C.UTF-8' });
+  const lines = header.split('\n');
+  assert.equal(lines.length, 10, 'full mark has six aligned glyph rows, triangle, and wordmark');
+  assert.ok(header.includes('\u001b[38;2;124;140;255m'), 'violet matches #7C8CFF');
+  assert.ok(header.includes('\u001b[38;2;53;195;177m'), 'turquoise matches #35C3B1');
+  assert.ok(header.includes('\u001b[38;2;245;185;94m'), 'amber matches #F5B95E');
+  assert.doesNotMatch(header, /\u001b\[48;/, 'the logo never sets a terminal background');
+  const plainLines = stripAnsi(header).split('\n');
+  assert.ok(plainLines.every((line) => Array.from(line).length <= 80), 'full mark fits its terminal width');
+  assert.equal(new Set(plainLines.slice(0, 6).map((line) => Array.from(line).length)).size, 1, 'all six pixel rows share one fixed cell width');
+}
+
+// Compact, fallback, NO_COLOR, and redirected output paths stay bounded and safe.
+{
+  const output = new FakeOutput();
+  const compact = formatRetroPixelHeader({ stream: output, columns: 50, rows: 24, term: 'xterm-256color', locale: 'C.UTF-8' });
+  assert.match(stripAnsi(compact), /TRIAD\+/);
+  assert.match(stripAnsi(compact), /ENGINEERING LOOP/);
+  assert.ok(stripAnsi(compact).split('\n').every((line) => Array.from(line).length <= 50), 'compact mark fits its terminal width');
+
+  const previousNoColor = process.env.NO_COLOR;
+  process.env.NO_COLOR = '1';
+  const monochrome = formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'xterm-256color', locale: 'C.UTF-8' });
+  assert.doesNotMatch(monochrome, /\u001b\[/, 'NO_COLOR suppresses every header escape sequence');
+  if (previousNoColor === undefined) delete process.env.NO_COLOR;
+  else process.env.NO_COLOR = previousNoColor;
+
+  assert.equal(formatRetroPixelHeader({ stream: output, columns: 36, rows: 24, term: 'xterm-256color', locale: 'C.UTF-8' }), 'TRIAD+ / Engineering Loop');
+  assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'dumb', locale: 'C.UTF-8' }), 'TRIAD+ / Engineering Loop');
+  assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 20, term: 'xterm-256color', locale: 'C.UTF-8' }), 'TRIAD+ / Engineering Loop', 'short viewports prioritize menu space');
+  assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'xterm-256color', locale: 'C' }), 'TRIAD+ / Engineering Loop', 'non-UTF-8 locales avoid glyphs');
+  assert.equal(formatRetroPixelHeader({ stream: { isTTY: false }, columns: 80, rows: 24 }), '', 'redirected output gets no splash');
+}
 
 // Real escape/arrow bytes toggle in selection order and restore the original raw mode.
 {
@@ -70,6 +114,19 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.deepEqual(session.input.rawTransitions, [true, false]);
   assert.equal(session.input.isRaw, false);
   assert.equal(session.input.paused, true);
+}
+
+// Header stays fixed while one buffered redraw updates only the menu region.
+{
+  const session = start({ header: 'TRIAD+\n' });
+  keys(session.input, '\u001b[B');
+  const redraws = session.output.writes.slice(1);
+  assert.ok(redraws.length >= 2);
+  assert.ok(redraws.every((write) => write.startsWith('\u001b[2;1H')), 'each frame begins below the static header');
+  assert.doesNotMatch(redraws.join(''), /\u001b\[2J/, 'redraw does not clear the visible screen first');
+  assert.doesNotMatch(redraws.join(''), /TRIAD\+/, 'the static header is not duplicated by menu redraws');
+  keys(session.input, '\u001b');
+  await session.promise;
 }
 
 // Enter with no choices reports an inline error; Escape then cancels safely.
@@ -124,6 +181,8 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.equal(session.input.isRaw, false);
 }
 
-process.stdout.write('Interactive TUI raw-key and cleanup tests passed: selection order, zero-selection, max-selection, dumb-terminal width updates, injected output failure.\n');
+process.stdout.write('Interactive TUI tests passed: retro header palettes/fallbacks, redraw layout, key selection, and terminal cleanup.\n');
 if (originalTerm === undefined) delete process.env.TERM;
 else process.env.TERM = originalTerm;
+if (originalNoColor === undefined) delete process.env.NO_COLOR;
+else process.env.NO_COLOR = originalNoColor;
