@@ -2,8 +2,12 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import { candidateManifestsBind, calculateCandidateFingerprintAtCommit } from "./fingerprint.mjs";
+import { validateReviewerResult } from "./reviewer-result.mjs";
+import { validateVerificationEvidence } from "./verification-evidence.mjs";
 
 export const PR_PLAN_SCHEMA_VERSION = 1;
+export const PR_STRUCTURAL_APPROVAL_SCHEMA_VERSION = 1;
 export const PR_PLAN_MODES = Object.freeze(["auto", "single", "compact", "review-friendly"]);
 const SHA256 = /^[a-f0-9]{64}$/i;
 const GIT_SHA = /^[a-f0-9]{40,64}$/i;
@@ -269,6 +273,107 @@ export function approvePrPlan(plan, { owner, approvedAt = new Date().toISOString
   };
 }
 
+function structuralCard(card, snapshot) {
+  const sourcePath = text(card.source_path);
+  const sourceSha = card.source_sha256;
+  const sourceEntry = (snapshot.source?.files ?? []).find((entry) => entry.path === sourcePath);
+  if (!sourcePath || !SHA256.test(sourceSha ?? "") || sourceEntry?.sha256 !== sourceSha) {
+    fail("pr_structural_card_source_missing", "Structural approval requires a byte-bound canonical Card source for " + idOf(card));
+  }
+  return {
+    id: idOf(card),
+    title: text(card.title),
+    source_path: sourcePath,
+    source_sha256: sourceSha,
+    target_repository: repoOf(card),
+    selected: card.selected !== false,
+    depends_on: depsOf(card),
+    expected_paths: pathsOf(card),
+    compatibility_key: text(card.compatibility_key),
+    delivery_group: text(card.delivery_group),
+    shared_dependencies: list(card.shared_dependencies),
+    review_group: text(card.review_group),
+  };
+}
+
+/**
+ * The pre-run approval boundary intentionally excludes execution state,
+ * verifier/reviewer results, and final commits. It includes every input that
+ * determines Card membership, grouping, dependencies, repository scope, and
+ * exact delivery bindings.
+ */
+export function prStructuralIntent(plan, snapshot) {
+  const shape = validateSnapshot(snapshot);
+  const repos = snapshot.repositories.map((repo) => ({
+    id: text(repo.id), path: text(repo.path), worktree: text(repo.worktree),
+    base_branch: text(repo.base_branch), project_branch: text(repo.project_branch),
+    remote: text(repo.remote), remote_url: text(repo.remote_url),
+  })).sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    schema_version: PR_STRUCTURAL_APPROVAL_SCHEMA_VERSION,
+    project_id: snapshot.project_id,
+    mode: plan.mode,
+    review_limit_files: plan.review_limit_files,
+    source: {
+      queue_path: text(snapshot.source.queue_path) ?? ".loop/work-queue.yaml",
+      project_path: text(snapshot.source.project_path) ?? "project.yaml",
+      project_sha256: snapshot.source.project_sha256,
+      canonical_card_ids: [...shape.cardIds].sort(),
+    },
+    repositories: repos,
+    cards: snapshot.cards.map((card) => structuralCard(card, snapshot)).sort((a, b) => a.id.localeCompare(b.id)),
+    groups: approvedGroups(plan).map((group) => ({
+      ...group,
+      expected_paths: [...(plan.groups.find((entry) => entry.id === group.id)?.expected_paths ?? [])].sort(),
+    })).sort((a, b) => a.id.localeCompare(b.id)),
+    effect: "draft_pr_creation_only",
+  };
+}
+
+export function createStructuralApproval(plan, snapshot, { owner, approvedAt = new Date().toISOString() } = {}) {
+  if (!text(owner)) fail("pr_owner_required", "An explicit owner identity is required");
+  const validation = validatePrPlan(plan, snapshot);
+  if (!validation.valid) fail("pr_plan_invalid", validation.errors.map((item) => item.message).join("; "), { errors: validation.errors });
+  const intent = prStructuralIntent(plan, snapshot);
+  const structuralSha256 = stableHash(intent);
+  return {
+    schema_version: PR_STRUCTURAL_APPROVAL_SCHEMA_VERSION,
+    intent,
+    approval: {
+      status: "approved", owner: text(owner), approved_at: approvedAt,
+      structural_sha256: structuralSha256, effect: "draft_pr_creation_only",
+    },
+  };
+}
+
+export function validateStructuralApproval(document, plan, snapshot) {
+  const errors = [];
+  if (!objectLike(document) || document.schema_version !== PR_STRUCTURAL_APPROVAL_SCHEMA_VERSION || !objectLike(document.intent)) {
+    return { valid: false, errors: [err("pr_structural_approval_invalid", "Malformed structural approval document")] };
+  }
+  const approval = document.approval;
+  if (!objectLike(approval) || approval.status !== "approved" || !text(approval.owner)) errors.push(err("owner_approval_missing", "Explicit pre-run structural owner approval is required"));
+  if (document.intent.effect !== "draft_pr_creation_only" || approval?.effect !== "draft_pr_creation_only") errors.push(err("pr_structural_effect_invalid", "Structural approval must be draft-only"));
+  const recordedSha = stableHash(document.intent);
+  if (approval?.structural_sha256 !== recordedSha) errors.push(err("pr_structural_approval_tampered", "Structural approval digest does not match its approved intent"));
+  let currentSha = null;
+  try { currentSha = stableHash(prStructuralIntent(plan, snapshot)); }
+  catch (error) { errors.push(err(error.code ?? "pr_structural_intent_invalid", error.message)); }
+  if (currentSha && recordedSha !== currentSha) errors.push(err("pr_structural_drift", "Card grouping, repository, dependency, or exact branch/worktree/base/remote binding changed; owner reapproval is required"));
+  return { valid: errors.length === 0, errors, structural_sha256: currentSha };
+}
+
+function validateEmbeddedStructuralApproval(approval, plan, snapshot) {
+  const errors = [];
+  if (!objectLike(approval) || approval.status !== "approved" || !text(approval.owner)) errors.push(err("owner_approval_missing", "Explicit pre-run structural owner approval is required"));
+  if (approval?.effect !== "draft_pr_creation_only") errors.push(err("pr_structural_effect_invalid", "Structural approval must be draft-only"));
+  let structuralSha = null;
+  try { structuralSha = stableHash(prStructuralIntent(plan, snapshot)); }
+  catch (error) { errors.push(err(error.code ?? "pr_structural_intent_invalid", error.message)); }
+  if (structuralSha && approval?.structural_sha256 !== structuralSha) errors.push(err("pr_structural_drift", "Card grouping, repository, dependency, or exact branch/worktree/base/remote binding changed; owner reapproval is required"));
+  return { valid: errors.length === 0, errors, structural_sha256: structuralSha };
+}
+
 export function validatePlanApproval(plan) {
   const errors = [];
   const digest = prPlanSha256(plan);
@@ -401,15 +506,23 @@ export function validatePrPlan(plan, snapshot) {
     for (const group of plan.groups ?? []) counts.set(group.target_repository, (counts.get(group.target_repository) ?? 0) + 1);
     for (const [repo, count] of counts) if (count !== 1) errors.push(err("pr_single_mode_invalid", "Single mode requires one group for " + repo));
   }
+  if (plan.structural_approval) {
+    const structural = validateEmbeddedStructuralApproval(plan.structural_approval, plan, snapshot);
+    errors.push(...structural.errors);
+  }
   return { valid: errors.length === 0, errors, stacked_unsupported: (plan.groups ?? []).some((group) => (group.dependencies ?? []).length > 0) };
 }
 
 export function renderPrPlanTable(plan) {
-  const rows = ["PR group | Card IDs | target repo | branch/base | dependencies | rationale"];
+  const rows = ["PR group | Card IDs | target repo | branch | worktree | base | remote | dependencies | review burden | rationale"];
   for (const group of plan.groups ?? []) rows.push([
     group.id, group.card_ids.join(", "), group.target_repository,
-    (group.branch ?? "<binding required>") + "/" + (group.base_branch ?? "<base required>"),
-    group.dependencies.join(", ") || "none", group.rationale,
+    group.branch ?? "<binding required>", group.worktree ?? "<binding required>",
+    (group.base_branch ?? "<base required>") + "@" + String(group.base_commit ?? "<commit required>"),
+    (group.remote ?? "<remote required>") + " " + (group.remote_url ?? "<URL required>"),
+    group.dependencies.join(", ") || "none",
+    (group.expected_paths?.length ?? 0) + " expected path(s); limit " + plan.review_limit_files,
+    group.rationale,
   ].join(" | "));
   return rows.join("\n");
 }
@@ -445,7 +558,91 @@ function evidenceReferenceProblems(card, snapshot) {
   return problems;
 }
 
-async function preflightGroup(group, snapshot, runner, gh, checkHost, projectRoot, includedCards) {
+async function readCanonicalJson(projectRoot, relativePath, expectedSha, sourceFiles, label) {
+  if (!text(relativePath) || !SHA256.test(expectedSha ?? "")) fail("pr_canonical_evidence_invalid", label + " path/hash is missing");
+  if (sourceFiles.get(relativePath) !== expectedSha) fail("pr_canonical_evidence_invalid", label + " is not byte-bound by the snapshot manifest");
+  const resolved = path.resolve(projectRoot, relativePath);
+  if (resolved !== projectRoot && !resolved.startsWith(projectRoot + path.sep)) fail("pr_canonical_evidence_invalid", label + " escapes the Control Workspace");
+  const physical = await realpath(resolved).catch(() => null);
+  if (!physical || (physical !== projectRoot && !physical.startsWith(projectRoot + path.sep))) fail("pr_canonical_evidence_invalid", label + " is missing or escapes the Control Workspace");
+  const source = await readFile(physical);
+  if (hash(source) !== expectedSha) fail("pr_canonical_evidence_invalid", label + " bytes changed after the snapshot was captured");
+  let value;
+  try { value = JSON.parse(source.toString("utf8")); }
+  catch { fail("pr_canonical_evidence_invalid", label + " is not valid JSON"); }
+  if (!objectLike(value)) fail("pr_canonical_evidence_invalid", label + " must contain a JSON object");
+  return { value, source: source.toString("utf8") };
+}
+
+async function validateCanonicalDeliveryEvidence(snapshot, projectRoot) {
+  if (snapshot.source?.canonical_evidence !== true) fail("pr_canonical_evidence_required", "Pre-run structural approval requires a refreshed snapshot marked canonical_evidence: true");
+  const root = await realpath(projectRoot).catch(() => null);
+  if (!root) fail("pr_canonical_evidence_invalid", "Control Workspace does not exist");
+  const sourceFiles = new Map((snapshot.source?.files ?? []).map((entry) => [entry.path, entry.sha256]));
+  const verifierByCard = new Map();
+  for (const card of snapshot.cards.filter((entry) => entry.selected !== false)) {
+    const id = idOf(card);
+    const final = card.final ?? {};
+    const verifierRef = card.verifier ?? card.verification ?? {};
+    const verifierPath = verifierRef.evidence_path ?? verifierRef.path;
+    const verifier = (await readCanonicalJson(root, verifierPath, verifierRef.sha256 ?? verifierRef.evidence_sha256, sourceFiles, id + " verifier evidence")).value;
+    const verifierContract = validateVerificationEvidence(verifier);
+    if (!verifierContract.valid) fail("pr_canonical_evidence_invalid", id + " verifier evidence is invalid: " + verifierContract.errors.join("; "));
+    const candidateFingerprint = verifier.baseline?.candidate_fingerprint;
+    if (verifier.status !== "pass" || verifier.feature_id !== id || candidateFingerprint !== final.candidate_fingerprint) {
+      fail("pr_canonical_evidence_invalid", id + " verifier evidence does not bind a passing final Card candidate");
+    }
+    if (verifierRef.candidate_fingerprint && verifierRef.candidate_fingerprint !== candidateFingerprint) fail("pr_canonical_evidence_invalid", id + " verifier summary differs from the actual verifier evidence");
+    if (verifierRef.run_id && verifierRef.run_id !== verifier.run_id) fail("pr_canonical_evidence_invalid", id + " verifier run identity differs from the snapshot");
+    verifierByCard.set(id, verifier);
+
+    const reviewerRef = card.reviewer ?? card.review ?? {};
+    const bindingPath = reviewerRef.binding_path ?? reviewerRef.evidence_path ?? reviewerRef.path;
+    const bindingSha = reviewerRef.binding_sha256 ?? reviewerRef.sha256 ?? reviewerRef.evidence_sha256;
+    const runRecord = (await readCanonicalJson(root, bindingPath, bindingSha, sourceFiles, id + " Reviewer run record")).value;
+    if (runRecord.status !== "done" || !objectLike(runRecord.reviewer_binding) || !["approved", "APPROVED"].includes(runRecord.reviewer?.decision)) {
+      fail("pr_canonical_evidence_invalid", id + " has no completed independent Reviewer run record");
+    }
+    const binding = runRecord.reviewer_binding;
+    const assignmentRecord = (await readCanonicalJson(root, binding.assignment_ref, binding.assignment_sha256, sourceFiles, id + " assignment")).value;
+    if (assignmentRecord.assignment_id !== binding.assignment_id || assignmentRecord.feature_id !== id || binding.feature_id !== id
+      || assignmentRecord.attempt !== binding.attempt || !binding.assignment_id) {
+      fail("pr_canonical_evidence_invalid", id + " Reviewer binding does not match the canonical Assignment");
+    }
+    const assignmentRoot = assignmentRecord.project_root ? await realpath(path.resolve(assignmentRecord.project_root)).catch(() => null) : null;
+    const assignedWorktree = assignmentRecord.worktree ? await realpath(path.resolve(root, assignmentRecord.worktree)).catch(() => null) : null;
+    const finalWorktree = final.worktree ? await realpath(path.resolve(root, final.worktree)).catch(() => null) : null;
+    if (assignmentRoot !== root || !assignedWorktree || assignedWorktree !== finalWorktree
+      || assignmentRecord.repository_id !== final.repository || assignmentRecord.expected_branch !== final.branch) {
+      fail("pr_canonical_evidence_invalid", id + " Assignment repository/worktree/branch differs from the final Card record");
+    }
+    if (binding.verifier_evidence?.path !== verifierPath || binding.verifier_evidence?.sha256 !== (verifierRef.sha256 ?? verifierRef.evidence_sha256)
+      || binding.verifier_evidence?.candidate_fingerprint !== candidateFingerprint || binding.candidate_fingerprint !== candidateFingerprint) {
+      fail("pr_canonical_evidence_invalid", id + " Reviewer run is not bound to the actual passing verifier bytes and candidate");
+    }
+    const resultRef = binding.reviewer_result_ref ?? {};
+    const reviewerResult = (await readCanonicalJson(root, resultRef.path, resultRef.sha256, sourceFiles, id + " Reviewer result")).value;
+    try { validateReviewerResult(reviewerResult); }
+    catch (error) { fail("pr_canonical_evidence_invalid", id + " Reviewer result is invalid: " + error.message); }
+    if (!['approved', 'APPROVED'].includes(reviewerResult.decision) || reviewerResult.decision !== runRecord.reviewer.decision) {
+      fail("pr_canonical_evidence_invalid", id + " actual Reviewer result is not approved or differs from its run record");
+    }
+    if (reviewerRef.candidate_fingerprint && reviewerRef.candidate_fingerprint !== candidateFingerprint) fail("pr_canonical_evidence_invalid", id + " Reviewer summary differs from the bound candidate");
+
+    const docs = card.docs_impact ?? card.documentation_impact ?? {};
+    const docsPath = docs.reference ?? docs.path;
+    const docsSha = sourceFiles.get(docsPath);
+    if (!text(docsPath) || !SHA256.test(docsSha ?? "")) fail("pr_canonical_evidence_invalid", id + " documentation-impact source is not byte-bound");
+    const resolvedDocs = path.resolve(root, docsPath);
+    const physicalDocs = await realpath(resolvedDocs).catch(() => null);
+    if (!physicalDocs || (physicalDocs !== root && !physicalDocs.startsWith(root + path.sep)) || hash(await readFile(physicalDocs)) !== docsSha) {
+      fail("pr_canonical_evidence_invalid", id + " documentation-impact source is missing or stale");
+    }
+  }
+  return verifierByCard;
+}
+
+async function preflightGroup(group, snapshot, runner, gh, checkHost, projectRoot, includedCards, canonicalVerifiers = null) {
   for (const id of group.card_ids) {
     const card = snapshot.cards.find((entry) => idOf(entry) === id);
     const final = card?.final ?? {};
@@ -482,6 +679,16 @@ async function preflightGroup(group, snapshot, runner, gh, checkHost, projectRoo
       expected: expectedCommits,
       actual: actualCommits,
     });
+  }
+  if (canonicalVerifiers) {
+    for (const id of group.card_ids) {
+      const evidence = canonicalVerifiers.get(id);
+      const commit = snapshot.cards.find((card) => idOf(card) === id)?.final?.commit;
+      const committed = await calculateCandidateFingerprintAtCommit(worktree, { baseCommit: group.base_commit, commit });
+      if (!candidateManifestsBind(evidence?.candidate_manifest, committed.manifest, { expectedBaseCommit: group.base_commit })) {
+        fail("pr_card_commit_candidate_mismatch", "Final commit content differs from the independently verified candidate for Card " + id, { group_id: group.id, card_id: id });
+      }
+    }
   }
   for (const id of group.card_ids) {
     const card = snapshot.cards.find((entry) => idOf(entry) === id);
@@ -543,8 +750,11 @@ function prBody(plan, group, snapshot) {
 export async function prepareDraftPullRequests(plan, snapshot, { execute = false, runner = defaultRunner, gh = "gh", onDraft = null, projectRoot = process.cwd() } = {}) {
   const validation = validatePrPlan(plan, snapshot);
   if (!validation.valid) fail("pr_plan_invalid", validation.errors.map((item) => item.message).join("; "), { errors: validation.errors });
-  const approval = validatePlanApproval(plan);
+  const approval = plan.structural_approval
+    ? validateEmbeddedStructuralApproval(plan.structural_approval, plan, snapshot)
+    : validatePlanApproval(plan);
   if (!approval.valid) fail("pr_plan_approval_invalid", approval.errors.map((item) => item.message).join("; "), { errors: approval.errors });
+  const canonicalVerifiers = plan.structural_approval ? await validateCanonicalDeliveryEvidence(snapshot, projectRoot) : null;
   if (validation.stacked_unsupported) fail("stacked_required/unsupported", "Cross-PR dependencies require stacked execution; automatic creation is refused", {
     dependencies: plan.groups.filter((group) => group.dependencies.length).map((group) => ({ group: group.id, depends_on: group.dependencies })),
   });
@@ -556,7 +766,7 @@ export async function prepareDraftPullRequests(plan, snapshot, { execute = false
       return card ? [...evidenceProblems(card), ...evidenceReferenceProblems(card, snapshot)] : ["missing Card " + id];
     });
     if (cardErrors.length) fail("pr_group_evidence_incomplete", cardErrors.join("; "), { group_id: group.id, errors: cardErrors });
-    readiness.push(await preflightGroup(group, snapshot, runner, gh, execute, projectRoot, includedCards));
+    readiness.push(await preflightGroup(group, snapshot, runner, gh, execute, projectRoot, includedCards, canonicalVerifiers));
   }
   const manual = readiness.filter((item) => item.manual_handoff);
   if (manual.length) return { status: "manual_handoff", reason: "unsupported_git_host", details: manual, plan_sha256: approval.plan_sha256, writes_performed: false };
@@ -611,6 +821,36 @@ export async function validateSnapshotSources(snapshot, projectRoot, { queuePars
     const actual = hash(await readFile(physical));
     if (actual !== entry.sha256) errors.push(err("pr_source_drift", "Canonical source changed: " + entry.path));
   }
+  const sourceFiles = new Map(snapshot.source.files.map((entry) => [entry.path, entry.sha256]));
+  for (const card of snapshot.cards ?? []) {
+    if (!card.source_path && !card.source_sha256) continue;
+    if (!text(card.source_path) || !SHA256.test(card.source_sha256 ?? "") || sourceFiles.get(card.source_path) !== card.source_sha256) {
+      errors.push(err("pr_card_source_binding_invalid", "Card source path/hash is not byte-bound: " + idOf(card)));
+      continue;
+    }
+    const physical = await realpath(path.resolve(root, card.source_path)).catch(() => null);
+    if (!physical || (physical !== root && !physical.startsWith(root + path.sep))) continue;
+    const cardText = await readFile(physical, "utf8");
+    const heading = cardText.match(/^#\s+([^\s—–]+)(?:\s+[—–-]\s+(.+))?\s*$/m);
+    if (!heading || heading[1] !== idOf(card)) errors.push(err("pr_card_identity_mismatch", "Card source heading does not identify " + idOf(card)));
+    else if (heading[2] && text(card.title) && heading[2].trim() !== text(card.title)) errors.push(err("pr_card_identity_mismatch", "Card source title differs from the snapshot: " + idOf(card)));
+    const metadata = new Map();
+    for (const line of cardText.split(/\r?\n/)) {
+      const match = line.match(/^\s*[-*]\s*(Target repository|Dependencies):\s*(.*?)\s*$/i);
+      if (match) metadata.set(match[1].toLowerCase(), match[2].replaceAll("`", "").trim());
+    }
+    const declaredRepository = metadata.get("target repository");
+    if (declaredRepository && !/^<.*>$/.test(declaredRepository) && declaredRepository !== "not applicable" && declaredRepository !== repoOf(card)) {
+      errors.push(err("pr_card_repository_drift", "Card source repository differs from the snapshot: " + idOf(card)));
+    }
+    const declaredDependencies = metadata.get("dependencies");
+    if (declaredDependencies && !/^<.*>$/.test(declaredDependencies)) {
+      const parsedDependencies = /^(?:none|n\/a|not applicable)$/i.test(declaredDependencies)
+        ? []
+        : list(declaredDependencies.split(/[,;]/));
+      if (stableHash(parsedDependencies) !== stableHash(depsOf(card))) errors.push(err("pr_card_dependency_drift", "Card source dependencies differ from the snapshot: " + idOf(card)));
+    }
+  }
   const files = snapshot.source.files;
   const queue = files.find((entry) => entry.path === (snapshot.source.queue_path ?? ".loop/work-queue.yaml"));
   const project = files.find((entry) => entry.path === (snapshot.source.project_path ?? "project.yaml"));
@@ -622,6 +862,14 @@ export async function validateSnapshotSources(snapshot, projectRoot, { queuePars
     else {
       const ids = parsed.items.map((item) => item.id).sort();
       if (stableHash(ids) !== stableHash([...(snapshot.canonical_card_ids ?? [])].sort())) errors.push(err("pr_queue_card_set_drift", "Snapshot Card IDs differ from canonical work queue"));
+      const cards = new Map((snapshot.cards ?? []).map((card) => [idOf(card), card]));
+      for (const item of parsed.items) {
+        const card = cards.get(item.id);
+        if (!card) continue;
+        if (item.title !== undefined && text(item.title) !== text(card.title)) errors.push(err("pr_queue_card_drift", "Snapshot Card title differs from canonical work queue: " + item.id));
+        if (item.target_repository !== undefined && text(item.target_repository) !== repoOf(card)) errors.push(err("pr_queue_card_drift", "Snapshot repository differs from canonical work queue: " + item.id));
+        if (stableHash(depsOf(card)) !== stableHash(list(item.depends_on))) errors.push(err("pr_queue_card_drift", "Snapshot dependencies differ from canonical work queue: " + item.id));
+      }
     }
   }
   return { valid: errors.length === 0, errors };

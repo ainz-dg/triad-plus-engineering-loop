@@ -8,13 +8,17 @@ import { fileURLToPath } from "node:url";
 import {
   approvePrPlan,
   buildPrPlan,
+  createStructuralApproval,
   prepareDraftPullRequests,
   prGroupId,
+  prPlanSha256,
   validatePlanApproval,
   validatePrPlan,
+  validateStructuralApproval,
   validateSnapshotSources,
 } from "../runtime/lib/pr-planning.mjs";
 import { parseWorkQueueItems } from "../cockpit/server/work-queue.mjs";
+import { calculateCandidateFingerprintAtCommit } from "../runtime/lib/fingerprint.mjs";
 
 const QUEUE_SHA = "1".repeat(64);
 const PROJECT_SHA = "2".repeat(64);
@@ -34,6 +38,48 @@ function repository(id = "repo-a") {
     remote: "origin",
     remote_url: GITHUB_URL,
   };
+}
+
+// Pre-run structural authorization remains valid as terminal evidence and
+// final commits arrive, but requires a fresh owner decision for structural drift.
+{
+  const source = snapshot([
+    card("CARD-1", { review_group: "left" }),
+    card("CARD-2", { review_group: "right" }),
+  ]);
+  for (const entry of source.cards) {
+    entry.source_path = "features/" + entry.id + ".md";
+    entry.source_sha256 = createHash("sha256").update("canonical " + entry.id).digest("hex");
+    source.source.files.push({ path: entry.source_path, sha256: entry.source_sha256 });
+  }
+  const preRunPlan = boundPlan(source, "review-friendly");
+  const intent = createStructuralApproval(preRunPlan, source, { owner: "Ainz Ooal Gown", approvedAt: "2026-10-23T00:00:00.000Z" });
+  assert.equal(validateStructuralApproval(intent, preRunPlan, source).valid, true);
+
+  const completed = structuredClone(source);
+  completed.cards[0].status = "approved";
+  completed.cards[1].status = "approved";
+  completed.cards[0].test_summary = "tests pass";
+  completed.cards[0].final = { repository: "repo-a", branch: "feature/pr-repo-a-" + "x", commit: "6".repeat(40), base_commit: BASE_SHA, worktree: "worktrees/one", candidate_fingerprint: CANDIDATE };
+  const bindings = Object.fromEntries(preRunPlan.groups.map((group) => [group.id, group]));
+  const deliveryPlan = buildPrPlan(completed, { mode: "review-friendly", bindings });
+  assert.equal(validateStructuralApproval(intent, deliveryPlan, completed).valid, true, "dynamic evidence and final commit details are outside the approval fingerprint");
+  deliveryPlan.structural_approval = { ...intent.approval };
+  deliveryPlan.plan_sha256 = prPlanSha256(deliveryPlan);
+  assert.equal(validatePrPlan(deliveryPlan, completed).valid, true);
+
+  const dependencyDrift = structuredClone(completed);
+  dependencyDrift.cards[0].depends_on = ["CARD-2"];
+  const driftedPlan = buildPrPlan(dependencyDrift, { mode: "review-friendly", bindings });
+  assert.equal(validateStructuralApproval(intent, driftedPlan, dependencyDrift).errors.some((item) => item.code === "pr_structural_drift"), true);
+
+  const branchDrift = Object.fromEntries(preRunPlan.groups.map((group) => [group.id, { ...group, branch: group.branch + "-changed" }]));
+  const changedBindingsPlan = buildPrPlan(completed, { mode: "review-friendly", bindings: branchDrift });
+  assert.equal(validateStructuralApproval(intent, changedBindingsPlan, completed).errors.some((item) => item.code === "pr_structural_drift"), true);
+
+  const missingCardSource = structuredClone(source);
+  delete missingCardSource.cards[0].source_path;
+  assert.throws(() => createStructuralApproval(buildPrPlan(missingCardSource, { mode: "review-friendly", bindings }), missingCardSource, { owner: "Ainz" }), { code: "pr_structural_card_source_missing" });
 }
 
 function card(id, overrides = {}) {
@@ -230,6 +276,93 @@ async function integrationSnapshot(fixture) {
   return { source, plan: approvePrPlan(plan, { owner: "Ainz Ooal Gown", approvedAt: "2026-10-21T00:00:00.000Z" }) };
 }
 
+async function attachCanonicalDeliveryEvidence(fixture, source) {
+  const digest = (value) => createHash("sha256").update(value).digest("hex");
+  const boundFiles = new Map((source.source.files ?? []).map((entry) => [entry.path, entry.sha256]));
+  const writeBound = async (relativePath, value) => {
+    const target = path.join(fixture.root, relativePath);
+    await mkdir(path.dirname(target), { recursive: true });
+    const bytes = typeof value === "string" ? value : JSON.stringify(value, null, 2) + "\n";
+    await writeFile(target, bytes);
+    const sha256 = digest(bytes);
+    boundFiles.set(relativePath, sha256);
+    return { path: relativePath, sha256 };
+  };
+  source.source.canonical_evidence = true;
+  for (const card of source.cards) {
+    const cardBytes = await readFile(path.join(fixture.root, card.source_path));
+    if (digest(cardBytes) !== card.source_sha256) throw new Error("test Card baseline does not match its recorded source hash");
+    boundFiles.set(card.source_path, card.source_sha256);
+    const final = card.final;
+    const assignmentId = "assignment-" + card.id;
+    const runId = "run-" + card.id;
+    const assignmentPath = ".loop/runtime/assignments/" + card.id + ".json";
+    const verifierPath = card.verifier.evidence_path;
+    const reviewerResultPath = ".loop/runtime/reviewer-results/" + card.id + ".json";
+    const reviewerRunPath = ".loop/runtime/run-results/" + card.id + ".json";
+    const docsPath = card.docs_impact.reference;
+    const candidate = await calculateCandidateFingerprintAtCommit(final.worktree, { baseCommit: final.base_commit, commit: final.commit });
+    const assignment = {
+      schema_version: 1,
+      assignment_id: assignmentId,
+      feature_id: card.id,
+      attempt: 1,
+      project_root: fixture.root,
+      repository_id: final.repository,
+      worktree: final.worktree,
+      expected_branch: final.branch,
+      verification_run_id: runId,
+    };
+    const assignmentRef = await writeBound(assignmentPath, assignment);
+    const verifierEvidence = {
+      schema_version: 1,
+      run_id: runId,
+      feature_id: card.id,
+      attempt: 1,
+      assignment_id: assignmentId,
+      assignment_sha256: assignmentRef.sha256,
+      trigger: { event: "manual_explicit_dispatch", agent_id: "developer-" + card.id, agent_type: "triad_developer" },
+      baseline: { prd_sha256: PROJECT_SHA, card_sha256: card.source_sha256, git_head: candidate.manifest.git_head, candidate_fingerprint: final.candidate_fingerprint, branch: final.branch },
+      candidate_manifest: candidate.manifest,
+      gates: [],
+      required_gates_passed: true,
+      status: "pass",
+      created_at: "2026-10-23T00:00:00.000Z",
+    };
+    const verifierRef = await writeBound(verifierPath, verifierEvidence);
+    const reviewerResultRef = await writeBound(reviewerResultPath, { decision: "approved", summary: "Independent Reviewer approved the verified candidate." });
+    const binding = {
+      schema_version: 2,
+      assignment_ref: assignmentPath,
+      assignment_sha256: assignmentRef.sha256,
+      assignment_id: assignmentId,
+      feature_id: card.id,
+      attempt: 1,
+      assignment_packet: null,
+      verifier_evidence: {
+        path: verifierPath,
+        sha256: verifierRef.sha256,
+        run_id: runId,
+        feature_id: card.id,
+        attempt: 1,
+        assignment_id: assignmentId,
+        assignment_sha256: assignmentRef.sha256,
+        assignment_packet: null,
+        candidate_fingerprint: final.candidate_fingerprint,
+      },
+      candidate_fingerprint: final.candidate_fingerprint,
+      reviewer_result_ref: reviewerResultRef,
+    };
+    const reviewerRun = { status: "done", reviewer: { decision: "approved" }, reviewer_binding: binding };
+    const reviewerRunRef = await writeBound(reviewerRunPath, reviewerRun);
+    const docsRef = await writeBound(docsPath, { schema_version: 1, card_id: card.id, status: "not_affected" });
+    card.verifier = { status: "pass", candidate_fingerprint: final.candidate_fingerprint, evidence_path: verifierPath, sha256: verifierRef.sha256, run_id: runId };
+    card.reviewer = { decision: "approved", candidate_fingerprint: final.candidate_fingerprint, evidence_path: reviewerRunRef.path, sha256: reviewerRunRef.sha256, binding_path: reviewerRunRef.path };
+    card.docs_impact = { status: "not_affected", reference: docsRef.path };
+  }
+  source.source.files = [...boundFiles.entries()].map(([filePath, sha256]) => ({ path: filePath, sha256 })).sort((a, b) => a.path.localeCompare(b.path));
+}
+
 // All four modes make distinct choices when the canonical Card hints differ.
 {
   const cards = [
@@ -263,6 +396,84 @@ async function integrationSnapshot(fixture) {
     const escaped = spawnSync(process.execPath, [cli, "preview", "--project", root, "--snapshot", "../outside.json"], { cwd: root, encoding: "utf8" });
     assert.equal(escaped.status, 1);
     assert.match(escaped.stderr, /escapes the Control Workspace/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// The normal CLI records owner-approved pre-run structure and reuses it with
+// refreshed queue state without another owner prompt.
+{
+  const root = await mkdtemp(path.join(os.tmpdir(), "triad-pr-intent-cli-"));
+  try {
+    const cli = fileURLToPath(new URL("../runtime/triad-pr-plan.mjs", import.meta.url));
+    const product = path.join(root, "product");
+    await mkdir(path.join(root, ".loop"), { recursive: true });
+    await mkdir(path.join(root, "features"), { recursive: true });
+    await mkdir(product, { recursive: true });
+    const digest = (value) => createHash("sha256").update(value).digest("hex");
+    const queuePath = ".loop/work-queue.yaml";
+    const projectPath = "project.yaml";
+    const cardDocs = [
+      "# CARD-1 — Card 1\n\n- Target repository: repo-a\n- Dependencies: none\n",
+      "# CARD-2 — Card 2\n\n- Target repository: repo-a\n- Dependencies: none\n",
+    ];
+    const cardRecords = [card("CARD-1", { title: "Card 1", review_group: "left", expected_paths: ["one.txt"], source_path: "features/CARD-1.md", source_sha256: digest(cardDocs[0]) }),
+      card("CARD-2", { title: "Card 2", review_group: "right", expected_paths: ["two.txt"], source_path: "features/CARD-2.md", source_sha256: digest(cardDocs[1]) })];
+    const projectYaml = `repositories:\n  - id: repo-a\n    path: ${product}\n    worktree: worktrees/default\n    base_branch: main\n    project_branch: feature/project\n`;
+    const makeQueue = (state) => `version: 2\nitems:\n  - id: CARD-1\n    title: Card 1\n    state: ${state}\n    target_repository: repo-a\n    depends_on: []\n  - id: CARD-2\n    title: Card 2\n    state: ${state}\n    target_repository: repo-a\n    depends_on: []\n`;
+    const queue = makeQueue("ready");
+    await writeFile(path.join(root, queuePath), queue);
+    await writeFile(path.join(root, projectPath), projectYaml);
+    for (let index = 0; index < cardDocs.length; index += 1) await writeFile(path.join(root, cardRecords[index].source_path), cardDocs[index]);
+    const sourceFiles = [
+      { path: queuePath, sha256: digest(queue) },
+      { path: projectPath, sha256: digest(projectYaml) },
+      ...cardRecords.map((item) => ({ path: item.source_path, sha256: item.source_sha256 })),
+    ];
+    const source = {
+      project_id: "cli-structural-intent",
+      canonical_card_ids: cardRecords.map((item) => item.id).sort(),
+      source: { queue_path: queuePath, queue_sha256: digest(queue), project_path: projectPath, project_sha256: digest(projectYaml), files: sourceFiles },
+      repositories: [{ id: "repo-a", path: product, worktree: "worktrees/default", base_branch: "main", project_branch: "feature/project", base_commit: BASE_SHA, remote: "origin", remote_url: GITHUB_URL }],
+      cards: cardRecords,
+    };
+    const unbound = buildPrPlan(source, { mode: "review-friendly" });
+    source.group_bindings = Object.fromEntries(unbound.groups.map((group, index) => [group.id, {
+      branch: "draft/" + (index + 1), worktree: "worktrees/draft-" + (index + 1), base_branch: "main",
+      base_commit: BASE_SHA, remote: "origin", remote_url: GITHUB_URL,
+    }]));
+    await writeFile(path.join(root, ".loop/runtime-pr-pre.json"), JSON.stringify(source, null, 2));
+    const bound = buildPrPlan(source, { mode: "review-friendly", bindings: source.group_bindings });
+    const approval = createStructuralApproval(bound, source, { owner: "Ainz Ooal Gown" });
+    const intentPath = ".loop/runtime/pr-structure-approval.json";
+    const wrongPhrase = spawnSync(process.execPath, [cli, "intent", "--project", root, "--snapshot", ".loop/runtime-pr-pre.json", "--mode", "review-friendly", "--owner", "Ainz Ooal Gown"], {
+      cwd: root, input: "not the approval phrase\n", encoding: "utf8",
+    });
+    assert.equal(wrongPhrase.status, 1);
+    assert.match(wrongPhrase.stderr, /Approval phrase did not match/);
+    assert.equal(await readFile(path.join(root, intentPath), "utf8").then(() => true, () => false), false);
+
+    const recorded = spawnSync(process.execPath, [cli, "intent", "--project", root, "--snapshot", ".loop/runtime-pr-pre.json", "--mode", "review-friendly", "--owner", "Ainz Ooal Gown"], {
+      cwd: root, input: `approve ${approval.approval.structural_sha256.slice(0, 12)}\n`, encoding: "utf8",
+    });
+    assert.equal(recorded.status, 0, recorded.stderr);
+    assert.match(recorded.stdout, /worktrees\/draft-1/);
+    assert.match(recorded.stdout, /Structural owner approval recorded/);
+
+    const postQueue = makeQueue("approved");
+    await writeFile(path.join(root, queuePath), postQueue);
+    const postRun = structuredClone(source);
+    postRun.source.queue_sha256 = digest(postQueue);
+    postRun.source.files = postRun.source.files.map((entry) => entry.path === queuePath ? { ...entry, sha256: digest(postQueue) } : entry);
+    postRun.cards.forEach((entry) => { entry.status = "approved"; entry.test_summary = "verified"; });
+    await writeFile(path.join(root, ".loop/runtime-pr-post.json"), JSON.stringify(postRun, null, 2));
+    const preview = spawnSync(process.execPath, [cli, "preview", "--project", root, "--snapshot", ".loop/runtime-pr-post.json", "--intent", intentPath], { cwd: root, encoding: "utf8" });
+    assert.equal(preview.status, 0, preview.stderr + preview.stdout);
+    const plan = JSON.parse(await readFile(path.join(root, ".loop/runtime/pr_plan.json"), "utf8"));
+    assert.equal(plan.groups.length, 2);
+    assert.equal(plan.structural_approval.structural_sha256, approval.approval.structural_sha256);
+    assert.equal(validatePrPlan(plan, postRun).valid, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -321,10 +532,14 @@ async function integrationSnapshot(fixture) {
     await mkdir(path.join(root, ".loop"), { recursive: true });
     const queuePath = path.join(root, ".loop", "work-queue.yaml");
     const projectPath = path.join(root, "project.yaml");
+    const cardPath = path.join(root, "features", "A.md");
     const queue = "version: 2\nitems:\n  - id: A\n    state: ready\n    target_repository: repo-a\n    depends_on: []\n";
     const project = "repositories:\n  - id: repo-a\n    path: /tmp/product-repository\n    base_branch: main\n    project_branch: feature/project\n    worktree: worktrees/product\n";
+    const cardSource = "# A — Card A\n\n- Target repository: repo-a\n- Dependencies: none\n";
     await writeFile(queuePath, queue);
     await writeFile(projectPath, project);
+    await mkdir(path.dirname(cardPath), { recursive: true });
+    await writeFile(cardPath, cardSource);
     const digest = (value) => createHash("sha256").update(value).digest("hex");
     const source = snapshot([card("A")], [{
       id: "repo-a", path: "/tmp/product-repository", worktree: "worktrees/product",
@@ -335,9 +550,17 @@ async function integrationSnapshot(fixture) {
     source.source.files = [
       { path: ".loop/work-queue.yaml", sha256: digest(queue) },
       { path: "project.yaml", sha256: digest(project) },
+      { path: "features/A.md", sha256: digest(cardSource) },
     ];
+    source.cards[0].source_path = "features/A.md";
+    source.cards[0].source_sha256 = digest(cardSource);
     const valid = await validateSnapshotSources(source, root, { queueParser: parseWorkQueueItems });
     assert.equal(valid.valid, true, JSON.stringify(valid.errors));
+    await writeFile(cardPath, cardSource.replace("# A — Card A", "# B — Wrong identity"));
+    const wrongCard = await validateSnapshotSources(source, root, { queueParser: parseWorkQueueItems });
+    assert.equal(wrongCard.valid, false);
+    assert.equal(wrongCard.errors.some((item) => item.code === "pr_source_drift" || item.code === "pr_card_identity_mismatch"), true);
+    await writeFile(cardPath, cardSource);
     await writeFile(queuePath, queue.replace("state: ready", "state: blocked"));
     const drifted = await validateSnapshotSources(source, root, { queueParser: parseWorkQueueItems });
     assert.equal(drifted.valid, false);
@@ -377,6 +600,71 @@ async function integrationSnapshot(fixture) {
     const retry = await prepareDraftPullRequests(plan, source, { execute: true, runner: fake.runner, projectRoot: fixture.root });
     assert.equal(retry.drafts.every((item) => item.status === "already_created"), true);
     assert.equal(fake.creates, 2);
+
+    const structuralSource = structuredClone(source);
+    for (const entry of structuralSource.cards) {
+      entry.source_path = "features/" + entry.id + ".md";
+      const cardText = "# " + entry.id + " — " + entry.title + "\n\n- Target repository: repo-a\n- Dependencies: none\n";
+      entry.source_sha256 = createHash("sha256").update(cardText).digest("hex");
+      await mkdir(path.dirname(path.join(fixture.root, entry.source_path)), { recursive: true });
+      await writeFile(path.join(fixture.root, entry.source_path), cardText);
+      structuralSource.source.files.push({ path: entry.source_path, sha256: entry.source_sha256 });
+    }
+    const bindings = Object.fromEntries(plan.groups.map((group) => [group.id, group]));
+    const preRun = structuredClone(structuralSource);
+    for (const entry of preRun.cards) {
+      entry.status = "ready";
+      delete entry.verifier;
+      delete entry.reviewer;
+      delete entry.docs_impact;
+      delete entry.final;
+      delete entry.test_summary;
+    }
+    const preRunPlan = buildPrPlan(preRun, { mode: "review-friendly", bindings });
+    const structuralIntent = createStructuralApproval(preRunPlan, preRun, { owner: "Ainz Ooal Gown" });
+    await attachCanonicalDeliveryEvidence(fixture, structuralSource);
+    const structuralPlan = buildPrPlan(structuralSource, { mode: "review-friendly", bindings });
+    structuralPlan.structural_approval = { ...structuralIntent.approval };
+    structuralPlan.plan_sha256 = prPlanSha256(structuralPlan);
+    assert.equal(validatePrPlan(structuralPlan, structuralSource).valid, true);
+    const noCanonicalFlag = structuredClone(structuralSource);
+    noCanonicalFlag.source.canonical_evidence = false;
+    const noCanonicalPlan = buildPrPlan(noCanonicalFlag, { mode: "review-friendly", bindings });
+    noCanonicalPlan.structural_approval = { ...structuralIntent.approval };
+    noCanonicalPlan.plan_sha256 = prPlanSha256(noCanonicalPlan);
+    await assert.rejects(prepareDraftPullRequests(noCanonicalPlan, noCanonicalFlag, { projectRoot: fixture.root }), { code: "pr_canonical_evidence_required" });
+
+    const verifierFile = path.join(fixture.root, structuralSource.cards[0].verifier.evidence_path);
+    const verifierBytes = await readFile(verifierFile);
+    await writeFile(verifierFile, verifierBytes.toString("utf8").replace('"status": "pass"', '"status": "fail"'));
+    const staleVerifierFake = makeGhRunner();
+    await assert.rejects(prepareDraftPullRequests(structuralPlan, structuralSource, { execute: true, runner: staleVerifierFake.runner, projectRoot: fixture.root }), { code: "pr_canonical_evidence_invalid" });
+    assert.equal(staleVerifierFake.creates, 0);
+    await writeFile(verifierFile, verifierBytes);
+
+    const structuralFake = makeGhRunner({ repoRoot: fixture.repo });
+    const structuralDryRun = await prepareDraftPullRequests(structuralPlan, structuralSource, { runner: structuralFake.runner, projectRoot: fixture.root });
+    assert.equal(structuralDryRun.draft_count, 2);
+    const structuralCreated = await prepareDraftPullRequests(structuralPlan, structuralSource, { execute: true, runner: structuralFake.runner, projectRoot: fixture.root });
+    assert.equal(structuralCreated.drafts.length, 2);
+    assert.equal(structuralFake.creates, 2);
+    const structuralRetry = await prepareDraftPullRequests(structuralPlan, structuralSource, { execute: true, runner: structuralFake.runner, projectRoot: fixture.root });
+    assert.equal(structuralRetry.drafts.every((item) => item.status === "already_created"), true);
+    assert.equal(structuralFake.creates, 2);
+
+    const rework = structuredClone(structuralSource);
+    rework.cards[0].reviewer.decision = "rework";
+    const reworkPlan = buildPrPlan(rework, { mode: "review-friendly", bindings });
+    reworkPlan.structural_approval = { ...structuralIntent.approval };
+    reworkPlan.plan_sha256 = prPlanSha256(reworkPlan);
+    const reworkFake = makeGhRunner();
+    await assert.rejects(prepareDraftPullRequests(reworkPlan, rework, { execute: true, runner: reworkFake.runner, projectRoot: fixture.root }), { code: "pr_group_evidence_incomplete" });
+    assert.equal(reworkFake.creates, 0);
+
+    const missingApproval = structuredClone(structuralPlan);
+    delete missingApproval.structural_approval;
+    missingApproval.plan_sha256 = prPlanSha256(missingApproval);
+    await assert.rejects(prepareDraftPullRequests(missingApproval, structuralSource, { execute: true, runner: makeGhRunner().runner, projectRoot: fixture.root }), { code: "pr_plan_approval_invalid" });
 
     const withBaseDependency = structuredClone(source);
     withBaseDependency.cards[0].depends_on = ["BASE-CARD"];
