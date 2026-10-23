@@ -10,10 +10,13 @@ import { parseRepositoryMappings } from "./lib/assignment-packet.mjs";
 import {
   approvePrPlan,
   buildPrPlan,
+  createStructuralApproval,
   prepareDraftPullRequests,
+  prPlanSha256,
   renderPrPlanTable,
   validatePlanApproval,
   validatePrPlan,
+  validateStructuralApproval,
   validateSnapshotSources,
 } from "./lib/pr-planning.mjs";
 
@@ -21,7 +24,7 @@ function args(argv) {
   const [command, ...tail] = argv;
   if (command === "--help" || command === "-h") return { help: true };
   const result = { command, execute: false };
-  const valueOptions = new Set(["--project", "--snapshot", "--plan", "--output", "--mode", "--owner"]);
+  const valueOptions = new Set(["--project", "--snapshot", "--plan", "--output", "--mode", "--owner", "--intent"]);
   for (let i = 0; i < tail.length; i += 1) {
     const key = tail[i];
     if (key === "--execute") { result.execute = true; continue; }
@@ -36,11 +39,13 @@ function usage() {
   return [
     "Triad+ PR planning",
     "",
+    "  node runtime/triad-pr-plan.mjs intent --project <control-workspace> --snapshot <pre-run-snapshot.json> --mode <auto|single|compact|review-friendly> --owner <owner-name> [--output <pr-structure-approval.json>]",
     "  node runtime/triad-pr-plan.mjs preview --project <control-workspace> --snapshot <snapshot.json> --mode <auto|single|compact|review-friendly> [--output <pr_plan.json>]",
+    "  node runtime/triad-pr-plan.mjs preview --project <control-workspace> --snapshot <post-run-snapshot.json> --intent <pr-structure-approval.json> [--output <pr_plan.json>]",
     "  node runtime/triad-pr-plan.mjs approve --project <control-workspace> --snapshot <snapshot.json> --plan <pr_plan.json> --owner <owner-name>",
     "  node runtime/triad-pr-plan.mjs draft --project <control-workspace> --snapshot <snapshot.json> --plan <pr_plan.json> [--execute]",
     "",
-    "Preview and draft are read-only by default. Draft creation requires an approved plan and --execute; it creates draft PRs only.",
+    "Pre-run structural approval survives refreshed evidence and final commits. Legacy post-run approval remains supported; --execute creates draft PRs only.",
   ].join("\n");
 }
 
@@ -124,14 +129,55 @@ function showValidation(plan, snapshot) {
 
 async function commandMain(options) {
   if (options.help) { stdout.write(usage() + "\n"); return 0; }
-  if (!options.command || !["preview", "approve", "draft"].includes(options.command)) throw new Error(usage());
+  if (!options.command || !["intent", "preview", "approve", "draft"].includes(options.command)) throw new Error(usage());
   const project = await realpath(options.project ?? "").catch(() => null);
   if (!project) throw new Error("--project must name an existing Control Workspace");
   const snapshotPath = await projectFile(project, options.snapshot, "snapshot", { mustExist: true });
   const snapshot = await verifiedSnapshot(snapshotPath, project);
 
-  if (options.command === "preview") {
+  if (options.command === "intent") {
+    if (!options.owner) throw new Error("--owner is required to record explicit structural approval");
     const plan = buildPrPlan(snapshot, { mode: options.mode ?? "auto", bindings: snapshot.group_bindings ?? {} });
+    const validation = showValidation(plan, snapshot);
+    if (!validation.valid) return 2;
+    const approval = createStructuralApproval(plan, snapshot, { owner: options.owner });
+    const expected = "approve " + approval.approval.structural_sha256.slice(0, 12);
+    stdout.write("\nThis authorizes only pre-run Card grouping, repository/dependency scope, and exact draft branch/worktree/base/remote bindings. It does not approve Card work, tests, merges, or releases.\n");
+    stdout.write("Structural intent SHA-256: " + approval.approval.structural_sha256 + "\nType exactly " + JSON.stringify(expected) + " to approve: ");
+    const rl = createInterface({ input: stdin, output: stdout });
+    const answer = await rl.question("");
+    rl.close();
+    if (answer.trim() !== expected) throw new Error("Approval phrase did not match; no structural authorization was recorded");
+    const output = await projectFile(project, options.output ?? ".loop/runtime/pr-structure-approval.json", "output");
+    await writePlanJson(output, approval);
+    stdout.write("Structural owner approval recorded (draft-only): " + path.relative(project, output) + "\n");
+    return 0;
+  }
+
+  if (options.command === "preview") {
+    let plan;
+    if (options.intent) {
+      const intentPath = await projectFile(project, options.intent, "intent", { mustExist: true });
+      const intent = await readJson(intentPath, "PR structural approval");
+      const groups = intent.intent?.groups;
+      if (!Array.isArray(groups)) throw new Error("Structural approval does not contain approved groups");
+      const bindings = Object.fromEntries(groups.map((group) => [group.id, group]));
+      plan = buildPrPlan(snapshot, {
+        mode: intent.intent.mode,
+        reviewLimitFiles: intent.intent.review_limit_files,
+        bindings,
+      });
+      const structural = validateStructuralApproval(intent, plan, snapshot);
+      if (!structural.valid) {
+        stdout.write(renderPrPlanTable(plan) + "\n");
+        for (const item of structural.errors) stdout.write("BLOCKED " + item.code + ": " + item.message + "\n");
+        return 2;
+      }
+      plan.structural_approval = { ...intent.approval };
+      plan.plan_sha256 = prPlanSha256(plan);
+    } else {
+      plan = buildPrPlan(snapshot, { mode: options.mode ?? "auto", bindings: snapshot.group_bindings ?? {} });
+    }
     const validation = showValidation(plan, snapshot);
     if (!validation.valid) return 2;
     const output = await projectFile(project, options.output ?? ".loop/runtime/pr_plan.json", "output");
@@ -161,7 +207,7 @@ async function commandMain(options) {
     return 0;
   }
 
-  const approval = validatePlanApproval(plan);
+  const approval = plan.structural_approval ? { valid: true, errors: [] } : validatePlanApproval(plan);
   if (!approval.valid) throw new Error(approval.errors.map((item) => item.code + ": " + item.message).join("\n"));
   const result = await prepareDraftPullRequests(plan, snapshot, {
     execute: options.execute,

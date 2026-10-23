@@ -94,6 +94,60 @@ ingested without `status: ready-for-dev`, but an explicit non-ready status stays
 blocked from execution. Ambiguous or unavailable execution context is a
 fail-closed escalation; do not dispatch a Developer or consume retry budget.
 
+## Planned draft-PR structure (opt-in)
+
+When the owner chooses the planned draft-PR path, settle its structure once
+after the canonical queue/Cards and repository mappings are ready, and before
+the first Developer assignment. Present `auto` grouping by default and also
+offer `single`, `compact`, and `review-friendly`; show Card IDs, repository,
+exact branch/worktree/base/remote for every group, dependencies, rationale,
+and expected-path review burden. Keep Cards as the execution and review units;
+never reinterpret or repartition BMAD Stories.
+
+Create `.loop/runtime/pr-structure-input.json` from current `project.yaml`,
+`.loop/work-queue.yaml`, canonical Card files, and declared repository
+bindings. Bind every source file by relative path and SHA-256; include
+`source_path` and `source_sha256` for every Card. Set
+`source.canonical_evidence: true` only on the refreshed terminal snapshot after
+including actual Assignment, verifier, completed Reviewer run, bounded Reviewer
+result, and documentation-impact source files. Use exact group-specific
+branch/worktree/base/remote mappings in `group_bindings`; do not invent a
+product repository, remote, base, or branch. Then record the explicit owner
+decision:
+
+```bash
+node .triad-runtime/triad-pr-plan.mjs intent \
+  --project /absolute/path/to/control-workspace \
+  --snapshot .loop/runtime/pr-structure-input.json \
+  --mode auto --owner "Ainz Ooal Gown"
+```
+
+The owner must inspect the printed plan and type its exact structural digest
+phrase. No first Developer assignment for this opt-in path may begin before
+that approval succeeds. This approves only the immutable delivery structure
+and draft-only effect, not Card work, tests, merge, release, or publication.
+If the owner declines or does not choose this path, retain the existing manual
+post-run delivery route without treating silence as authorization.
+
+After every selected Card has independent verifier and Reviewer approval and
+its final commit, refresh the delivery snapshot from canonical workspace
+evidence and run `triad-pr-plan preview --intent <approved-structure-file>`.
+The CLI rechecks source bytes, canonical queue membership/repository/dependency
+fields, Card identities, project repository mappings, and structural digest.
+Fresh verifier/Reviewer records are read from their byte-bound files, checked
+against the actual Assignment/run/Card identity, and the verifier candidate
+manifest is compared with the final commit tree. They do not ask for a second
+structural approval.
+Run `draft --execute` only when every evidence and Git preflight passes. It may
+create approved draft PRs only and records URLs for idempotent resume.
+
+This slice does not create/populate grouped delivery worktrees, cherry-pick
+commits, or push group branches. If the already-prepared exact group branch and
+worktree are unavailable or do not contain precisely the approved Card commit
+set, stop at the concrete preflight blocker and hand off the exact missing
+branch/worktree mapping. Do not change the Card lifecycle or improvise a Git
+branch lifecycle.
+
 ## Run one card
 
 1. Verify the PRD hash, declared worktree/branch, repository instructions,
@@ -374,9 +428,11 @@ architecture, security, budget, or accepted risk. A bounded hands-on exception
 requires a record of failed delegation, scope, risk, validation, independent
 review, and restoration of normal roles.
 
-After all required cards and project gates pass, commit each approved card if
-needed and normally push declared branches. Never force-push, create/update a
-pull request, publish, release, or start/stop a demo without owner direction.
+After all required Cards and project gates pass, commit each approved Card if
+needed and normally push declared branches. Never force-push, publish, release,
+or start/stop a demo without owner direction. Create/update a pull request only
+through the approved structural-intent path above (draft-only, after all
+preflights) or separate explicit owner direction; never merge it.
 
 ## Delivery closure gate
 
