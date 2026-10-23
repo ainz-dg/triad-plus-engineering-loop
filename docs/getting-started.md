@@ -91,6 +91,17 @@ A declared `in_progress` state is not proof that an agent is currently active;
 Triad+ does not record agent liveness. See the [operating guide](operating-guide.md)
 and the [Italian operating guide](operating-guide.it.md).
 
+### Optional: plan draft PR delivery
+
+Before the first Developer assignment, the Orchestrator can show an opt-in PR
+grouping plan and request **one explicit owner approval** of its structure.
+After normal Card verification and independent review, the approved structure
+can be reused with fresh, byte-bound evidence to prepare draft PRs; no further
+structural approval is needed unless the scope changes. This requires separately
+prepared snapshots and exact group branch/worktree bindings, and never
+authorizes automatic merge or release. The default manual delivery path is
+unchanged. See [PR planning and prerequisites](pr-planning.md).
+
 ## 4. Read the Markdown reports
 
 When canonical Card, attempt, verifier, and Reviewer records are available, the
