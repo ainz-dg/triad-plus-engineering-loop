@@ -347,7 +347,7 @@ function verifyRegistry() {
     integrity: process.env.EXPECTED_INTEGRITY,
     shasum: process.env.EXPECTED_SHASUM,
   });
-  console.log('npm registry identity verified: ' + RELEASE_VERSION + ' ' + registry.dist.integrity + '.');
+  console.log('npm registry identity verified: ' + RELEASE_VERSION + ' ' + registry.integrity + '.');
 }
 
 function verifyRelease() {

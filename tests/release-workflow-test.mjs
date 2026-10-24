@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertNoConflicts,
   assertPublishedRegistry,
@@ -14,6 +18,7 @@ import {
 
 const workflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
 const ownerGuide = readFileSync(new URL('../docs/maintainers/releasing.md', import.meta.url), 'utf8');
+const releaseGuardPath = fileURLToPath(new URL('../scripts/release/release-guard.mjs', import.meta.url));
 const sha = 'a'.repeat(40);
 
 function validDispatch(overrides = {}) {
@@ -141,6 +146,48 @@ test('post-publish registry metadata must match the one verified tarball', () =>
   assert.equal(assertPublishedRegistry({ version: '1.22.1', ...expected }, expected), true);
   assert.throws(() => assertPublishedRegistry({ version: '1.22.1', ...expected, shasum: 'b'.repeat(40) }, expected));
   assert.throws(() => classifyNpmMetadataProbe({ status: 1, stdout: '', stderr: 'npm error code E404' }, '1.22.1'));
+});
+
+test('verify-registry command accepts dotted npm fields and fails closed on mismatches or malformed metadata', () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'triad-release-verify-registry-'));
+  const registryPath = join(tempDirectory, 'registry.json');
+  const integrity = 'sha512-local-fixture';
+  const shasum = 'a'.repeat(40);
+  const runVerifyRegistry = (expectedIntegrity = integrity, expectedShasum = shasum) => spawnSync(
+    process.execPath,
+    [releaseGuardPath, 'verify-registry'],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        REGISTRY_JSON_PATH: registryPath,
+        EXPECTED_INTEGRITY: expectedIntegrity,
+        EXPECTED_SHASUM: expectedShasum,
+      },
+    },
+  );
+
+  try {
+    writeFileSync(registryPath, JSON.stringify({
+      version: '1.22.1',
+      'dist.integrity': integrity,
+      'dist.shasum': shasum,
+    }));
+    const valid = runVerifyRegistry();
+    assert.equal(valid.status, 0, valid.stderr);
+    assert.ok(valid.stdout.includes('npm registry identity verified: 1.22.1 ' + integrity + '.'));
+
+    const mismatched = runVerifyRegistry('sha512-wrong');
+    assert.equal(mismatched.status, 1);
+    assert.match(mismatched.stderr, /does not match the verified tarball/);
+
+    writeFileSync(registryPath, JSON.stringify({ version: '1.22.1', 'dist.integrity': integrity }));
+    const malformed = runVerifyRegistry();
+    assert.equal(malformed.status, 1);
+    assert.match(malformed.stderr, /missing a valid dist\.shasum/);
+  } finally {
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
 });
 
 test('post-publish release verification requires exactly two assets with matching API digests', () => {
