@@ -162,7 +162,7 @@ export async function selectChecklist({
       }
       if (items.length > rows) lines.push(`Options ${scrollTop + 1}–${Math.min(items.length, scrollTop + rows)} of ${items.length}`);
       lines.push('', clip(hint, width));
-      if (message) lines.push(style(message, 'error', output));
+      if (message) lines.push(style(clip(message, width), 'error', output));
       if (useScreenControls) {
         // Anchor subsequent frames to the live cursor rather than an absolute
         // row: readline prompts may have scrolled since the one-time brand mark.

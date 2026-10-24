@@ -150,15 +150,32 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   await session.promise;
 }
 
-// Optional inline errors can disappear on the next frame without leaving a
-// stale message row in the rendered terminal cells.
+// A wrapped inline error must not desynchronize the logical frame height from
+// physical terminal rows; the following redraw stays at the original anchor.
 {
-  const session = start({ minimum: 1 });
-  keys(session.input, '\r ');
-  const result = terminalScreen(session.output.writes.join(''), { rows: 16, columns: 48 }).join('\n');
-  assert.doesNotMatch(result, /Select a row with Space/, 'a cleared inline error is absent from the visible terminal cells');
+  process.env.NO_COLOR = '1';
+  const session = start({
+    minimum: 1,
+    columns: 48,
+    items: [
+      { kind: 'checkbox', id: 'one', label: 'one' },
+      { kind: 'checkbox', id: 'two', label: 'two' },
+    ],
+  });
+  keys(session.input, '\r'); // zero selection paints the long inline error
+  assert.match(session.output.writes.join(''), /Select a row with Space/);
+  keys(session.input, ' \u001b[B'); // select, move focus, and redraw
+  const writes = session.output.writes.join('');
+  const screen = terminalScreen(writes, { rows: 16, columns: 48 });
+  assert.equal(screen.filter((line) => line.includes('Select repositories')).length, 1, `title appears once:\n${screen.join('\n')}`);
+  assert.ok(screen[1].includes('Select repositories'), `title remains at row 2:\n${screen.join('\n')}`);
+  assert.equal(screen[2].trim(), 'Selection: 1 selected', `selection stays at row 3:\n${screen.join('\n')}`);
+  assert.ok(screen[5].includes('› [ ] two'), `focus stays on the second option row:\n${screen.join('\n')}`);
+  assert.doesNotMatch(screen.join('\n'), /Select a row with Space/, 'the expired inline error is absent from visible cells');
+  assert.doesNotMatch(writes, /\u001b\[[0-9;]*m/, 'NO_COLOR remains respected while clipping error text');
   keys(session.input, '\u001b');
   await session.promise;
+  delete process.env.NO_COLOR;
 }
 
 // Wide graphemes are clipped by terminal cells, so their text cannot wrap into
