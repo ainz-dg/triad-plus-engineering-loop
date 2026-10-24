@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listAdapters, sharedSkillNames } from '../adapters/registry.mjs';
 import { buildMultiAdapterManifest, validateInstallationManifest, writeInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
+import { terminalScreen } from './terminal-screen-emulator.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repositoryRoot, 'bin', 'triad-plus.js');
@@ -90,11 +91,80 @@ function terminalInput(cwd, actions, env) {
   });
 }
 
+// The initial interactive entry renders the approved color mark before its
+// first choice; the menu remains usable and the static header is not replayed.
+if (pseudoTerminalAvailable) {
+  const retroRoot = path.join(fixture, 'RETRO-HEADER-CONTROL');
+  await mkdir(retroRoot);
+  const originalNoColor = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
+  const retro = terminalInput(retroRoot, [line('n'), line(''), key('escape')], {
+    HOME: path.join(fixture, 'home-retro-header'),
+    TERM: 'xterm-256color',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TRIAD_TEST_PTY_COLS: '80',
+    TRIAD_TEST_PTY_ROWS: '24',
+  });
+  if (originalNoColor !== undefined) process.env.NO_COLOR = originalNoColor;
+  assert.equal(retro.status, 0, `${retro.stderr}\n${retro.stdout}`);
+  await saveTranscript('retro-pixel-header', retro);
+  if (process.env.TRIAD_RETRO_PTY_EVIDENCE) {
+    const evidencePath = path.resolve(process.env.TRIAD_RETRO_PTY_EVIDENCE);
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, retro.stdout.replaceAll('\u001b', '<ESC>').replaceAll('\r', '<CR>'));
+  }
+  assert.match(retro.stdout, /\u001b\[38;2;124;140;255m/, 'interactive PTY uses the exact violet');
+  assert.match(retro.stdout, /\u001b\[38;2;53;195;177m/, 'interactive PTY uses the exact turquoise');
+  assert.match(retro.stdout, /\u001b\[38;2;245;185;94m/, 'interactive PTY uses the exact amber');
+  assert.match(retro.stdout, /Choose \[N\]ew workspace/, 'the first menu choice appears immediately');
+  assert.match(retro.stdout, /Select product repositories/, 'the next interactive screen remains available');
+  assert.equal((retro.stdout.match(/ENGINEERING LOOP/g) ?? []).length, 1, 'the header is printed once across menu redraws');
+  assert.doesNotMatch(retro.stdout, /\u001b\[2J/, 'redraws do not clear the display before painting');
+  assert.match(retro.stdout, /Cancelled\. No files were changed\./);
+  assert.equal(await readFile(path.join(retroRoot, 'project.yaml')).then(() => true, () => false), false);
+
+  // Reproduce a later checklist after text prompts have scrolled a small PTY.
+  // The checklist must not jump back to the header's original absolute row and
+  // paint over the intervening prompts; Back must still reopen and Escape must
+  // restore the terminal without applying the previewed setup.
+  const scrollRoot = path.join(fixture, 'SCROLLED-CHECKLIST');
+  await mkdir(scrollRoot);
+  const scrollRepo = path.join(scrollRoot, 'product');
+  await makeRepo(scrollRepo, 'scroll fixture remains untouched\n');
+  const scrollBefore = await treeSnapshot(scrollRepo);
+  const scrolled = terminalInput(scrollRoot, [
+    line('n'), line(''), key('space'), key('enter'),
+    line(''), line(''), line(''), line(''), key('escape'), key('escape'),
+  ], {
+    HOME: path.join(fixture, 'home-scrolled-checklist'),
+    TERM: 'xterm-256color',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TRIAD_TEST_PTY_COLS: '50',
+    TRIAD_TEST_PTY_ROWS: '18',
+  });
+  assert.equal(scrolled.status, 0, `${scrolled.stderr}\n${scrolled.stdout}`);
+  await saveTranscript('scrolling-checklist', scrolled);
+  assert.match(scrolled.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ''), /TRIAD\+/);
+  assert.match(scrolled.stdout, /Select product repositories/);
+  assert.match(scrolled.stdout, /Cancelled\. No files were changed\./);
+  assert.equal((scrolled.stdout.match(/ENGINEERING LOOP/g) ?? []).length, 1, 'the brand mark is written once and remains readable in scrollback');
+  const lastChecklistFrame = scrolled.stdout.lastIndexOf('Esc cancel');
+  assert.notEqual(lastChecklistFrame, -1, 'the reopened repository checklist was actually rendered');
+  const scrolledScreen = terminalScreen(scrolled.stdout.slice(0, lastChecklistFrame + 'Esc cancel'.length), { rows: 18, columns: 50 });
+  assert.equal(scrolledScreen.filter((line) => line.trim() === 'Select product repositories').length, 1, `the reopened checklist title occupies its own visible row:\n${scrolledScreen.join('\n')}`);
+  assert.ok(scrolledScreen.some((line) => line.includes('› [x] ./product')), `the selected repository remains legible:\n${scrolledScreen.join('\n')}`);
+  assert.match(scrolled.stdout, /worktree mapping/, 'the preceding text question remains intact in the PTY transcript');
+  assert.deepEqual(await treeSnapshot(scrollRepo), scrollBefore, 'Back/Escape leave the repository unchanged');
+}
+
 async function saveTranscript(name, result) {
   const directory = process.env.TRIAD_SETUP_TRANSCRIPT_DIR;
   if (!directory) return;
   await mkdir(directory, { recursive: true });
   const transcript = result.stdout
+    .replaceAll(fixture, '<temporary-fixture>')
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
     .replaceAll('\r\n', '\n')
     .replaceAll('\r', '');
@@ -719,6 +789,7 @@ try {
     });
     assert.equal(narrow.status, 0, `${narrow.stderr}\n${narrow.stdout}`);
     assert.doesNotMatch(narrow.stdout, /\u001b\[/, 'TERM=dumb and NO_COLOR stay readable without ANSI controls');
+    assert.match(narrow.stdout, /TRIAD\+ \/ Engineering Loop/, 'short dumb terminals use a one-line identity fallback');
     assert.match(narrow.stdout, /…/, 'long paths are clipped to the terminal width');
     assert.match(narrow.stdout, /Cancelled\. No files were changed\./);
     assert.equal(await readFile(path.join(narrowRoot, 'project.yaml')).then(() => true, () => false), false);
@@ -728,13 +799,16 @@ try {
     await mkdir(noColorRoot);
     const noColorRepo = path.join(noColorRoot, 'product');
     await makeRepo(noColorRepo, 'no-color fixture remains untouched\n');
-    const noColor = terminalInput(noColorRoot, [line(''), line(''), key('escape')], {
+    const noColor = terminalInput(noColorRoot, [line(''), line(''), key('down'), key('escape')], {
       HOME: path.join(fixture, 'home-no-color'),
       TERM: 'xterm-256color',
       NO_COLOR: '1',
     });
     assert.equal(noColor.status, 0, `${noColor.stderr}\n${noColor.stdout}`);
-    assert.match(noColor.stdout, /\u001b\[2J/, 'interactive navigation remains available in a colorless terminal');
+    assert.match(noColor.stdout, /\r\u001b\[2K/, 'interactive navigation starts at the live prompt cursor and clears bounded rows');
+    assert.match(noColor.stdout, /\u001b\[\d+A\r\u001b\[2K/, 'interactive redraw is anchored relative to its previous frame');
+    assert.match(noColor.stdout, /ENGINEERING LOOP/, 'the colorless mark remains readable');
+    assert.doesNotMatch(noColor.stdout, /\u001b\[2J/, 'redraw does not clear the display before painting');
     assert.doesNotMatch(noColor.stdout, /\u001b\[[0-9;]*m/, 'NO_COLOR suppresses all ANSI style codes including cleanup reset');
     assert.match(noColor.stdout, /Cancelled\. No files were changed\./);
 

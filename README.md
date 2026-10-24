@@ -95,6 +95,10 @@ loop, its evidence, human-readable reports, and the read-only Cockpit—see the
 npx triad-plus
 ```
 
+The interactive first-run menu uses a compact retro-pixel Triad+ header derived
+from the project icon. It never delays the menu, honors `NO_COLOR`, and falls
+back to plain text when the terminal is narrow or lacks Unicode support.
+
 After setup, create root `PRD.md` and `.loop/quality-gates.yaml`, commit the
 mapped repositories, and create their declared worktrees; the wizard does not
 create these inputs. Its preview checks only their structural presence (plus
