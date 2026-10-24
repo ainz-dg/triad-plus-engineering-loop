@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.22.1
+
+Retro Pixel TUI stability, following v1.22.0. The product changes below were
+merged in PR #35 before this release-preparation change set.
+
+- **Product — Retro Pixel TUI stability:** carry forward the pixel header and
+  width-bounded inline errors, preserving readable redraws and selection state
+  on narrow terminals.
+- **Release infrastructure:** add a manually dispatched GitHub Actions path
+  for reproducible dry-run validation and an explicitly selected npm/GitHub
+  release. Publication remains owner-controlled and is not performed by this
+  preparation change.
+- Release notes: [Triad+ 1.22.1](docs/releases/1.22.1.md).
+
 ## 1.22.0 — 2026-10-23
 
 Opt-in host entries and post-run draft PR planning, following `v1.21.0`,
