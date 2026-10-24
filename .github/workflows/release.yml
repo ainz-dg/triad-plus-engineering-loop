@@ -1,0 +1,310 @@
+name: Release v1.22.1
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release version
+        required: true
+        default: '1.22.1'
+        type: string
+      expected_commit:
+        description: Exact full SHA approved at the current main head
+        required: true
+        type: string
+      mode:
+        description: Dry-run is side-effect-free; publish is an explicit owner GO
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+      trusted_publisher_confirmed:
+        description: Confirm npmjs.com Trusted Publisher settings were checked
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Validate, test, and build exact package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      tarball_name: ${{ steps.package.outputs.tarball_name }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+      sidecar_sha256: ${{ steps.package.outputs.sidecar_sha256 }}
+      integrity: ${{ steps.package.outputs.integrity }}
+      shasum: ${{ steps.package.outputs.shasum }}
+    steps:
+      - name: Check out exact dispatch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 for npm Trusted Publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Pin npm CLI to Trusted Publishing minimum
+        run: |
+          npm install --global npm@11.5.1
+          node --version
+          npm --version
+
+      - name: Validate dispatch, current main, and release conflicts
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          TRUSTED_PUBLISHER_CONFIRMED: ${{ inputs.trusted_publisher_confirmed }}
+        run: node scripts/release/release-guard.mjs gate
+
+      - name: Reuse CI Cockpit build
+        run: npm run cockpit:build
+
+      - name: Require committed Cockpit assets to remain reproducible
+        run: git diff --exit-code -- cockpit/dist
+
+      - name: Reuse CI Cockpit tests
+        run: npm run cockpit:test
+
+      - name: Reuse CI project tests
+        run: npm test
+
+      - name: Reuse CI package checks
+        run: npm run pack:check
+
+      - name: Check whitespace errors
+        run: git diff --check
+
+      - name: Run package prepublishOnly gate explicitly
+        run: npm run prepublishOnly
+
+      - name: Pack, inspect, and smoke-install one exact archive
+        id: package
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: node scripts/release/release-guard.mjs package
+
+      - name: Preserve the verified archive only for publish mode
+        if: ${{ inputs.mode == 'publish' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: |
+            ${{ steps.package.outputs.tarball_path }}
+            ${{ steps.package.outputs.sidecar_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish-npm:
+    name: Publish the verified archive to npm
+    needs: gate
+    if: ${{ inputs.mode == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact dispatch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 and npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Pin npm CLI to Trusted Publishing minimum
+        run: npm install --global npm@11.5.1
+
+      - name: Download archive produced after all gates passed
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.gate.outputs.artifact_name }}
+          path: ${{ runner.temp }}/verified-release
+
+      - name: Verify downloaded archive identity and repeat conflict preflight
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          TRUSTED_PUBLISHER_CONFIRMED: ${{ inputs.trusted_publisher_confirmed }}
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.gate.outputs.sha256 }}
+          EXPECTED_SIDECAR_SHA256: ${{ needs.gate.outputs.sidecar_sha256 }}
+          ARTIFACT_DIR: ${{ runner.temp }}/verified-release
+        run: |
+          node scripts/release/release-guard.mjs verify-artifact
+          node scripts/release/release-guard.mjs publish-preflight
+
+      - name: Publish exact verified archive with npm OIDC
+        run: npm publish "${{ runner.temp }}/verified-release/triad-plus-1.22.1.tgz" --provenance --access public
+
+  create-github-release:
+    name: Create tag and GitHub Release after npm accepts the version
+    needs:
+      - gate
+      - publish-npm
+    if: ${{ inputs.mode == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact dispatch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 and npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Pin npm CLI to Trusted Publishing minimum
+        run: npm install --global npm@11.5.1
+
+      - name: Download the exact archive already published to npm
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.gate.outputs.artifact_name }}
+          path: ${{ runner.temp }}/verified-release
+
+      - name: Recheck archive and npm identity before creating a tag or release
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          TRUSTED_PUBLISHER_CONFIRMED: ${{ inputs.trusted_publisher_confirmed }}
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.gate.outputs.sha256 }}
+          EXPECTED_SIDECAR_SHA256: ${{ needs.gate.outputs.sidecar_sha256 }}
+          EXPECTED_INTEGRITY: ${{ needs.gate.outputs.integrity }}
+          EXPECTED_SHASUM: ${{ needs.gate.outputs.shasum }}
+          ARTIFACT_DIR: ${{ runner.temp }}/verified-release
+        run: |
+          node scripts/release/release-guard.mjs verify-artifact
+          node scripts/release/release-guard.mjs release-preflight
+
+      - name: Create v1.22.1 Git tag and Release with exactly two assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.22.1 \
+            "${{ runner.temp }}/verified-release/triad-plus-1.22.1.tgz" \
+            "${{ runner.temp }}/verified-release/triad-plus-1.22.1.tgz.sha256" \
+            --target "${{ github.sha }}" \
+            --title "Triad+ v1.22.1" \
+            --notes-file docs/releases/1.22.1.md
+
+  verify-published:
+    name: Verify npm, Git tag, Release assets, and registry smoke separately
+    needs:
+      - gate
+      - publish-npm
+      - create-github-release
+    if: ${{ inputs.mode == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact dispatch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 and npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Pin npm CLI to Trusted Publishing minimum
+        run: npm install --global npm@11.5.1
+
+      - name: Verify immutable Git tag points at the exact dispatched commit
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          git fetch --no-tags origin "refs/tags/v${RELEASE_VERSION}:refs/tags/v${RELEASE_VERSION}"
+          actual="$(git rev-parse "refs/tags/v${RELEASE_VERSION}^{commit}")"
+          test "$actual" = "$EXPECTED_COMMIT"
+          echo "Git tag v${RELEASE_VERSION} points to $actual"
+
+      - name: Read npm registry integrity and shasum
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: npm view "triad-plus@${RELEASE_VERSION}" version dist.integrity dist.shasum --json > "${{ runner.temp }}/registry.json"
+
+      - name: Verify registry bytes against the verified archive
+        env:
+          REGISTRY_JSON_PATH: ${{ runner.temp }}/registry.json
+          EXPECTED_INTEGRITY: ${{ needs.gate.outputs.integrity }}
+          EXPECTED_SHASUM: ${{ needs.gate.outputs.shasum }}
+        run: node scripts/release/release-guard.mjs verify-registry
+
+      - name: Read GitHub Release assets and API digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/ainz-dg/triad-plus-engineering-loop/releases/tags/v1.22.1 > "${{ runner.temp }}/release.json"
+
+      - name: Verify exactly two Release asset names and API digests
+        env:
+          RELEASE_JSON_PATH: ${{ runner.temp }}/release.json
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.gate.outputs.sha256 }}
+          EXPECTED_SIDECAR_SHA256: ${{ needs.gate.outputs.sidecar_sha256 }}
+        run: node scripts/release/release-guard.mjs verify-release
+
+      - name: Download and verify both published Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.22.1 \
+            --pattern "triad-plus-1.22.1.tgz" \
+            --pattern "triad-plus-1.22.1.tgz.sha256" \
+            --dir "${{ runner.temp }}/published-release-assets"
+          ARTIFACT_DIR="${{ runner.temp }}/published-release-assets" \
+            EXPECTED_ARCHIVE_SHA256="${{ needs.gate.outputs.sha256 }}" \
+            EXPECTED_SIDECAR_SHA256="${{ needs.gate.outputs.sidecar_sha256 }}" \
+            node scripts/release/release-guard.mjs verify-artifact
+
+      - name: Install exact npm registry version in an isolated prefix
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          npm install --prefix "${{ runner.temp }}/registry-smoke" \
+            --no-save --no-audit --no-fund "triad-plus@${RELEASE_VERSION}"
+          installed="${{ runner.temp }}/registry-smoke/node_modules/triad-plus"
+          test "$(node -p "require('${installed}/package.json').version")" = "$RELEASE_VERSION"
+          test "$(node "${installed}/bin/triad-plus.js" --version)" = "$RELEASE_VERSION"
+          echo "Installed npm registry smoke passed for triad-plus@${RELEASE_VERSION}"
