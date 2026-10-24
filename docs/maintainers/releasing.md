@@ -1,100 +1,92 @@
-# GitHub Actions release guide
+# GitHub Release to npm publishing
 
-This guide describes the owner-controlled release path for Triad+. A release
-workflow run does not replace review or owner approval.
+The release workflow publishes an already verified package only after a stable
+GitHub Release has been published. It never creates a tag or Release, and a
+failed or partially completed publication requires inspection rather than a
+blind rerun.
 
-## Prerequisites
+## One-time npm Trusted Publisher setup
 
-1. Merge the release-preparation PR only after independent review and an
-   explicit owner GO. Confirm CI is green on the exact merge commit.
-2. In npmjs.com settings for the existing triad-plus package, add a GitHub
-   Actions Trusted Publisher with these exact, case-sensitive values:
-   - user: ainz-dg
-   - repository: triad-plus-engineering-loop
-   - workflow filename: release.yml (filename only, not the .github/workflows/
-     path)
-   - environment name: leave empty; this workflow does not use a GitHub
-     Environment
-3. In the Trusted Publisher's allowed actions, enable direct npm publish.
-   Allowing only npm stage publish is not sufficient for this workflow.
-4. Verify the npm owner account's 2FA and package publishing settings. Do not
-   create an npm token or add NPM_TOKEN/NODE_AUTH_TOKEN secrets.
+In npmjs.com settings for the existing `triad-plus` package, configure a
+GitHub Actions Trusted Publisher with these exact, case-sensitive values:
 
-The release workflow uses `actions/setup-node@v7`. Its official migration
-notes remove the dummy `NODE_AUTH_TOKEN` fallback; npm Trusted Publishing uses
-OIDC and does not require that environment variable. Do not add a fake or
-static token to work around authentication errors.
+- GitHub user/organization: `ainz-dg`
+- Repository: `triad-plus-engineering-loop`
+- Workflow filename: `release.yml` (filename only, not the
+  `.github/workflows/` path)
+- Environment: leave empty; the workflow does not use a GitHub Environment
+
+The workflow uses Node 24 and pins npm to 11.5.1, which meets the npm Trusted
+Publishing minimum. The npm job alone receives `id-token: write`; the separate
+Release-assets job alone receives `contents: write`. No npm token secret,
+`NODE_AUTH_TOKEN`, or static-token fallback is used. Do not work around an OIDC
+failure by adding a token.
 
 npm requires a new Trusted Publisher configuration to complete its first
 successful publish within two days. Configure it only when the owner is ready
-to perform the first real release; do not configure it weeks in advance. This
-repository cannot inspect or prove the account-side Trusted Publisher setting
-from a pull request. The workflow's confirmation input is an operator
-attestation, not evidence that npm has accepted OIDC.
+to perform the first real release. The repository cannot inspect or prove the
+account-side setting; it is verified only by a successful OIDC publication.
 
-## Run a dry-run
+## Owner-controlled release procedure
 
-After the workflow is present on the default branch:
+1. Merge the reviewed release-preparation change only after an explicit owner
+   GO and green checks on the exact merge commit.
+2. Confirm `package.json` has the intended stable release version. The package
+   version must equal the version in a canonical `vMAJOR.MINOR.PATCH` tag.
+3. Create and publish the stable GitHub Release from the GitHub UI, targeting
+   the current `main` commit. The Release must be authored by `ainz-dg`, be
+   neither draft nor prerelease, and its tag must resolve to the current
+   `main` SHA. The workflow rejects ambiguous branch targets and moved tags.
+4. Publishing the Release starts `.github/workflows/release.yml`. For a
+   `release` event GitHub sets `GITHUB_REF` to `refs/tags/<tag>` and
+   `GITHUB_SHA` to the last commit in that tagged release. The workflow checks
+   both values, checks out that immutable SHA, resolves the remote tag and
+   current `main`, and verifies the Release metadata again before npm writes.
+   GitHub's `published` activity can include prereleases, so the workflow
+   explicitly rejects those before publication.
+5. Wait for all jobs to finish. The gate rebuilds and tests, runs the package
+   checks and `prepublishOnly`, then creates one verified tarball and SHA-256
+   sidecar. The npm job publishes that exact artifact with provenance; it does
+   not repack. The existing Release receives only the matching `.tgz` and
+   `.tgz.sha256` assets, and the final job verifies their API digests and
+   downloaded bytes plus a registry install smoke test.
 
-1. Open **Actions → Release v1.22.1 → Run workflow** and select main.
-2. Set version to 1.22.1, copy the exact full SHA shown for main into
-   **Expected main commit**, and leave mode at dry-run.
-3. Leave **Trusted Publisher configured** unchecked. Inspect the run's gate
-   results, package SHA-256, npm integrity/shasum, and isolated package smoke.
+`workflow_dispatch` is a side-effect-free gate/build run on the exact current
+`main` SHA. It has no publish mode and does not upload an artifact, publish to
+npm, or modify a Release or tag. It rejects versions, tags, or Releases that
+already exist. It cannot prove that npm OIDC is configured or simulate an OIDC
+exchange. Do not use the previously recovered `v1.22.1` as a trigger test.
 
-The dry-run reads npm/GitHub state and builds/tests an ephemeral runner package.
-It does not publish to npm, upload a release artifact, create a Git tag, or
-create a GitHub Release. It cannot prove that npm OIDC is configured or
-simulate a successful OIDC exchange.
+## Fail-closed behavior and recovery
 
-## Publish after approval
-
-Only after independent Albedo review of the exact PR and a new explicit owner
-GO:
-
-1. Confirm the merged release-preparation commit is still the exact main
-   head and has green CI.
-2. If this is the first Trusted Publisher use, configure it in npm immediately
-   before proceeding so the two-day validation window is available.
-3. Run the workflow on main with version 1.22.1 and that exact full commit
-   SHA as the GitHub account ainz-dg. Select publish and check
-   **Trusted Publisher configured** only after verifying the settings above.
-   The workflow rejects publish dispatches by other GitHub actors; selecting
-   publish as ainz-dg is the explicit owner GO.
-4. Let the workflow publish the already-verified archive to npm first. Only
-   after npm accepts it does a separate job create tag v1.22.1 and the
-   GitHub Release. The release has exactly two assets:
-   triad-plus-1.22.1.tgz and triad-plus-1.22.1.tgz.sha256.
-5. Confirm the final job reports each outcome separately: npm version and
-   integrity, Git tag commit, GitHub Release assets/digests, and package smoke
-   installed from the npm registry.
-
-The workflow rejects an existing npm version, tag, or GitHub Release. It never
-moves a tag or replaces an immutable version.
-
-## Failure and recovery
-
-- A failed gate prevents the npm-publish job from starting. Fix the cause in a
-  reviewed change, then repeat a dry-run.
-- A missing or mismatched Trusted Publisher causes npm OIDC authentication to
-  fail. There is no static-token fallback; do not work around this with an npm
-  token.
-- npm versions are immutable. If npm accepted the package but a later step
-  failed, do **not** rerun the publish path. The version guard will stop a
-  retry. Inspect npm view for triad-plus@1.22.1, including version,
-  dist.integrity and dist.shasum, compare it to the original successful run's
-  recorded archive metadata, and recover only the missing Git tag/Release
-  manually from that run's verified artifact and exact commit. If the
-  published digest does not match, or an existing tag points elsewhere, stop
-  for owner review; never republish or move the tag.
-- If tag or Release creation partially succeeds, stop and inspect the tag SHA,
-  release assets, and their digests before doing anything else. Do not rerun
-  publication or overwrite assets.
+- Only `release` with action `published` or the read-only dispatch path is
+  accepted. Stable tag syntax, actor, package name/version, release metadata,
+  tag SHA, target commit, checked-out commit, and current `main` must agree.
+- An existing npm version, tag, or Release is a conflict. A tag is never moved;
+  an immutable npm version is never replaced. Registry errors other than a
+  confirmed E404 fail closed.
+- npm propagation is checked with bounded retries only while the exact version
+  is temporarily absent. A visible version with the wrong `dist.integrity` or
+  `dist.shasum`, or any non-404 registry error, stops immediately. A timeout
+  instructs the owner to recover manually and not republish.
+- The GitHub Release is already public before npm publication begins. This is
+  deliberately non-atomic: if npm rejects OIDC or a later job fails, the
+  public Release remains. The workflow does not create a second Release or tag.
+- Existing Release assets are never overwritten. Missing expected assets may
+  be uploaded only after npm succeeds; unexpected assets or digest conflicts
+  stop the job. If npm accepted the package but a later step failed, do not
+  rerun publication. Compare the original archive's integrity and shasum with
+  `npm view`, inspect the existing tag and Release, and recover only missing
+  verified assets from that run's artifact. Stop for owner review on any
+  mismatch; never republish or move a tag.
+- A Release created by a workflow using `GITHUB_TOKEN` generally will not
+  trigger another workflow. Publish the owner-approved Release through the
+  GitHub UI so this workflow receives the normal `published` event.
 
 ## Scope
 
-This release workflow is manual and standalone. It has no tag/push/schedule
-trigger, auto-merge, publish-on-merge, reusable workflow caller, or code path
-that changes the product runtime. Dry-run is the default. The npm Trusted
-Publisher is configured manually on npmjs.com and is not claimed as verified
-until the first real OIDC publication succeeds.
+This workflow is not a general CI trigger: it has no push, pull-request, or
+schedule publishing path, no auto-merge, and no tag or Release creation. It
+does not change Triad+ runtime behavior. A published Release is the explicit
+owner-controlled authorization point; the final npm write remains guarded by
+the exact verified artifact and npm OIDC.
