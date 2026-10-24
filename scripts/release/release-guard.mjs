@@ -91,11 +91,39 @@ export function classifyNpmMetadataProbe(result, version) {
     fail('Could not read npm registry metadata; stopping closed.');
   }
   const value = parseJson(result.stdout, 'npm view');
-  const dist = value?.dist;
-  if (!value || value.version !== version || !dist?.integrity || !dist?.shasum) {
-    fail('npm registry returned incomplete metadata for ' + version + '.');
+  return normalizeNpmMetadata(value, version);
+}
+
+export function normalizeNpmMetadata(value, expectedVersion) {
+  let metadata = value;
+  if (Array.isArray(metadata)) {
+    if (metadata.length !== 1) fail('npm registry metadata must contain exactly one version record.');
+    [metadata] = metadata;
   }
-  return { version: value.version, integrity: dist.integrity, shasum: dist.shasum };
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    fail('npm registry metadata must be one JSON object.');
+  }
+  if (metadata.version !== expectedVersion) {
+    fail('npm registry returned an unexpected version; expected ' + expectedVersion + '.');
+  }
+  if (metadata.dist !== undefined && (!metadata.dist || typeof metadata.dist !== 'object' || Array.isArray(metadata.dist))) {
+    fail('npm registry dist metadata must be a JSON object when present.');
+  }
+  const field = (dottedKey, nestedKey, label) => {
+    const candidates = [metadata[dottedKey], metadata.dist?.[nestedKey]].filter((candidate) => candidate !== undefined);
+    if (candidates.length === 0 || candidates.some((candidate) => typeof candidate !== 'string' || candidate.trim() === '')) {
+      fail('npm registry metadata is missing a valid ' + label + '.');
+    }
+    if (candidates.length === 2 && candidates[0] !== candidates[1]) {
+      fail('npm registry metadata has conflicting ' + label + ' values.');
+    }
+    return candidates[0];
+  };
+  return {
+    version: metadata.version,
+    integrity: field('dist.integrity', 'integrity', 'dist.integrity'),
+    shasum: field('dist.shasum', 'shasum', 'dist.shasum'),
+  };
 }
 
 export function classifyTagProbe(result) {
@@ -311,12 +339,11 @@ function runGate(mode) {
 }
 
 function verifyRegistry() {
-  const registry = parseJson(readFileSync(process.env.REGISTRY_JSON_PATH, 'utf8'), 'npm registry metadata');
-  assertPublishedRegistry({
-    version: registry.version,
-    integrity: registry.dist?.integrity,
-    shasum: registry.dist?.shasum,
-  }, {
+  const registry = normalizeNpmMetadata(
+    parseJson(readFileSync(process.env.REGISTRY_JSON_PATH, 'utf8'), 'npm registry metadata'),
+    RELEASE_VERSION,
+  );
+  assertPublishedRegistry(registry, {
     integrity: process.env.EXPECTED_INTEGRITY,
     shasum: process.env.EXPECTED_SHASUM,
   });

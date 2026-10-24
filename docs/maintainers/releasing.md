@@ -20,6 +20,11 @@ workflow run does not replace review or owner approval.
 4. Verify the npm owner account's 2FA and package publishing settings. Do not
    create an npm token or add NPM_TOKEN/NODE_AUTH_TOKEN secrets.
 
+The release workflow uses `actions/setup-node@v7`. Its official migration
+notes remove the dummy `NODE_AUTH_TOKEN` fallback; npm Trusted Publishing uses
+OIDC and does not require that environment variable. Do not add a fake or
+static token to work around authentication errors.
+
 npm requires a new Trusted Publisher configuration to complete its first
 successful publish within two days. Configure it only when the owner is ready
 to perform the first real release; do not configure it weeks in advance. This

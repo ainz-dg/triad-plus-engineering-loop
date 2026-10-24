@@ -89,6 +89,50 @@ test('preflight rejects any existing immutable npm version, tag, or Release', ()
 
 test('post-publish registry metadata must match the one verified tarball', () => {
   const expected = { integrity: 'sha512-verified', shasum: 'a'.repeat(40) };
+  // Captured read-only with `npx npm@11.5.1 view triad-plus@1.22.0 version dist.integrity dist.shasum --json`.
+  const capturedNpm1151Output = {
+    version: '1.22.0',
+    'dist.integrity': 'sha512-lQXa0QmAcgV9mx5iIzzUNJEM9FDdkxsp5IEA1EOQZKo1XzCF79BtC6PAesl0RIbJhoN/39LbrL4NcBf9pkOKKg==',
+    'dist.shasum': 'a197a0092ab6468be04159b32c018cabeed93cd1',
+  };
+  assert.deepEqual(classifyNpmMetadataProbe({
+    status: 0,
+    stdout: JSON.stringify(capturedNpm1151Output),
+    stderr: '',
+  }, '1.22.0'), {
+    version: '1.22.0',
+    integrity: capturedNpm1151Output['dist.integrity'],
+    shasum: capturedNpm1151Output['dist.shasum'],
+  });
+  assert.deepEqual(classifyNpmMetadataProbe({
+    status: 0,
+    stdout: JSON.stringify([{ version: '1.22.0', dist: { integrity: 'sha512-nested', shasum: 'b'.repeat(40) } }]),
+    stderr: '',
+  }, '1.22.0'), { version: '1.22.0', integrity: 'sha512-nested', shasum: 'b'.repeat(40) });
+  assert.deepEqual(classifyNpmMetadataProbe({
+    status: 0,
+    stdout: JSON.stringify({ ...capturedNpm1151Output, dist: { integrity: capturedNpm1151Output['dist.integrity'], shasum: capturedNpm1151Output['dist.shasum'] } }),
+    stderr: '',
+  }, '1.22.0'), {
+    version: '1.22.0',
+    integrity: capturedNpm1151Output['dist.integrity'],
+    shasum: capturedNpm1151Output['dist.shasum'],
+  });
+  assert.throws(() => classifyNpmMetadataProbe({
+    status: 0,
+    stdout: JSON.stringify({ ...capturedNpm1151Output, dist: { integrity: 'sha512-conflict', shasum: 'c'.repeat(40) } }),
+    stderr: '',
+  }, '1.22.0'), /conflicting/);
+  assert.throws(() => classifyNpmMetadataProbe({
+    status: 0,
+    stdout: JSON.stringify([{ version: '1.22.0' }, { version: '1.22.0' }]),
+    stderr: '',
+  }, '1.22.0'), /exactly one/);
+  assert.throws(() => classifyNpmMetadataProbe({
+    status: 0,
+    stdout: JSON.stringify({ version: '1.22.0', 'dist.integrity': 'sha512-missing-shasum' }),
+    stderr: '',
+  }, '1.22.0'), /valid dist.shasum/);
   assert.deepEqual(classifyNpmMetadataProbe({
     status: 0,
     stdout: JSON.stringify({ version: '1.22.1', dist: expected }),
@@ -116,6 +160,10 @@ test('post-publish release verification requires exactly two assets with matchin
 });
 
 test('workflow is manual-only, dry-run by default, and grants write/OIDC only to isolated jobs', () => {
+  const setupNodeMajors = [...workflow.matchAll(/uses:\s*actions\/setup-node@([^\s]+)/g)].map((match) => match[1]);
+  assert.equal(setupNodeMajors.length, 4);
+  assert.deepEqual(setupNodeMajors, ['v7', 'v7', 'v7', 'v7']);
+  assert.doesNotMatch(workflow, /NODE_AUTH_TOKEN|NPM_TOKEN|secrets\.NPM_TOKEN/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /^\s*(push|schedule):/m);
   assert.match(workflow, /default: dry-run/);
