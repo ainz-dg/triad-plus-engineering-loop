@@ -68,6 +68,144 @@ function writeExecutable(path, source) {
   chmodSync(path, 0o755);
 }
 
+function createReleaseCliFixture(root) {
+  const bin = join(root, 'bin');
+  const eventPath = join(root, 'event.json');
+  const releaseStatePath = join(root, 'release.json');
+  const npmResponsesPath = join(root, 'npm-responses.json');
+  const npmStatePath = join(root, 'npm-state.txt');
+  const commandLogPath = join(root, 'commands.jsonl');
+  const artifactDirectory = join(root, 'artifacts');
+  const tagName = 'v1.22.2';
+  const archiveName = 'triad-plus-1.22.2.tgz';
+  const archiveBytes = Buffer.from('isolated release archive fixture\n');
+  const archiveSha256 = createHash('sha256').update(archiveBytes).digest('hex');
+  const sidecarBytes = Buffer.from(archiveSha256 + '  ' + archiveName + '\n');
+  const sidecarSha256 = createHash('sha256').update(sidecarBytes).digest('hex');
+  const event = {
+    action: 'published',
+    release: { id: 42, tag_name: tagName, target_commitish: 'main', draft: false, prerelease: false },
+  };
+  const release = { ...event.release, assets: [] };
+
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(artifactDirectory, { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'triad-plus', version: '1.22.2' }));
+  writeFileSync(eventPath, JSON.stringify(event));
+  writeFileSync(releaseStatePath, JSON.stringify(release));
+  writeFileSync(join(artifactDirectory, archiveName), archiveBytes);
+  writeFileSync(join(artifactDirectory, archiveName + '.sha256'), sidecarBytes);
+  writeFileSync(npmResponsesPath, JSON.stringify([{ status: 1, stderr: 'npm error code E404' }]));
+  writeFileSync(npmStatePath, '0');
+  writeFileSync(commandLogPath, '');
+
+  writeExecutable(join(bin, 'git'), `
+    const { appendFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    appendFileSync(process.env.COMMAND_LOG, JSON.stringify({ bin: 'git', args }) + '\\n');
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') process.stdout.write('${sha}\\n');
+    else if (args[0] === 'ls-remote' && args.at(-1) === 'refs/heads/main') process.stdout.write('${sha}\\trefs/heads/main\\n');
+    else if (args[0] === 'ls-remote' && args.some((arg) => arg.startsWith('refs/tags/'))) process.stdout.write('${sha}\\trefs/tags/v1.22.2\\n');
+    else process.exit(2);
+  `);
+  writeExecutable(join(bin, 'gh'), `
+    const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+    const { basename } = require('node:path');
+    const { createHash } = require('node:crypto');
+    const args = process.argv.slice(2);
+    const record = { bin: 'gh', args, clobber: args.includes('--clobber') };
+    if (args[0] === 'release' && args[1] === 'upload') {
+      record.files = args.slice(3).map((path) => ({
+        path,
+        basename: basename(path),
+        bytes: readFileSync(path).toString('base64'),
+      }));
+    }
+    appendFileSync(process.env.COMMAND_LOG, JSON.stringify(record) + '\\n');
+    if (args[0] === 'api') process.stdout.write(readFileSync(process.env.RELEASE_STATE, 'utf8'));
+    else if (args[0] === 'release' && args[1] === 'upload') {
+      const release = JSON.parse(readFileSync(process.env.RELEASE_STATE, 'utf8'));
+      for (const path of args.slice(3)) {
+        const bytes = readFileSync(path);
+        release.assets.push({ name: basename(path), digest: 'sha256:' + createHash('sha256').update(bytes).digest('hex') });
+      }
+      writeFileSync(process.env.RELEASE_STATE, JSON.stringify(release));
+    } else process.exit(2);
+  `);
+  writeExecutable(join(bin, 'npm'), `
+    const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    const responses = JSON.parse(readFileSync(process.env.NPM_RESPONSES, 'utf8'));
+    const index = Number(readFileSync(process.env.NPM_STATE, 'utf8')) || 0;
+    const response = responses[Math.min(index, responses.length - 1)];
+    writeFileSync(process.env.NPM_STATE, String(index + 1));
+    appendFileSync(process.env.COMMAND_LOG, JSON.stringify({ bin: 'npm', args, index }) + '\\n');
+    if (response.stdout) process.stdout.write(response.stdout);
+    if (response.stderr) process.stderr.write(response.stderr);
+    process.exit(response.status);
+  `);
+
+  const env = {
+    ...process.env,
+    PATH: bin + ':' + process.env.PATH,
+    COMMAND_LOG: commandLogPath,
+    RELEASE_STATE: releaseStatePath,
+    NPM_RESPONSES: npmResponsesPath,
+    NPM_STATE: npmStatePath,
+    GITHUB_EVENT_NAME: 'release',
+    GITHUB_EVENT_PATH: eventPath,
+    GITHUB_REF: 'refs/tags/' + tagName,
+    GITHUB_SHA: sha,
+    GITHUB_ACTOR: 'ainz-dg',
+    GITHUB_REPOSITORY: 'ainz-dg/triad-plus-engineering-loop',
+    RELEASE_TAG: tagName,
+    EXPECTED_INTEGRITY: 'sha512-fixture-integrity',
+    EXPECTED_SHASUM: 'a'.repeat(40),
+    EXPECTED_ARCHIVE_SHA256: archiveSha256,
+    EXPECTED_SIDECAR_SHA256: sidecarSha256,
+    ARTIFACT_DIR: artifactDirectory,
+  };
+
+  return {
+    root,
+    env,
+    eventPath,
+    releaseStatePath,
+    npmResponsesPath,
+    npmStatePath,
+    commandLogPath,
+    artifactDirectory,
+    archiveName,
+    archiveBytes,
+    sidecarBytes,
+    archiveSha256,
+    sidecarSha256,
+    run(mode, overrides = {}, nodeArgs = []) {
+      return spawnSync(process.execPath, [...nodeArgs, guardPath, mode], {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...env, ...overrides },
+      });
+    },
+    commands() {
+      return readFileSync(commandLogPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    },
+    setNpmResponses(responses) {
+      writeFileSync(npmResponsesPath, JSON.stringify(responses));
+      writeFileSync(npmStatePath, '0');
+    },
+    setRelease(releaseJson) {
+      writeFileSync(releaseStatePath, JSON.stringify(releaseJson));
+    },
+  };
+}
+
+function writeImmediateTimerHook(root) {
+  const path = join(root, 'immediate-timers.mjs');
+  writeFileSync(path, 'globalThis.setTimeout = (callback) => { queueMicrotask(callback); return 0; };\n');
+  return path;
+}
+
 test('release tag parser accepts only stable canonical vMAJOR.MINOR.PATCH tags', () => {
   assert.equal(versionFromReleaseTag('v1.22.2'), '1.22.2');
   for (const invalid of ['1.22.2', 'v01.22.2', 'v1.022.2', 'v1.22.02', 'v1.22', 'v1.22.2-rc.1', 'v1.22.2+build']) {
@@ -341,6 +479,199 @@ test('release download verifier checks exact downloaded archive and sidecar byte
     assert.match(tampered.stderr, /asset bytes do not match/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('publish-preflight subprocess accepts only the exact stable published release and absent npm version', () => {
+  const root = mkdtempSync(join(tmpdir(), 'triad-publish-preflight-cli-'));
+  const fixture = createReleaseCliFixture(root);
+  try {
+    const accepted = fixture.run('publish-preflight');
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.match(accepted.stdout, /Final npm publish preflight passed for v1\.22\.2/);
+    const commands = fixture.commands();
+    assert.ok(commands.some(({ bin, args }) => bin === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD'));
+    assert.ok(commands.some(({ bin, args }) => bin === 'git' && args[0] === 'ls-remote' && args.at(-1) === 'refs/heads/main'));
+    assert.ok(commands.some(({ bin, args }) => bin === 'gh' && args[0] === 'api'));
+    assert.ok(commands.some(({ bin, args }) => bin === 'npm' && args.join(' ') === 'view triad-plus@1.22.2 version --json'));
+
+    fixture.setNpmResponses([{ status: 0, stdout: '"1.22.2"' }]);
+    const duplicate = fixture.run('publish-preflight');
+    assert.equal(duplicate.status, 1);
+    assert.match(duplicate.stderr, /already exists; immutable versions are never overwritten/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('publish-preflight subprocess rejects event, published tag, and immutable SHA mismatches', () => {
+  const cases = [
+    { label: 'event', overrides: { GITHUB_EVENT_NAME: 'push' }, expected: /published GitHub Release event/ },
+    { label: 'tag', overrides: { GITHUB_REF: 'refs/tags/v1.22.1' }, expected: /exact published release tag/ },
+    { label: 'SHA', overrides: { GITHUB_SHA: otherSha }, expected: /immutable GITHUB_SHA supplied by the release event/ },
+  ];
+  for (const scenario of cases) {
+    const root = mkdtempSync(join(tmpdir(), 'triad-publish-preflight-' + scenario.label + '-'));
+    const fixture = createReleaseCliFixture(root);
+    try {
+      const rejected = fixture.run('publish-preflight', scenario.overrides);
+      assert.equal(rejected.status, 1, scenario.label + ' mismatch unexpectedly passed');
+      assert.match(rejected.stderr, scenario.expected);
+      assert.equal(fixture.commands().filter(({ bin }) => bin === 'npm').length, 0,
+        scenario.label + ' mismatch reached the npm preflight');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('verify-registry subprocess retries transient E404 and accepts npm dotted dist fields', () => {
+  const root = mkdtempSync(join(tmpdir(), 'triad-verify-registry-cli-'));
+  const fixture = createReleaseCliFixture(root);
+  const expectedIntegrity = 'sha512-fixture-integrity';
+  const expectedShasum = 'c'.repeat(40);
+  fixture.setNpmResponses([
+    { status: 1, stderr: 'npm error code E404' },
+    {
+      status: 0,
+      stdout: JSON.stringify({ version: '1.22.2', 'dist.integrity': expectedIntegrity, 'dist.shasum': expectedShasum }),
+    },
+  ]);
+  try {
+    const result = fixture.run('verify-registry', {
+      EXPECTED_INTEGRITY: expectedIntegrity,
+      EXPECTED_SHASUM: expectedShasum,
+    }, ['--import', writeImmediateTimerHook(root)]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /propagation completed after 2 bounded checks/);
+    assert.match(result.stdout, /npm registry identity verified: 1\.22\.2/);
+    const npmCalls = fixture.commands().filter(({ bin }) => bin === 'npm');
+    assert.equal(npmCalls.length, 2);
+    assert.ok(npmCalls.every(({ args }) => args.join(' ') === 'view triad-plus@1.22.2 version dist.integrity dist.shasum --json'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('verify-registry subprocess fails closed on integrity mismatch, permanent error, and exhausted E404 retries', () => {
+  const cases = [
+    {
+      name: 'integrity-mismatch',
+      responses: [{ status: 0, stdout: JSON.stringify({
+        version: '1.22.2', 'dist.integrity': 'sha512-wrong', 'dist.shasum': 'c'.repeat(40),
+      }) }],
+      expected: /does not match the verified tarball/,
+      calls: 1,
+    },
+    {
+      name: 'shasum-mismatch',
+      responses: [{ status: 0, stdout: JSON.stringify({
+        version: '1.22.2', 'dist.integrity': 'sha512-fixture-integrity', 'dist.shasum': 'd'.repeat(40),
+      }) }],
+      expected: /does not match the verified tarball/,
+      calls: 1,
+    },
+    {
+      name: 'permanent-error',
+      responses: [{ status: 1, stderr: 'npm error code ECONNRESET' }],
+      expected: /other than temporary version absence/,
+      calls: 1,
+    },
+    {
+      name: 'bounded-timeout',
+      responses: [{ status: 1, stderr: 'npm error code E404' }],
+      expected: /did not become visible after 8 bounded checks/,
+      calls: 8,
+    },
+  ];
+  for (const scenario of cases) {
+    const root = mkdtempSync(join(tmpdir(), 'triad-verify-registry-' + scenario.name + '-'));
+    const fixture = createReleaseCliFixture(root);
+    fixture.setNpmResponses(scenario.responses);
+    try {
+      const result = fixture.run('verify-registry', {
+        EXPECTED_INTEGRITY: 'sha512-fixture-integrity',
+        EXPECTED_SHASUM: 'c'.repeat(40),
+      }, ['--import', writeImmediateTimerHook(root)]);
+      assert.equal(result.status, 1, scenario.name + ' unexpectedly passed');
+      assert.match(result.stderr, scenario.expected);
+      assert.equal(fixture.commands().filter(({ bin }) => bin === 'npm').length, scenario.calls);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('upload-release-assets subprocess uploads exactly two missing verified assets without clobbering', () => {
+  const root = mkdtempSync(join(tmpdir(), 'triad-upload-assets-cli-'));
+  const fixture = createReleaseCliFixture(root);
+  try {
+    const result = fixture.run('upload-release-assets');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /now has exactly the two verified assets/);
+    const commands = fixture.commands();
+    const uploads = commands.filter(({ bin, args }) => bin === 'gh' && args[0] === 'release' && args[1] === 'upload');
+    assert.equal(uploads.length, 1);
+    assert.equal(uploads[0].clobber, false);
+    assert.deepEqual(uploads[0].files.map(({ path }) => path), [
+      join(fixture.artifactDirectory, fixture.archiveName),
+      join(fixture.artifactDirectory, fixture.archiveName + '.sha256'),
+    ]);
+    assert.deepEqual(uploads[0].files.map(({ bytes }) => Buffer.from(bytes, 'base64')),
+      [fixture.archiveBytes, fixture.sidecarBytes]);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.releaseStatePath, 'utf8')).assets.map(({ name }) => name), [
+      fixture.archiveName,
+      fixture.archiveName + '.sha256',
+    ]);
+    assert.ok(commands.filter(({ bin }) => bin === 'gh').every(({ clobber }) => clobber === false));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('upload-release-assets subprocess skips matching assets and rejects conflicts before any mutation', () => {
+  const cases = [
+    {
+      name: 'matching',
+      assets: (fixture) => [
+        { name: fixture.archiveName, digest: 'sha256:' + fixture.archiveSha256 },
+        { name: fixture.archiveName + '.sha256', digest: 'sha256:' + fixture.sidecarSha256 },
+      ],
+      succeeds: true,
+    },
+    {
+      name: 'digest-conflict',
+      assets: (fixture) => [{ name: fixture.archiveName, digest: 'sha256:' + 'd'.repeat(64) }],
+      expected: /will not be overwritten/,
+    },
+    {
+      name: 'unexpected-asset',
+      assets: (fixture) => [{ name: 'unexpected.zip', digest: 'sha256:' + 'e'.repeat(64) }],
+      expected: /unexpected asset/,
+    },
+  ];
+  for (const scenario of cases) {
+    const root = mkdtempSync(join(tmpdir(), 'triad-upload-assets-' + scenario.name + '-'));
+    const fixture = createReleaseCliFixture(root);
+    fixture.setRelease({ ...JSON.parse(readFileSync(fixture.releaseStatePath, 'utf8')), assets: scenario.assets(fixture) });
+    const initialRelease = readFileSync(fixture.releaseStatePath, 'utf8');
+    try {
+      const result = fixture.run('upload-release-assets');
+      if (scenario.succeeds) {
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, /no existing asset was overwritten/);
+      } else {
+        assert.equal(result.status, 1, scenario.name + ' unexpectedly passed');
+        assert.match(result.stderr, scenario.expected);
+        assert.equal(readFileSync(fixture.releaseStatePath, 'utf8'), initialRelease,
+          scenario.name + ' mutated release metadata before rejecting the conflict');
+      }
+      const commands = fixture.commands();
+      assert.equal(commands.filter(({ bin, args }) => bin === 'gh' && args[0] === 'release' && args[1] === 'upload').length, 0);
+      assert.ok(commands.filter(({ bin }) => bin === 'gh').every(({ clobber }) => clobber === false));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 
