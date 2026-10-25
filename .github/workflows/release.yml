@@ -1,37 +1,30 @@
-name: Release v1.22.1
+name: Publish stable GitHub Release to npm
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
-      release_version:
-        description: Release version
+      release_tag:
+        description: Stable vMAJOR.MINOR.PATCH tag to validate without publishing
         required: true
-        default: '1.22.1'
+        default: v1.22.2
         type: string
       expected_commit:
         description: Exact full SHA approved at the current main head
         required: true
         type: string
-      mode:
-        description: Dry-run is side-effect-free; publish is an explicit owner GO
-        required: true
-        default: dry-run
-        type: choice
-        options:
-          - dry-run
-          - publish
-      trusted_publisher_confirmed:
-        description: Confirm npmjs.com Trusted Publisher settings were checked
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
+concurrency:
+  group: triad-plus-release-${{ github.event.release.tag_name || inputs.release_tag || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   gate:
-    name: Validate, test, and build exact package
+    name: Validate, test, and build the exact release archive
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,7 +36,7 @@ jobs:
       integrity: ${{ steps.package.outputs.integrity }}
       shasum: ${{ steps.package.outputs.shasum }}
     steps:
-      - name: Check out exact dispatch commit
+      - name: Check out the immutable release event commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -57,20 +50,17 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Pin npm CLI to Trusted Publishing minimum
+      - name: Pin npm CLI to the Trusted Publishing minimum
         run: |
           npm install --global npm@11.5.1
           node --version
           npm --version
 
-      - name: Validate dispatch, current main, and release conflicts
+      - name: Validate the event, exact main commit, and immutable conflicts
         env:
-          DISPATCH_ACTOR: ${{ github.actor }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
-          RELEASE_MODE: ${{ inputs.mode }}
-          TRUSTED_PUBLISHER_CONFIRMED: ${{ inputs.trusted_publisher_confirmed }}
         run: node scripts/release/release-guard.mjs gate
 
       - name: Reuse CI Cockpit build
@@ -97,11 +87,11 @@ jobs:
       - name: Pack, inspect, and smoke-install one exact archive
         id: package
         env:
-          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: node scripts/release/release-guard.mjs package
 
-      - name: Preserve the verified archive only for publish mode
-        if: ${{ inputs.mode == 'publish' }}
+      - name: Preserve the verified archive for the release event only
+        if: ${{ github.event_name == 'release' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.artifact_name }}
@@ -113,15 +103,15 @@ jobs:
           retention-days: 30
 
   publish-npm:
-    name: Publish the verified archive to npm
+    name: Publish the verified archive to npm with OIDC
     needs: gate
-    if: ${{ inputs.mode == 'publish' }}
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Check out exact dispatch commit
+      - name: Check out the immutable release event commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -135,106 +125,86 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Pin npm CLI to Trusted Publishing minimum
+      - name: Pin npm CLI to the Trusted Publishing minimum
         run: npm install --global npm@11.5.1
 
-      - name: Download archive produced after all gates passed
+      - name: Download the archive produced after every gate passed
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.gate.outputs.artifact_name }}
           path: ${{ runner.temp }}/verified-release
 
-      - name: Verify downloaded archive identity and repeat conflict preflight
+      - name: Verify archive identity and repeat the fail-closed preflight
         env:
-          DISPATCH_ACTOR: ${{ github.actor }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
-          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
-          RELEASE_MODE: ${{ inputs.mode }}
-          TRUSTED_PUBLISHER_CONFIRMED: ${{ inputs.trusted_publisher_confirmed }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           EXPECTED_ARCHIVE_SHA256: ${{ needs.gate.outputs.sha256 }}
           EXPECTED_SIDECAR_SHA256: ${{ needs.gate.outputs.sidecar_sha256 }}
+          EXPECTED_INTEGRITY: ${{ needs.gate.outputs.integrity }}
+          EXPECTED_SHASUM: ${{ needs.gate.outputs.shasum }}
           ARTIFACT_DIR: ${{ runner.temp }}/verified-release
         run: |
           node scripts/release/release-guard.mjs verify-artifact
           node scripts/release/release-guard.mjs publish-preflight
 
-      - name: Publish exact verified archive with npm OIDC
-        run: npm publish "${{ runner.temp }}/verified-release/triad-plus-1.22.1.tgz" --provenance --access public
+      - name: Publish the exact verified archive with provenance
+        env:
+          TARBALL_NAME: ${{ needs.gate.outputs.tarball_name }}
+        run: npm publish "${{ runner.temp }}/verified-release/$TARBALL_NAME" --provenance --access public
 
-  create-github-release:
-    name: Create tag and GitHub Release after npm accepts the version
+      - name: Verify npm version, integrity, and shasum with bounded retries
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          EXPECTED_INTEGRITY: ${{ needs.gate.outputs.integrity }}
+          EXPECTED_SHASUM: ${{ needs.gate.outputs.shasum }}
+        run: node scripts/release/release-guard.mjs verify-registry
+
+  publish-release-assets:
+    name: Add only the two verified assets to the existing Release
     needs:
       - gate
       - publish-npm
-    if: ${{ inputs.mode == 'publish' }}
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Check out exact dispatch commit
+      - name: Check out the immutable release event commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Node 24 and npm registry
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-
-      - name: Pin npm CLI to Trusted Publishing minimum
-        run: npm install --global npm@11.5.1
-
-      - name: Download the exact archive already published to npm
+      - name: Download the exact verified archive
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.gate.outputs.artifact_name }}
           path: ${{ runner.temp }}/verified-release
 
-      - name: Recheck archive and npm identity before creating a tag or release
+      - name: Upload missing assets only; reject conflicts and never overwrite
         env:
-          DISPATCH_ACTOR: ${{ github.actor }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
-          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
-          RELEASE_MODE: ${{ inputs.mode }}
-          TRUSTED_PUBLISHER_CONFIRMED: ${{ inputs.trusted_publisher_confirmed }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           EXPECTED_ARCHIVE_SHA256: ${{ needs.gate.outputs.sha256 }}
           EXPECTED_SIDECAR_SHA256: ${{ needs.gate.outputs.sidecar_sha256 }}
-          EXPECTED_INTEGRITY: ${{ needs.gate.outputs.integrity }}
-          EXPECTED_SHASUM: ${{ needs.gate.outputs.shasum }}
           ARTIFACT_DIR: ${{ runner.temp }}/verified-release
         run: |
           node scripts/release/release-guard.mjs verify-artifact
-          node scripts/release/release-guard.mjs release-preflight
-
-      - name: Create v1.22.1 Git tag and Release with exactly two assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create v1.22.1 \
-            "${{ runner.temp }}/verified-release/triad-plus-1.22.1.tgz" \
-            "${{ runner.temp }}/verified-release/triad-plus-1.22.1.tgz.sha256" \
-            --target "${{ github.sha }}" \
-            --title "Triad+ v1.22.1" \
-            --notes-file docs/releases/1.22.1.md
+          node scripts/release/release-guard.mjs upload-release-assets
 
   verify-published:
-    name: Verify npm, Git tag, Release assets, and registry smoke separately
+    name: Verify npm, tag, Release assets, and registry install
     needs:
       - gate
       - publish-npm
-      - create-github-release
-    if: ${{ inputs.mode == 'publish' }}
+      - publish-release-assets
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Check out exact dispatch commit
+      - name: Check out the immutable release event commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -248,63 +218,43 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Pin npm CLI to Trusted Publishing minimum
+      - name: Pin npm CLI to the Trusted Publishing minimum
         run: npm install --global npm@11.5.1
 
-      - name: Verify immutable Git tag points at the exact dispatched commit
-        env:
-          RELEASE_VERSION: ${{ inputs.release_version }}
-          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
-        run: |
-          git fetch --no-tags origin "refs/tags/v${RELEASE_VERSION}:refs/tags/v${RELEASE_VERSION}"
-          actual="$(git rev-parse "refs/tags/v${RELEASE_VERSION}^{commit}")"
-          test "$actual" = "$EXPECTED_COMMIT"
-          echo "Git tag v${RELEASE_VERSION} points to $actual"
+      - name: Download the original verified archive
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.gate.outputs.artifact_name }}
+          path: ${{ runner.temp }}/verified-release
 
-      - name: Read npm registry integrity and shasum
-        env:
-          RELEASE_VERSION: ${{ inputs.release_version }}
-        run: npm view "triad-plus@${RELEASE_VERSION}" version dist.integrity dist.shasum --json > "${{ runner.temp }}/registry.json"
-
-      - name: Verify registry bytes against the verified archive
-        env:
-          REGISTRY_JSON_PATH: ${{ runner.temp }}/registry.json
-          EXPECTED_INTEGRITY: ${{ needs.gate.outputs.integrity }}
-          EXPECTED_SHASUM: ${{ needs.gate.outputs.shasum }}
-        run: node scripts/release/release-guard.mjs verify-registry
-
-      - name: Read GitHub Release assets and API digests
+      - name: Verify exact archive, tag, and current Release metadata
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/ainz-dg/triad-plus-engineering-loop/releases/tags/v1.22.1 > "${{ runner.temp }}/release.json"
-
-      - name: Verify exactly two Release asset names and API digests
-        env:
-          RELEASE_JSON_PATH: ${{ runner.temp }}/release.json
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           EXPECTED_ARCHIVE_SHA256: ${{ needs.gate.outputs.sha256 }}
           EXPECTED_SIDECAR_SHA256: ${{ needs.gate.outputs.sidecar_sha256 }}
-        run: node scripts/release/release-guard.mjs verify-release
+          EXPECTED_INTEGRITY: ${{ needs.gate.outputs.integrity }}
+          EXPECTED_SHASUM: ${{ needs.gate.outputs.shasum }}
+          ARTIFACT_DIR: ${{ runner.temp }}/verified-release
+          RELEASE_JSON_PATH: ${{ runner.temp }}/release.json
+        run: |
+          node scripts/release/release-guard.mjs verify-artifact
+          node scripts/release/release-guard.mjs verify-tag
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RELEASE_JSON_PATH"
+          node scripts/release/release-guard.mjs verify-release
 
-      - name: Download and verify both published Release assets
+      - name: Download Release assets and verify exact bytes
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download v1.22.1 \
-            --pattern "triad-plus-1.22.1.tgz" \
-            --pattern "triad-plus-1.22.1.tgz.sha256" \
-            --dir "${{ runner.temp }}/published-release-assets"
-          ARTIFACT_DIR="${{ runner.temp }}/published-release-assets" \
-            EXPECTED_ARCHIVE_SHA256="${{ needs.gate.outputs.sha256 }}" \
-            EXPECTED_SIDECAR_SHA256="${{ needs.gate.outputs.sidecar_sha256 }}" \
-            node scripts/release/release-guard.mjs verify-artifact
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.gate.outputs.sha256 }}
+          EXPECTED_SIDECAR_SHA256: ${{ needs.gate.outputs.sidecar_sha256 }}
+          ARTIFACT_DIR: ${{ runner.temp }}/verified-release
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/release-assets
+        run: node scripts/release/release-guard.mjs verify-release-downloads
 
-      - name: Install exact npm registry version in an isolated prefix
+      - name: Smoke-install the exact published registry version
         env:
-          RELEASE_VERSION: ${{ inputs.release_version }}
-        run: |
-          npm install --prefix "${{ runner.temp }}/registry-smoke" \
-            --no-save --no-audit --no-fund "triad-plus@${RELEASE_VERSION}"
-          installed="${{ runner.temp }}/registry-smoke/node_modules/triad-plus"
-          test "$(node -p "require('${installed}/package.json').version")" = "$RELEASE_VERSION"
-          test "$(node "${installed}/bin/triad-plus.js" --version)" = "$RELEASE_VERSION"
-          echo "Installed npm registry smoke passed for triad-plus@${RELEASE_VERSION}"
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INSTALL_PREFIX: ${{ runner.temp }}/registry-install
+        run: node scripts/release/release-guard.mjs registry-smoke
