@@ -325,6 +325,12 @@ approve work, or change state. See [architecture](docs/architecture.md).
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). Keep runtime-specific behavior in
 an adapter and preserve the small Core.
 
+## XERJ Corpus Hub
+
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/ainz-dg/badge.svg)](https://hub.xerj.org/contributors/ainz-dg)
+
+Triad+ is included in the [XERJ Corpus Hub](https://hub.xerj.org/corpus/ainz-dg--triad-plus-engineering-loop) as a pinned source corpus that AI coding agents can search for cited implementation examples. The latest source of truth remains this repository.
+
 ## License
 
 [Apache-2.0](LICENSE). Triad+ is permissively licensed for personal and
