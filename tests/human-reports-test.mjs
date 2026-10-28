@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { calculateCandidateFingerprintAtCommit } from "../runtime/lib/fingerprint.mjs";
-import { renderCardReport } from "../runtime/lib/human-reports.mjs";
+import { renderCardReport, renderHandoffReport } from "../runtime/lib/human-reports.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const cli = path.join(repositoryRoot, "runtime", "triad-human-report.mjs");
@@ -186,7 +186,13 @@ const handoffInput = {
   demo: "not configured",
   evidence_refs: [".loop/run-state.yaml"],
   exceptions: [],
-  risks: []
+  risks: [],
+  effort: {
+    time: { total_ms: 8040000, basis: "measured", method: "sum of role wall-clock timings", sources: [".loop/run-state.yaml"] },
+    tokens: { total: 184000, basis: "estimated", method: "host step_finish totals plus per-turn estimates", sources: [] },
+    cost: { total_usd: 3.158971, basis: "measured", method: "sum of provider session cost for the run window", sources: [".loop/run-state.yaml"] },
+    cards: [{ id: "CARD-001", elapsed_ms: 600000, tokens: 20000, cost_usd: 0.222637, basis: "estimated" }]
+  }
 };
 await writeJson(path.join(control, "handoff-context.json"), handoffInput);
 const handoff = run(["--mode", "handoff", "--project", control, "--input", "handoff-context.json", "--output", "handoff.md"], control);
@@ -198,6 +204,34 @@ assert.match(handoffReport, /card-reports\/CARD-001\.md/);
 assert.match(handoffReport, /Independent Reviewer approved/);
 assert.match(handoffReport, /PRD baseline/);
 assert.match(handoffReport, /delivery-001/);
+assert.match(handoffReport, /## Effort estimate/);
+assert.match(handoffReport, /Estimates are informational and are not verification, review, delivery, or billing evidence/i);
+assert.match(handoffReport, /\| Project \| 2h 14m \| 184,000 \| \$3\.159 \| time: measured; tokens: estimated; cost: measured \|/);
+assert.match(handoffReport, /\| CARD-001 \| 10m \| 20,000 \| \$0\.2226 \| estimated \|/);
+assert.match(handoffReport, /Time basis: measured — sum of role wall-clock timings/);
+assert.match(handoffReport, /Token basis: estimated — host step_finish totals plus per-turn estimates/);
+assert.match(handoffReport, /Cost basis: measured — sum of provider session cost for the run window/);
+assert.match(handoffReport, /Effort sources: \[\.loop\/run-state\.yaml\]\(\.loop\/run-state\.yaml\)/);
+const noEffortHandoff = renderHandoffReport(
+  { ...handoffInput, effort: undefined },
+  { projectRoot: control, outputPath: path.join(control, "handoff-no-effort.md") }
+);
+assert.match(noEffortHandoff, /No effort estimate recorded/);
+const summedEffortHandoff = renderHandoffReport(
+  { ...handoffInput, effort: { cards: [{ id: "CARD-001", elapsed_ms: 600000, tokens: 20000, cost_usd: 0.2 }, { id: "CARD-002", elapsed_ms: 60000, tokens: 1000, cost_usd: 0.1 }] } },
+  { projectRoot: control, outputPath: path.join(control, "handoff-summed-effort.md") }
+);
+assert.match(summedEffortHandoff, /\| Project \| 11m \| 21,000 \| \$0\.30 \| sum of per-card values \|/);
+assert.throws(
+  () => renderHandoffReport({ ...handoffInput, effort: { time: { total_ms: -1 } } }),
+  /non-negative number/,
+  "negative effort figures must be rejected"
+);
+assert.throws(
+  () => renderHandoffReport({ ...handoffInput, effort: { cost: { total_usd: -0.01 } } }),
+  /non-negative number/,
+  "negative cost figures must be rejected"
+);
 assert.match(handoffReport, /<external path>/);
 assert.match(handoffReport, /\[CARD-001 card report\]\(card-reports\/CARD-001\.md\)/);
 assert.match(handoffReport, /\[\.loop\/evidence\/CARD-001\/attempt-002\/verification\.json\]\(\.loop\/evidence\/CARD-001\/attempt-002\/verification\.json\)/);
