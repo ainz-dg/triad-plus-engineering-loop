@@ -2,13 +2,18 @@
 
 ## 1.22.2
 
-Patch release preparation for PR #41.
+Patch release for PR #41. No Core changes.
 
-- Align first-run guidance with the current wizard: it presents an installation
-  plan, does not report project readiness or probe host-runtime availability,
-  and keeps `doctor` as a separate diagnostic.
-- Bump the package and runtime version to `1.22.2`; no Core, verifier,
-  Reviewer, or adapter-dispatch behavior changes are included.
+- Fix managed `AGENTS.md` block integrity and ownership across `doctor`,
+  upgrade, and adapter removal: preserve text outside Triad+ markers and stop
+  before writes if a managed block has drifted.
+- Keep first-run installation separate from host executable availability.
+  The KISS wizard provides a concise plan, optional full details, and requires
+  exact-path review before applying selected user-level entries; it does not
+  probe host runtimes or report project readiness.
+- Improve the setup logo/TUI across terminal sizes and dumb-terminal fallback,
+  and make blocking preflight/apply failures clear and actionable, with Linux
+  PTY and related regression coverage.
 - Release notes: [Triad+ 1.22.2](docs/releases/1.22.2.md).
 
 ## 1.22.1
