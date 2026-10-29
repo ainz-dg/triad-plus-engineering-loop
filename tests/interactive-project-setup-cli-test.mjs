@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -260,6 +260,12 @@ try {
       assert.equal(executable.status, 0, `the local ${command} fixture executable is available`);
       await symlink(executable.stdout.trim(), path.join(hostlessPath, command));
     }
+    const runtimeProbeLog = path.join(fixture, 'runtime-probe.log');
+    for (const command of ['codex', 'opencode']) {
+      const executable = path.join(hostlessPath, command);
+      await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' '${command}' >> '${runtimeProbeLog}'\nprintf 'fixture runtime\\n'\n`);
+      await chmod(executable, 0o755);
+    }
     const prd = '# Sample Workspace source PRD\nOwner-authored; must remain unchanged.\n';
     await writeFile(path.join(root, 'PRD.md'), prd);
     const sampleApp = path.join(root, 'sample-app');
@@ -280,7 +286,7 @@ try {
       line(''), line(''), key('space'), key('enter'),
       line('ketchup2'), line(''), line(''), line(''),
       key('down'), key('space'), key('up'), key('space'), key('enter'),
-      key('space'), key('enter'), line('install'),
+      key('space'), key('enter'), line('details'), line('install'),
     ];
     const setup = terminalInput(root, answers, {
       HOME: home,
@@ -294,10 +300,12 @@ try {
       GIT_TERMINAL_PROMPT: '0',
     });
     assert.equal(setup.status, 0, `${setup.stderr}\n${setup.stdout}`);
+    assert.equal(await readFile(runtimeProbeLog).then(() => true, () => false), false, 'first-run setup never probes selected host runtimes');
     await saveTranscript('single-tty-two-harness-first-install', setup);
     const realRoot = await realpath(root);
     assert.ok(setup.stdout.includes(`Control Workspace (open this path): ${realRoot}`), setup.stdout);
-    assert.match(setup.stdout, /Triad\+ setup completed\./);
+    assert.match(setup.stdout, /Triad\+ installed/);
+    assert.doesNotMatch(setup.stdout, /Readiness:|Workspace readiness|Host runtimes: optional|host runtime=optional/);
     assert.match(setup.stdout, /Select product repositories/);
     assert.match(setup.stdout, /current branch develop/);
     assert.match(setup.stdout, /Only immediate-child Git roots are suggested/);
@@ -307,7 +315,7 @@ try {
     assert.match(setup.stdout, /Attempt-bound multi-harness dispatch remains unsupported/);
     assert.match(setup.stdout, /Optional; only exact files shown in the final preview can be installed/);
     assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
-    assert.match(setup.stdout, /Readiness: NOT READY/);
+    assert.doesNotMatch(setup.stdout, /PRD\.md.*quality-gates|baseline commit.*worktree/);
     assert.match(setup.stdout, /\/triad/);
     assert.equal(await readFile(path.join(root, 'PRD.md'), 'utf8'), prd);
     assert.equal(git(sampleApp, ['remote']), '');
@@ -315,6 +323,56 @@ try {
     assert.equal(git(sampleApp, ['rev-parse', 'HEAD']), repoHeadBefore, 'the fixture commit is preserved');
     assert.equal(git(sampleApp, ['status', '--porcelain']), repoStatusBefore, 'product repository contents remain unchanged');
     assert.deepEqual(await treeSnapshot(sampleApp), repoBefore, 'all committed repository files remain byte-identical');
+
+    // Release smoke: complete a harness-free first run at every owner-requested
+    // Linux terminal size. TERM=dumb also exercises the readable no-ANSI brand
+    // fallback, while the two UTF-8 terminals render the retro identity.
+    const noHarnessPath = path.join(fixture, 'no-harness-bin');
+    await mkdir(noHarnessPath);
+    for (const command of ['git', 'python3']) {
+      const executable = spawnSync('which', [command], { encoding: 'utf8' });
+      assert.equal(executable.status, 0, `the ${command} fixture executable is available`);
+      await symlink(executable.stdout.trim(), path.join(noHarnessPath, command));
+    }
+    assert.equal(await readFile(path.join(noHarnessPath, 'codex')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(noHarnessPath, 'opencode')).then(() => true, () => false), false);
+    for (const [columns, rows, term, locale] of [
+      [80, 24, 'xterm-256color', 'C.UTF-8'],
+      [80, 20, 'xterm-256color', 'C.UTF-8'],
+      [60, 20, 'dumb', 'C'],
+    ]) {
+      const smokeRoot = path.join(fixture, `LINUX-TTY-SMOKE-${columns}x${rows}-${term}`);
+      const smokeHome = path.join(fixture, `home-${columns}x${rows}-${term}`);
+      await mkdir(smokeRoot);
+      const smoke = terminalInput(smokeRoot, [
+        line(''), line(''), key('down'), key('down'), key('enter'),
+        key('down'), key('space'), key('enter'), line('n'), line('details'), line('install'),
+      ], {
+        HOME: smokeHome,
+        PATH: noHarnessPath,
+        TERM: term,
+        LANG: locale,
+        LC_ALL: locale,
+        TMPDIR: isolatedTmp,
+        TRIAD_TEST_PTY_COLS: String(columns),
+        TRIAD_TEST_PTY_ROWS: String(rows),
+      });
+      assert.equal(smoke.status, 0, `TTY ${columns}x${rows} ${term}: ${smoke.stderr}\n${smoke.stdout}`);
+      const smokeText = smoke.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+      assert.match(smokeText, /TRIAD\+/);
+      assert.match(smokeText, /Harnesses: OpenCode \(opencode\)/);
+      assert.match(smokeText, /Repository mappings:[\s\S]*deferred/);
+      assert.match(smokeText, /Triad\+ installed/);
+      assert.doesNotMatch(smokeText, /Readiness:|NOT READY|Host runtimes: optional|host runtime=optional/);
+      assert.doesNotMatch(smoke.stdout, /\u001b\[2J/, 'wizard navigation does not clear the entire display');
+      assert.ok(await readFile(path.join(smokeRoot, '.triad-plus', 'installation.json')));
+      if (term === 'dumb') {
+        assert.doesNotMatch(smoke.stdout, /\u001b\[/, 'TERM=dumb stays readable without ANSI controls');
+        assert.match(smokeText, /TRIAD\+ \/ Engineering Loop/);
+      } else {
+        assert.match(smokeText, /ENGINEERING LOOP/, 'UTF-8 terminal renders the retro brand');
+      }
+    }
     assert.deepEqual(await treeSnapshot(loopRoot), loopBefore, '.loop owner state and evidence remain byte-identical');
     assert.deepEqual(await readFile(path.join(root, '.triad-plus', 'team.json')), teamBytes, 'existing team owner data is reused unchanged');
     const projectYaml = await readFile(path.join(root, 'project.yaml'), 'utf8');
@@ -400,13 +458,13 @@ try {
     const fixtureBeforeDiagnostics = await treeSnapshot(fixture);
     const list = runCli(['adapter', 'list', '--control', root], root, isolatedHostEnv);
     assert.equal(list.status, 0, `${list.stderr}\n${list.stdout}`);
-    for (const id of recordedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=${id === 'codex' ? 'installed' : 'not_configured'} host=unavailable`), `${id} records the selected global entry separately from host availability`);
+    for (const id of recordedIds) assert.match(list.stdout, new RegExp(`${id}\\s+project=installed global=${id === 'codex' ? 'installed' : 'not_configured'} host runtime=optional/not checked`), `${id} records manifest scopes without probing the host runtime`);
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter list and isolated global locations are read-only');
     const manifestBytesBeforeDoctor = await readFile(manifestPath);
     const doctor = runCli(['adapter', 'doctor', '--control', root], root, isolatedHostEnv);
     assert.equal(doctor.status, 0, `${doctor.stderr}\n${doctor.stdout}`);
     assert.match(doctor.stdout, /attempt dispatch=unsupported/);
-    assert.match(doctor.stdout, /host=unavailable/);
+    assert.match(doctor.stdout, /host runtime=optional\/not checked/);
     assert.deepEqual(await readFile(manifestPath), manifestBytesBeforeDoctor, 'adapter doctor is read-only');
     assert.deepEqual(await treeSnapshot(fixture), fixtureBeforeDiagnostics, 'adapter doctor and isolated global locations leave all fixture files unchanged');
 
@@ -445,7 +503,7 @@ try {
     git(managedRepo, ['worktree', 'add', '-b', 'triad/product-feature', managedWorktree, 'main']);
     const managedAnswers = [
       line(''), line(''), key('space'), key('enter'), line('product'), line(''), line(''), line(''),
-      key('space'), key('enter'), key('space'), key('enter'), line('install'),
+      key('space'), key('enter'), key('space'), key('enter'), line('details'), line('install'),
     ];
     const managedSetup = terminalInput(managedRoot, managedAnswers, {
       HOME: managedHome,
@@ -457,7 +515,8 @@ try {
     });
     assert.equal(managedSetup.status, 0, `${managedSetup.stderr}\n${managedSetup.stdout}`);
     assert.match(managedSetup.stdout, /primary Codex \(codex\)/);
-    assert.match(managedSetup.stdout, /Readiness: READY/);
+    assert.match(managedSetup.stdout, /Triad\+ installed/);
+    assert.doesNotMatch(managedSetup.stdout, /Workspace ready|Readiness:|Host runtimes: optional/);
     assert.ok(managedSetup.stdout.includes(`CREATE ${path.join(managedCodexHome, 'skills', 'triad', 'SKILL.md')}`), 'the wizard approved the optional Codex global skill');
     assert.deepEqual(await readFile(path.join(managedRoot, '.triad-plus', 'team.json')), managedTeamBytes, 'the first-run wizard preserves the configured team');
     const managedManifestPath = path.join(managedRoot, '.triad-plus', 'installation.json');
@@ -591,7 +650,7 @@ try {
     const globalCancel = terminalInput(cancelRoot, [
       line(''), line(''), key('space'), key('enter'),
       line(''), line(''), line(''), line(''),
-      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('cancel'),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('details'), line('cancel'),
     ], { HOME: path.join(fixture, 'home-global-cancel'), CODEX_HOME: cancelCodexHome });
     assert.equal(globalCancel.status, 0, `${globalCancel.stderr}\n${globalCancel.stdout}`);
     assert.match(globalCancel.stdout, /CREATE .*skills[/\\]triad[/\\]SKILL\.md/);
@@ -616,7 +675,7 @@ try {
       line(''), line(''), line(''), line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('n'),
     ], { HOME: path.join(fixture, 'home-global-collision'), CODEX_HOME: collisionCodexHome });
-    assert.equal(globalCollision.status, 0, `${globalCollision.stderr}\n${globalCollision.stdout}`);
+    assert.equal(globalCollision.status, 2, `${globalCollision.stderr}\n${globalCollision.stdout}`);
     assert.match(globalCollision.stdout, /Global entry collision; existing bytes differ, no files were changed/);
     assert.equal(await readFile(collisionBridgeEntry, 'utf8'), collisionBridgeBytes, 'pre-existing global owner file remains byte-identical');
     assert.equal(await readFile(path.join(collisionBridgeRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
@@ -639,7 +698,7 @@ try {
       line(''), line(''), line(''), line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('n'),
     ], { HOME: path.join(fixture, 'home-legacy-prompt'), CODEX_HOME: legacyCodexHome });
-    assert.equal(legacyPromptCollision.status, 0, `${legacyPromptCollision.stderr}\n${legacyPromptCollision.stdout}`);
+    assert.equal(legacyPromptCollision.status, 2, `${legacyPromptCollision.stderr}\n${legacyPromptCollision.stdout}`);
     await saveTranscript('legacy-codex-prompt-collision', legacyPromptCollision);
     assert.match(legacyPromptCollision.stdout, /Legacy Codex prompt collision/);
     assert.match(legacyPromptCollision.stdout, /preserved byte-for-byte and is not migrated or deleted/);
@@ -659,7 +718,7 @@ try {
     const globalRace = terminalInput(raceRoot, [
       line(''), line(''), key('space'), key('enter'),
       line(''), line(''), line(''), line(''),
-      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('details'), line('install'),
     ], {
       HOME: path.join(fixture, 'home-global-race'),
       CODEX_HOME: raceCodexHome,
@@ -689,11 +748,11 @@ try {
     const secondInstall = terminalInput(secondWorkspace, [
       line(''), line(''), key('space'), key('enter'),
       line(''), line(''), line(''), line(''),
-      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('space'), key('enter'), line('n'), line('details'), line('install'),
     ], isolatedHostEnv);
     assert.equal(secondInstall.status, 0, `${secondInstall.stderr}\n${secondInstall.stdout}`);
     assert.match(secondInstall.stdout, /REUSE identical .*skills[/\\]triad[/\\]SKILL\.md/);
-    assert.match(secondInstall.stdout, /Triad\+ setup completed\./);
+    assert.match(secondInstall.stdout, /Triad\+ installed/);
     const secondBindingKey = digest(Buffer.from(await realpath(secondWorkspace)));
     const secondBinding = path.join(codexHome, 'triad-plus', 'bindings', `${secondBindingKey}.json`);
     assert.notEqual(secondBinding, codexBinding, 'each approved workspace receives its own owner-binding target');
@@ -825,7 +884,7 @@ try {
       line(''), line(''), key('down'), key('enter'), line('./missing'), key('enter'), line('./ketchup2'), key('enter'),
       line(''), line(''), line('bad..branch'), line(''),
       line('y'), key('enter'), line(''), line(''), line('triad/ketchup2-feature'), line(''),
-      key('space'), key('enter'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('enter'), line('n'), line('details'), line('install'),
     ];
     const retryRun = terminalInput(retryRoot, retryAnswers, {
       HOME: path.join(fixture, 'home-path-recovery'),
@@ -833,9 +892,9 @@ try {
     });
     assert.equal(retryRun.status, 0, retryRun.stderr + '\n' + retryRun.stdout);
     assert.match(retryRun.stdout, /Path was not added; no workspace changes were made:/);
-    assert.match(retryRun.stdout, /Repository preflight failed; nothing was changed:/);
+    assert.match(retryRun.stdout, /ERROR \/ BLOCKED — Repository preflight failed; no files were changed\./);
     assert.match(retryRun.stdout, /Correct repository mapping and retry from this workspace\?/);
-    assert.match(retryRun.stdout, /Triad\+ setup completed\./);
+    assert.match(retryRun.stdout, /Triad\+ installed/);
     assert.match(await readFile(path.join(retryRoot, 'project.yaml'), 'utf8'), /path: "\.\/ketchup2"/);
     assert.equal(git(retryRepo, ['rev-parse', 'HEAD']), retryHead);
     assert.deepEqual(await treeSnapshot(retryRepo), retryBefore, 'product repository stays byte-identical');
@@ -852,20 +911,20 @@ try {
     await mkdir(greenHome);
     const greenAnswers = [
       line(''), line(''), key('down'), key('enter'), line('1'), line('sample-app'), line(''), line(''), line(''), line(''),
-      key('space'), key('enter'), key('enter'), line('n'), line('install'),
+      key('space'), key('enter'), key('enter'), line('n'), line('details'), line('install'),
     ];
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
     await saveTranscript('greenfield-not-ready', green);
     assert.match(green.stdout, /INIT local Git only \(after approval; no remote\/push\)/);
-    assert.match(green.stdout, /root PRD\.md/);
-    assert.match(green.stdout, /quality-gates\.yaml/);
+    assert.doesNotMatch(green.stdout, /Readiness|NOT READY|root PRD\.md/);
     const greenRepo = path.join(greenRoot, 'sample-app');
     assert.equal(git(greenRepo, ['branch', '--show-current']), 'main');
     assert.equal(git(greenRepo, ['remote']), '');
     const head = run('git', ['-C', greenRepo, 'rev-parse', '--verify', 'HEAD'], greenRepo);
     assert.notEqual(head.status, 0, 'the wizard does not manufacture an initial commit');
-    assert.match(green.stdout, /Readiness: NOT READY/);
+    assert.match(green.stdout, /Triad\+ installed/);
+    assert.doesNotMatch(green.stdout, /Readiness:|Workspace ready/);
 
     // A06: a CWD that is itself a product Git root is not initialized as control and no sibling is guessed.
     const appRoot = path.join(fixture, 'APP-ROOT');
@@ -895,10 +954,11 @@ try {
     await writeFile(path.join(collisionRoot, '.opencode', 'commands', 'triad.md'), ownerCommand);
     const collision = terminalInput(collisionRoot, [
       line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('enter'), key('enter'), line('n'),
-    ], { HOME: path.join(fixture, 'home-collision') });
-    assert.equal(collision.status, 0, `${collision.stderr}\n${collision.stdout}`);
+    ], { HOME: path.join(fixture, 'home-collision'), PATH: noHarnessPath });
+    assert.equal(collision.status, 2, `${collision.stderr}\n${collision.stdout}`);
     await saveTranscript('preflight-collision', collision);
-    assert.match(collision.stdout, /Preflight failed; nothing was changed/);
+    assert.match(collision.stdout, /ERROR \/ BLOCKED — Setup preflight failed; no files were changed/);
+    assert.match(collision.stdout, /Safe next action: resolve the reported collision or unsafe path, then restart the wizard/);
     assert.equal(await readFile(path.join(collisionRoot, '.opencode', 'commands', 'triad.md'), 'utf8'), ownerCommand);
     assert.equal(await readFile(path.join(collisionRoot, 'project.yaml')).then(() => true, () => false), false);
     assert.equal(await readFile(path.join(collisionRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
@@ -908,7 +968,7 @@ try {
     await mkdir(partialRoot);
     const conflict = path.join(partialRoot, '.agents', 'skills', 'triad-loop-bootstrap', 'SKILL.md');
     const partialAnswers = [
-      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('up'), key('space'), key('enter'), key('enter'), line('n'), line('install'),
+      line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('up'), key('space'), key('enter'), key('enter'), line('n'), line('details'), line('install'),
     ];
     const partial = terminalInput(partialRoot, partialAnswers, {
       HOME: path.join(fixture, 'home-partial'),
@@ -916,15 +976,15 @@ try {
     });
     assert.equal(partial.status, 2, `${partial.stderr}\n${partial.stdout}`);
     await saveTranscript('partial-second-adapter-failure', partial);
-    assert.match(partial.stdout, /Setup is incomplete; no successful step was removed/);
+    assert.match(partial.stdout, /ERROR \/ BLOCKED — Triad\+ setup did not complete/);
     assert.match(partial.stdout, /Harnesses fully installed: opencode/);
-    assert.match(partial.stdout, /Safe re-entry: run triad-plus from this root, choose Manage existing/);
-    assert.doesNotMatch(partial.stdout, /Triad\+ setup completed\./);
+    assert.match(partial.stdout, /Safe next action: inspect this workspace with adapter doctor/);
+    assert.doesNotMatch(partial.stdout, /Triad\+ installed/);
     assert.equal(await readFile(conflict, 'utf8'), 'introduced after preview\n');
     const partialManifest = JSON.parse(await readFile(path.join(partialRoot, '.triad-plus', 'installation.json'), 'utf8'));
     assert.equal(partialManifest.adapter, 'opencode');
 
-    process.stdout.write('Interactive setup CLI pseudo-terminal fixtures passed: A01-A09, A13; native discovery gates are reported rather than inferred.\n');
+    process.stdout.write('Interactive setup CLI pseudo-terminal fixtures passed: A01-A09, A13; TTY success at 80x24/80x20/60x20 (no Codex/OpenCode binaries), cancellation without writes, blocking preflight, and dumb-terminal fallback; native discovery is not inferred.\n');
   }
 } finally {
   await rm(fixture, { recursive: true, force: true });

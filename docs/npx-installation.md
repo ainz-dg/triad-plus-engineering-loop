@@ -32,8 +32,9 @@ without an explicit selection. **Add repository by path** accepts an explicitly
 provided existing local Git root without widening discovery. **Create
 greenfield repository** initializes selected empty paths only after approval;
 that path collection remains text-based in this prototype. **Defer repository
-configuration** leaves mappings empty and readiness **NOT READY** until the
-owner adds them later.
+configuration** leaves mappings empty. The wizard can still install
+project-local adapter assets; an empty mapping is not reported as a first-run
+readiness result.
 
 For an existing selected Git root, the directory name suggests a stable ID,
 project branch, and worktree mapping; the selected path and detected base
@@ -70,12 +71,14 @@ Codex `$CODEX_HOME/prompts/triad.md` file is never migrated, overwritten, or
 deleted; if present, the wizard reports the name collision and blocks the
 optional native skill install until the owner backs it up under another name
 or deselects the Codex global entry. Skipping this step writes no user-level
-files. An optional team-identity/model configuration
-may also be requested. The final preview covers the Control Workspace, mapping
-changes, selected project and global assets, primary runtime adapter, and
-initial readiness. Type `install` to apply that exact plan; any other answer
-cancels. Global bridge files are written only after that final consent; no
-credentials or account settings are changed. Direct global `init`/`upgrade`
+files. An optional team-identity/model configuration may also be requested.
+The concise first-run summary describes the proposed installation; type
+`details` to inspect the exact file plan. When a user-level entry is selected,
+reviewing `details` is required before `install` is accepted. The wizard does
+not probe host executables or report project readiness. Type `install` to
+apply the exact plan; any other answer cancels. Global bridge files are
+written only after that final consent; no credentials or account settings are
+changed. Direct global `init`/`upgrade`
 and the legacy Codex/Hermes `install.sh --global` paths refuse the bridge so
 they cannot bypass this preview.
 
@@ -86,16 +89,14 @@ ownership and collision checks. A change detected after preview is not
 silently overwritten.
 Successful steps are not automatically rolled back if a later adapter install
 fails; the wizard reports the partial result and directs the owner to inspect
-it before re-entry. Installation itself does not imply project readiness:
-the wizard's initial readiness summary is a structural check for the root
-`PRD.md`, `.loop/quality-gates.yaml`, an initial Git commit per repository,
-and each mapped worktree path. It does not create those inputs implicitly,
-assess their quality, or execute the gates.
-
-Keep this structural preview separate from `doctor`. `doctor` diagnoses
-adapter installation, managed project assets, the host executable, and
-available host/verifier configuration; it is not a project-readiness check.
-Declared quality gates run later through `triad-verify` for a recorded Attempt.
+it before re-entry. Setup does not create the root `PRD.md`,
+`.loop/quality-gates.yaml`, repository baseline commits, or mapped worktrees,
+and its first-run summary does not report readiness from them or assess their
+quality. Selected repository/worktree mappings still undergo setup preflight
+validation. `doctor` is a separate diagnostic for adapter installation, managed
+project assets, the host executable, and available host/verifier
+configuration; it does not establish project readiness or run quality gates.
+Declared gates run later through `triad-verify` for a recorded Attempt.
 
 ### Existing-workspace management
 

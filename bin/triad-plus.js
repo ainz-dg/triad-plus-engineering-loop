@@ -22,6 +22,7 @@ import {
   formatDoctorLine,
   formatDoctorSection,
   formatSetupSummary,
+  formatCompactRetroHeader,
   formatRetroPixelHeader,
 } from '../runtime/lib/terminal.mjs';
 import {
@@ -42,15 +43,14 @@ import { interactiveAdapterManagement } from '../runtime/lib/interactive-adapter
 import {
   assertNoSymlinkPath,
   confirmAndApplySetup,
+  formatInteractiveSetupSummary,
   formatSetupPreview,
   immediateGitChildren,
   inspectExistingRepositoryRoot,
   initializeGreenfieldRepositories,
   inspectControlRoot,
   parsePositiveCount,
-  projectLaunchHint,
   readProjectYamlPlan,
-  setupReadiness,
   validateRepositoryPlan,
   writeProjectYamlPlan,
 } from '../runtime/lib/interactive-project-setup.mjs';
@@ -377,9 +377,9 @@ async function overlayPlan(controlRoot, team) {
   return { target, action: 'update', before: source, content: `${source.slice(0, managed.start)}${overlay}${source.slice(managed.blockEnd)}` };
 }
 
-async function applyOverlay(controlRoot, apply, team) {
+async function applyOverlay(controlRoot, apply, team, { quiet = false } = {}) {
   const plan = await overlayPlan(controlRoot, team);
-  process.stdout.write(`  Instructions ${apply ? plan.action : `would ${plan.action}`} ${plan.target}\n`);
+  if (!quiet) process.stdout.write(`  Instructions ${apply ? plan.action : `would ${plan.action}`} ${plan.target}\n`);
   if (apply) await writeFile(plan.target, plan.content, 'utf8');
 }
 
@@ -575,6 +575,34 @@ function manifestAssetPath(controlRoot, asset) {
   return asset.scope === 'project' ? resolve(controlRoot, asset.path) : resolve(asset.path);
 }
 
+async function managedAssetContentMatches(target, asset) {
+  if (asset.kind !== 'managed_block') return await sha256File(target) === asset.sha256;
+  if (asset.scope !== 'project') return false;
+  const source = await readFile(target, 'utf8');
+  const managed = managedBlockIn(source, asset.start_marker, asset.end_marker);
+  return Boolean(managed && sha256Text(managed.content) === asset.sha256);
+}
+
+async function assertManagedBlocksMatch(controlRoot, assets, operation, { allowMissing = false } = {}) {
+  for (const asset of assets ?? []) {
+    if (asset.kind !== 'managed_block' || asset.scope !== 'project') continue;
+    const target = manifestAssetPath(controlRoot, asset);
+    const info = await safeProjectAssetInfo(controlRoot, target);
+    if (!info && allowMissing) continue;
+    if (info && allowMissing) {
+      const source = await readFile(target, 'utf8');
+      if (!managedBlockIn(source, asset.start_marker, asset.end_marker)) continue;
+    }
+    let matches = false;
+    if (info) {
+      try { matches = await managedAssetContentMatches(target, asset); } catch {}
+    }
+    if (!matches) {
+      throw new Error(`Managed block is modified, ambiguous, or missing; refusing ${operation}: ${asset.path}. No files were changed.`);
+    }
+  }
+}
+
 function displayManagedAssetPath(asset) {
   if (asset.scope !== 'global') return asset.path;
   const home = resolve(homedir());
@@ -602,27 +630,13 @@ async function installationAssetIssues(controlRoot, adapter, installContext, man
       issues.push({ asset, status: `unreadable:${error.code ?? 'error'}` });
       continue;
     }
-    if (asset.kind === 'managed_block') {
-      if (!info.isFile()) {
-        issues.push({ asset, status: 'modified' });
-        continue;
-      }
-      let source;
-      try { source = await readFile(target, 'utf8'); } catch { issues.push({ asset, status: 'unreadable' }); continue; }
-      let managed;
-      try { managed = managedBlockIn(source, asset.start_marker, asset.end_marker); } catch { managed = null; }
-      if (managed && sha256Text(managed.content) !== asset.sha256) issues.push({ asset, status: 'modified' });
-      else if (managed && expectedState === 'uninstalled') issues.push({ asset, status: 'present_after_uninstall' });
-      else if (!managed && expectedState !== 'uninstalled') issues.push({ asset, status: 'modified' });
-      continue;
-    }
     if (!info.isFile()) {
       issues.push({ asset, status: 'modified' });
       continue;
     }
-    let observed;
-    try { observed = await sha256File(target); } catch { issues.push({ asset, status: 'unreadable' }); continue; }
-    if (observed !== asset.sha256) issues.push({ asset, status: 'modified' });
+    let matches;
+    try { matches = await managedAssetContentMatches(target, asset); } catch { issues.push({ asset, status: 'unreadable' }); continue; }
+    if (!matches) issues.push({ asset, status: 'modified' });
     else if (expectedState === 'uninstalled') issues.push({ asset, status: 'present_after_uninstall' });
   }
   return issues;
@@ -760,23 +774,32 @@ function capabilitySnapshot(controlRoot, manifestPath) {
 }
 
 async function collectTeamConfiguration(prompt, adapter) {
-  const language = (await prompt.question('Conversation language [English]: ')).trim() || 'English';
-  const ownerName = (await prompt.question('How should Triad+ address the project owner [Owner]: ')).trim() || 'Owner';
-  const communicationStyle = (await prompt.question('Preferred communication style [professional and concise]: ')).trim() || 'professional and concise';
   const evaluatorEnabled = ['y', 'yes'].includes((await prompt.question('Configure optional post-run Evaluator+? [y/N]: ')).trim().toLowerCase());
+  const customize = ['y', 'yes'].includes((await prompt.question('Customize team identities and model settings now? [y/N]: ')).trim().toLowerCase());
+  const interaction = customize
+    ? {
+      language: (await prompt.question('Conversation language [English]: ')).trim() || 'English',
+      owner_name: (await prompt.question('How should Triad+ address the project owner [Owner]: ')).trim() || 'Owner',
+      communication_style: (await prompt.question('Preferred communication style [professional and concise]: ')).trim() || 'professional and concise',
+    }
+    : { language: 'English', owner_name: 'Owner', communication_style: 'professional and concise' };
   const roles = {};
   for (const role of roleDefinitions) {
     const enabled = role.core || evaluatorEnabled;
-    const displayName = (await prompt.question(`${role.label} display name [${role.label}]: `)).trim() || role.label;
-    const persona = (await prompt.question(`${role.label} persona [professional and role-focused]: `)).trim() || 'professional and role-focused';
-    const model = (await prompt.question(`${role.label} model ID [host default]: `)).trim();
-    const reasoningEffort = supportsNativeReasoning(adapter, role.id)
+    const displayName = customize
+      ? (await prompt.question(`${role.label} display name [${role.label}]: `)).trim() || role.label
+      : role.label;
+    const persona = customize
+      ? (await prompt.question(`${role.label} persona [professional and role-focused]: `)).trim() || 'professional and role-focused'
+      : 'professional and role-focused';
+    const model = customize ? (await prompt.question(`${role.label} model ID [host default]: `)).trim() : '';
+    const reasoningEffort = customize && supportsNativeReasoning(adapter, role.id)
       ? (await prompt.question(`${role.label} reasoning effort [${adapter.modelBinding === 'global-profiles' && model ? role.defaultEffort : 'host default'}]: `)).trim()
         || (adapter.modelBinding === 'global-profiles' && model ? role.defaultEffort : null)
       : null;
     roles[role.id] = { displayName, persona, model: model || null, reasoning_effort: reasoningEffort, enabled };
   }
-  return { schema_version: 1, interaction: { language, owner_name: ownerName, communication_style: communicationStyle }, roles };
+  return { schema_version: 1, interaction, roles };
 }
 
 async function init(options) {
@@ -842,7 +865,7 @@ async function init(options) {
   }
   await installAssets(adapter.projectAssets, controlRoot, installContext);
   if (writesTeam) await writeTeamConfig(controlRoot, team);
-  if (team) await applyOverlay(controlRoot, true, team);
+  if (team) await applyOverlay(controlRoot, true, team, { quiet: options.quiet });
   if (options.global) await installAssets(adapter.globalAssets, controlRoot, installContext);
   if (team) await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
   if (team && options.global) await applyTeamBinding(adapter, controlRoot, team, installContext, 'global');
@@ -855,12 +878,16 @@ async function init(options) {
     previous: previousManifest
   });
   await writeInstallationManifest(controlRoot, manifest);
-  process.stdout.write(`Triad+ adapter assets installed for ${adapter.label} in ${controlRoot}\n`);
-  process.stdout.write('This init command does not configure repository mappings, PRD, quality gates, or worktrees. Verify project readiness separately before invoking /triad.\n');
-  if (adapter.globalEntry) {
-    process.stdout.write(`The optional user-level ${adapter.entry} entry is installed only through the consent-gated interactive setup wizard; this init wrote no global files.\n`);
+  if (!options.quiet) {
+    process.stdout.write(`Triad+ adapter assets installed for ${adapter.label} in ${controlRoot}\n`);
+    process.stdout.write('This init command does not configure repository mappings, PRD, quality gates, or worktrees. Verify project readiness separately before invoking /triad.\n');
+    if (adapter.globalEntry) {
+      process.stdout.write(`The optional user-level ${adapter.entry} entry is installed only through the consent-gated interactive setup wizard; this init wrote no global files.\n`);
+    }
+    process.stdout.write(`Open the control workspace and use ${adapter.entry} <PRD path>. Configured Evaluator+ runs automatically post-approval.\n`);
+  } else {
+    process.stdout.write(`Configured ${adapter.label}.\n`);
   }
-  process.stdout.write(`Open the control workspace and use ${adapter.entry} <PRD path>. Configured Evaluator+ runs automatically post-approval.\n`);
 }
 
 async function currentTeam(controlRoot) {
@@ -919,6 +946,9 @@ async function upgrade(options) {
   if (previousManifest && previousManifest.manifest.adapter !== adapter.id) {
     throw new Error(`Installation manifest belongs to ${previousManifest.manifest.adapter}, not ${adapter.id}.`);
   }
+  await assertManagedBlocksMatch(controlRoot, previousManifest?.manifest?.managed_assets, 'upgrade', {
+    allowMissing: Boolean(previousManifest && manifestScopeStatus(previousManifest.manifest, 'project') === 'uninstalled'),
+  });
   const team = await currentTeam(controlRoot);
   const installContext = context(controlRoot);
   const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
@@ -1236,12 +1266,10 @@ async function adapterList(options) {
   }
   process.stdout.write(`Installation schema ${loaded.manifest.schema_version}\n`);
   for (const record of records) {
-    const adapter = getAdapter(record.id);
-    const binary = adapter ? commandVersion(adapter.binaryCandidates ?? adapter.binary) : null;
     const project = manifestScopeStatus(record, 'project');
     const global = manifestScopeStatus(record, 'global');
-    process.stdout.write(`  ${record.id}  project=${project} global=${global} host=${binary?.version ? 'available' : 'unavailable'}`);
-    if (!adapter) process.stdout.write(' registry=unsupported');
+    process.stdout.write(`  ${record.id}  project=${project} global=${global} host runtime=optional/not checked`);
+    if (!getAdapter(record.id)) process.stdout.write(' registry=unsupported');
     if (record.managed_assets.some((asset) => asset.path.startsWith('.triad-runtime/adapters/'))) process.stdout.write(' metadata=per-adapter');
     process.stdout.write('\n');
   }
@@ -1269,7 +1297,6 @@ async function adapterDoctor(options) {
       process.stdout.write(`  ${record.id}: unsupported registry entry; assets preserved.\n`);
       continue;
     }
-    const binary = commandVersion(adapter.binaryCandidates ?? adapter.binary);
     const issues = [];
     for (const asset of record.managed_assets.filter((entry) => entry.scope === 'project')) {
       const target = manifestAssetPath(controlRoot, asset);
@@ -1277,11 +1304,15 @@ async function adapterDoctor(options) {
       try { info = await safeProjectAssetInfo(controlRoot, target); }
       catch { issues.push(`${asset.path}: unsafe`); continue; }
       if (!info) issues.push(`${asset.path}: missing`);
-      else if (await sha256File(target) !== asset.sha256) issues.push(`${asset.path}: modified`);
+      else {
+        let matches = false;
+        try { matches = await managedAssetContentMatches(target, asset); } catch {}
+        if (!matches) issues.push(`${asset.path}: modified`);
+      }
     }
     const runtimePath = recordedRuntimeMetadataPath(record);
     const entrySupport = adapter.globalEntry ? 'limited/unproven' : 'installed project assets (static only)';
-    process.stdout.write(`  ${record.id}: manifest=${issues.length ? 'incomplete' : 'OK'} host=${binary?.version ? `available (${binary.version})` : 'unavailable'} project-entry=${entrySupport}\n`);
+    process.stdout.write(`  ${record.id}: manifest=${issues.length ? 'incomplete' : 'OK'} host runtime=optional/not checked project-entry=${entrySupport}\n`);
     process.stdout.write(`    runtime metadata=${runtimePath ?? 'missing'}; attempt dispatch=unsupported\n`);
     for (const issue of issues) process.stdout.write(`    ISSUE ${issue}\n`);
   }
@@ -1324,14 +1355,16 @@ async function adapterAdd(options) {
     };
   }
   const migration = loaded?.manifest.schema_version === 1;
-  process.stdout.write(`Adapter add ${options.apply ? 'applying' : 'plan'} — ${adapter.label}\n`);
-  if (migration) process.stdout.write('  Explicit v1 → v2 migration will preserve the existing adapter record.\n');
-  process.stdout.write(`  Project assets: ${counts.create} create, ${counts.reuse} exact-byte reuse; global assets: none.\n`);
-  for (const action of counts.actions) {
-    const owners = action.owners.length ? ` (shared with ${action.owners.join(', ')})` : '';
-    process.stdout.write(`  ${action.kind === 'create' ? 'CREATE' : action.kind === 'reuse-shared' ? 'REUSE shared' : 'REUSE identical'} ${action.asset.path}${owners}\n`);
+  if (!options.quiet) {
+    process.stdout.write(`Adapter add ${options.apply ? 'applying' : 'plan'} — ${adapter.label}\n`);
+    if (migration) process.stdout.write('  Explicit v1 → v2 migration will preserve the existing adapter record.\n');
+    process.stdout.write(`  Project assets: ${counts.create} create, ${counts.reuse} exact-byte reuse; global assets: none.\n`);
+    for (const action of counts.actions) {
+      const owners = action.owners.length ? ` (shared with ${action.owners.join(', ')})` : '';
+      process.stdout.write(`  ${action.kind === 'create' ? 'CREATE' : action.kind === 'reuse-shared' ? 'REUSE shared' : 'REUSE identical'} ${action.asset.path}${owners}\n`);
+    }
+    process.stdout.write('  Attempt-bound host dispatch remains unsupported; no default host will be changed.\n');
   }
-  process.stdout.write('  Attempt-bound host dispatch remains unsupported; no default host will be changed.\n');
   if (!options.apply) {
     process.stdout.write('Dry run only. Re-run with --apply to add the adapter.\n');
     return;
@@ -1359,7 +1392,7 @@ async function adapterAdd(options) {
       adapters: [...records, entry],
     });
     await writeInstallationManifest(controlRoot, manifest);
-    process.stdout.write(`Adapter ${adapter.id} added; installation manifest migrated/written as schema v2.\n`);
+    process.stdout.write(options.quiet ? `Configured ${adapter.label}.\n` : `Adapter ${adapter.id} added; installation manifest migrated/written as schema v2.\n`);
   } catch (error) {
     const rollbackFailures = await rollbackCreatedAssets(created, finalAssets.length ? finalAssets : planned, controlRoot);
     if (rollbackFailures.length) process.stderr.write(`Recovery required; newly created assets preserved at: ${rollbackFailures.join(', ')}\n`);
@@ -1400,13 +1433,14 @@ async function adapterRemove(options) {
       continue;
     }
     if (!info) continue;
-    const observed = await sha256File(target);
-    if (observed !== asset.sha256) {
+    let matches;
+    try { matches = await managedAssetContentMatches(target, asset); } catch { matches = false; }
+    if (!matches) {
       conflicts.push(`${asset.path}: modified; preserved`);
       continue;
     }
     if (assetOwners.length > 1) preservedShared.push(asset.path);
-    else removals.push({ asset, target });
+    else removals.push({ asset, target, managedBlock: asset.kind === 'managed_block' });
   }
   if (conflicts.length) {
     process.stderr.write(`Removal refused; no files were changed. ${conflicts.join('; ')}\n`);
@@ -1415,7 +1449,7 @@ async function adapterRemove(options) {
   process.stdout.write(`Adapter remove ${options.apply ? 'applying' : 'plan'} — ${options.host}\n`);
   if (preservesGlobal) process.stdout.write('  Global entry files are preserved; they may be shared with other Control Workspaces and are never removed by this project-local operation.\n');
   process.stdout.write(`  ${removals.length} exclusive unchanged file(s) ${options.apply ? 'will be removed' : 'would be removed'}; ${preservedShared.length} shared file(s) retained.\n`);
-  for (const entry of removals) process.stdout.write(`  REMOVE ${entry.asset.path}\n`);
+  for (const entry of removals) process.stdout.write(`  ${entry.managedBlock ? 'REMOVE block' : 'REMOVE'} ${entry.asset.path}\n`);
   for (const assetPath of preservedShared) process.stdout.write(`  PRESERVE shared ${assetPath}\n`);
   if (!options.apply) {
     process.stdout.write('Dry run only. Re-run with --apply to remove only hash-matching adapter-owned files.\n');
@@ -1427,8 +1461,20 @@ async function adapterRemove(options) {
     for (const [index, entry] of removals.entries()) {
       const backup = join(backupRoot, String(index));
       await cp(entry.target, backup);
-      backedUp.push({ target: entry.target, backup, sha256: entry.asset.sha256 });
-      await rm(entry.target);
+      const recovery = { target: entry.target, backup, beforeSha256: await sha256File(entry.target), afterSha256: null };
+      backedUp.push(recovery);
+      if (entry.managedBlock) {
+        const source = await readFile(entry.target, 'utf8');
+        const managed = managedBlockIn(source, entry.asset.start_marker, entry.asset.end_marker);
+        if (!managed || sha256Text(managed.content) !== entry.asset.sha256) {
+          throw new Error(`Managed block changed during removal; preserving ${entry.asset.path}.`);
+        }
+        const remainder = `${source.slice(0, managed.start)}${source.slice(managed.blockEnd)}`;
+        recovery.afterSha256 = sha256Text(remainder);
+        await writeFile(entry.target, remainder, 'utf8');
+      } else {
+        await rm(entry.target);
+      }
     }
     const now = new Date().toISOString();
     const manifest = buildMultiAdapterManifest({
@@ -1446,7 +1492,11 @@ async function adapterRemove(options) {
         if (!(await safeProjectAssetInfo(controlRoot, entry.target))) {
           await mkdir(dirname(entry.target), { recursive: true });
           await cp(entry.backup, entry.target);
-        } else if (await sha256File(entry.target) !== entry.sha256) recovery.push(relative(controlRoot, entry.target));
+        } else {
+          const currentHash = await sha256File(entry.target);
+          if (currentHash === entry.beforeSha256 || (entry.afterSha256 && currentHash === entry.afterSha256)) await cp(entry.backup, entry.target);
+          else recovery.push(relative(controlRoot, entry.target));
+        }
       } catch { recovery.push(relative(controlRoot, entry.target)); }
     }
     if (recovery.length) process.stderr.write(`Recovery required; assets could not be restored safely: ${recovery.join(', ')}\n`);
@@ -1472,6 +1522,16 @@ async function adapterUpgrade(options) {
   const pairs = await adapterAssetPairs(adapter, controlRoot, installContext, records, selected);
   const planned = await plannedAdapterRecords(pairs, controlRoot);
   const previous = new Map(selected.managed_assets.filter((asset) => asset.scope === 'project').map((asset) => [asset.path, asset]));
+  const managedBlocks = [...previous.values()].filter((asset) => asset.kind === 'managed_block');
+  for (const asset of managedBlocks) {
+    const target = manifestAssetPath(controlRoot, asset);
+    const info = await safeProjectAssetInfo(controlRoot, target);
+    let matches = false;
+    if (info) {
+      try { matches = await managedAssetContentMatches(target, asset); } catch {}
+    }
+    if (!matches) throw new Error(`Managed block is modified, ambiguous, or missing; refusing upgrade: ${asset.path}. No files were changed.`);
+  }
   const sharedOwners = new Map();
   for (const record of records) for (const asset of record.managed_assets) {
     const list = sharedOwners.get(assetIdentity(asset)) ?? [];
@@ -1540,7 +1600,13 @@ async function adapterUpgrade(options) {
     }
     const team = await currentTeam(controlRoot);
     if (team && adapter.modelBinding === 'project-frontmatter') await applyTeamBinding(adapter, controlRoot, team, installContext, 'project');
-    finalAssets = await observedAdapterRecords(planned, pairs, controlRoot);
+    for (const asset of managedBlocks) {
+      const target = manifestAssetPath(controlRoot, asset);
+      let matches = false;
+      try { matches = await managedAssetContentMatches(target, asset); } catch {}
+      if (!matches) throw new Error(`Managed block changed during upgrade; refusing to update its ownership record: ${asset.path}.`);
+    }
+    finalAssets = [...await observedAdapterRecords(planned, pairs, controlRoot), ...managedBlocks];
     const now = new Date().toISOString();
     const updated = {
       ...selected,
@@ -1851,7 +1917,7 @@ async function doctor(options) {
       process.stdout.write(`  ${formatDoctorLine('Global scope', installationScopeText(installation.manifest, 'global'))}\n`);
     }
     process.stdout.write(`${formatDoctorSection('Runtime and installation')}\n`);
-    process.stdout.write(`  ${formatDoctorLine('Host runtime', binary ? `OK (${binary})` : 'not installed or version unavailable')}\n`);
+    process.stdout.write(`  ${formatDoctorLine('Host runtime', binary ? `detected via standard PATH (${binary}; optional)` : 'not detected via standard PATH (optional; not an installation error)')}\n`);
     process.stdout.write(`  ${formatDoctorLine('Verifier', node && await exists(join(controlRoot, '.triad-runtime', 'triad-verify.mjs')) ? 'OK' : 'incomplete')}\n`);
     process.stdout.write(`  ${formatDoctorLine('Adapter', manifest ? 'OK' : 'missing or different adapter')}\n`);
     if (globalPathError) process.stdout.write(`  ${formatDoctorLine('Global host profile', `unsafe or unreadable — ${globalPathError.message}`)}\n`);
@@ -2314,7 +2380,6 @@ async function preflightInteractiveSetup({ root, repositories, adapters, project
     adapterPlans.set(adapter.id, plan);
     simulatedRecords.push({ id: adapter.id, managed_assets: plan.managedAssets });
   }
-  const readiness = await setupReadiness(root, repositories);
   const roleOverlayPlan = team ? await overlayPlan(root, team) : null;
   const roleBindingActions = team ? adapters.flatMap((adapter) => {
     if (adapter.modelBinding !== 'project-frontmatter' || typeof adapter.roleModelPaths !== 'function') return [];
@@ -2322,7 +2387,7 @@ async function preflightInteractiveSetup({ root, repositories, adapters, project
   }) : [];
   const globalEntryPlans = await planGlobalEntryAdapters(adapters, globalEntryAdapters, root);
   return {
-    root, repositories, adapters, adapterPlans, projectYamlPlan, readiness,
+    root, repositories, adapters, adapterPlans, projectYamlPlan,
     roleOverlayPlan, roleBindingActions, globalEntryPlans,
     teamMode: useExistingTeam ? 'reuse existing without rewriting' : team ? 'create requested team config' : 'leave unconfigured',
     team,
@@ -2457,33 +2522,32 @@ async function applyInteractiveSetup(plan) {
       await writeProjectYamlPlan(plan.projectYamlPlan);
       projectYamlWritten = true;
     }
-    await init({ host: plan.adapters[0].id, control: plan.root, team: plan.team, useExistingTeam: plan.useExistingTeam });
+    process.stdout.write('Applying Triad+ workspace setup...\n');
+    await init({ host: plan.adapters[0].id, control: plan.root, team: plan.team, useExistingTeam: plan.useExistingTeam, quiet: true });
     installedAdapters.push(plan.adapters[0].id);
     for (const adapter of plan.adapters.slice(1)) {
-      await adapterAdd({ adapterCommand: 'add', host: adapter.id, control: plan.root, apply: true });
+      await adapterAdd({ adapterCommand: 'add', host: adapter.id, control: plan.root, apply: true, quiet: true });
       installedAdapters.push(adapter.id);
     }
     await applyGlobalEntryPlans(plan.root, plan.globalEntryPlans);
   } catch (error) {
-    process.stderr.write(`Setup is incomplete; no successful step was removed.\n`);
+    process.stderr.write('\nERROR / BLOCKED — Triad+ setup did not complete.\n');
+    process.stderr.write(`Failed operation: ${error.message}\n`);
     process.stderr.write(`  Control Workspace: ${plan.root}\n`);
     process.stderr.write(`  Control Workspace directory created: ${createdRoot ? 'yes' : 'no'}\n`);
     process.stderr.write(`  Greenfield repositories initialized: ${createdRepos.join(', ') || 'none'}\n`);
     process.stderr.write(`  project.yaml updated: ${projectYamlWritten ? 'yes' : 'no'}\n`);
     process.stderr.write(`  Harnesses fully installed: ${installedAdapters.join(', ') || 'none'}\n`);
-    if (installedAdapters.length < plan.adapters.length) process.stderr.write('  The failing harness may have partial files; inspect with adapter doctor before retrying.\n');
-    process.stderr.write(`  Safe re-entry: run triad-plus from this root, choose Manage existing, then add only missing adapters.\n`);
+    process.stderr.write('  Partial writes may exist; no automatic workspace cleanup was attempted.\n');
+    process.stderr.write(`  Safe next action: inspect this workspace with adapter doctor --control ${plan.root}, then re-enter Manage existing only after review.\n`);
+    error.interactiveReported = true;
     throw error;
   }
 
-  process.stdout.write('\nTriad+ setup completed.\n');
-  const readiness = await setupReadiness(plan.root, plan.repositories);
-  process.stdout.write(`Readiness: ${readiness.ready ? 'READY' : 'NOT READY'}${readiness.missing.length ? ` — missing: ${readiness.missing.join('; ')}` : ''}\n`);
-  for (const adapter of plan.adapters) await adapterDoctor({ adapterCommand: 'doctor', host: adapter.id, control: plan.root });
-  for (const adapter of plan.adapters) {
-    for (const line of projectLaunchHint(adapter, plan.root, { globalEntryInstalled: plan.globalEntryPlans.has(adapter.id) })) process.stdout.write(`${line}\n`);
-  }
-  process.stdout.write('No PRD, gate, branch baseline, worktree, remote, or successful verification was created implicitly.\n');
+  process.stdout.write('\nTriad+ installed\n');
+  process.stdout.write(`Control Workspace: ${plan.root}\n`);
+  process.stdout.write(`Configured adapters: ${plan.adapters.map((adapter) => adapter.label).join(', ')}\n`);
+  process.stdout.write(`Next: open this workspace in ${plan.adapters[0].label}; use that adapter's Triad+ entry when ready to start a run.\n`);
 }
 
 async function interactiveNewProjectSetup(prompt, currentDirectory) {
@@ -2519,10 +2583,12 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
       repositories = await validateRepositoryPlan(root, selection.repositories, { mode: selection.mode });
       repositoryPlan = selection;
     } catch (error) {
-      process.stdout.write(`Repository preflight failed; nothing was changed: ${error.message}\n`);
+      process.stdout.write(`ERROR / BLOCKED — Repository preflight failed; no files were changed.\nReason: ${error.message}\n`);
       const answer = (await prompt.question('Correct repository mapping and retry from this workspace? [Y/n]: ')).trim().toLowerCase();
       if (answer === 'n' || answer === 'no') {
         process.stdout.write('Cancelled. No files were changed.\n');
+        process.stdout.write('Safe next action: correct the repository path/branch, or choose Defer repository configuration on a fresh run.\n');
+        process.exitCode = 2;
         return;
       }
       repositoryPlan = selection;
@@ -2554,7 +2620,9 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
       team = await collectTeamConfiguration(prompt, adapters[0]);
     }
   } catch (error) {
-    process.stdout.write(`Preflight failed; nothing was changed: ${error.message}\n`);
+    process.stdout.write(`ERROR / BLOCKED — Team configuration could not be prepared; no files were changed.\nReason: ${error.message}\n`);
+    process.stdout.write('Safe next action: inspect or repair the selected team configuration, then rerun with optional team setup left unconfigured if needed.\n');
+    process.exitCode = 2;
     return;
   }
   let plan;
@@ -2565,12 +2633,16 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
     });
     plan = await preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam, globalEntryAdapters });
   } catch (error) {
-    process.stdout.write(`Preflight failed; nothing was changed: ${error.message}\n`);
+    process.stdout.write(`ERROR / BLOCKED — Setup preflight failed; no files were changed.\nReason: ${error.message}\n`);
+    process.stdout.write('Safe next action: resolve the reported collision or unsafe path, then restart the wizard.\n');
+    process.exitCode = 2;
     return;
   }
   await confirmAndApplySetup({
     prompt,
     preview: `Triad+ / 6 of 6 — Review exact plan\n${formatSetupPreview(plan)}`,
+    summary: formatInteractiveSetupSummary(plan),
+    requireDetails: plan.globalEntryPlans.size > 0,
     apply: () => applyInteractiveSetup(plan),
   });
 }
@@ -2578,7 +2650,7 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
 async function interactiveInit() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('The interactive wizard needs a terminal. Use init in a non-interactive shell.');
   const header = formatRetroPixelHeader({ stream: process.stdout });
-  const prompt = interactivePrompt({ header });
+  const prompt = interactivePrompt({ header: formatCompactRetroHeader({ stream: process.stdout }) });
   try {
     const currentDirectory = resolve(process.cwd());
     let currentManifest = null;
@@ -2620,7 +2692,7 @@ async function interactiveInit() {
           }
           control = candidatePath;
         } catch (error) {
-          process.stdout.write(`Cannot safely manage ${candidatePath}: ${error.message}\n`);
+          process.stdout.write(`ERROR / BLOCKED — Cannot safely manage ${candidatePath}; no files were changed.\nReason: ${error.message}\n`);
         }
       }
       await interactiveAdapterManagement({
@@ -2643,6 +2715,13 @@ async function interactiveInit() {
       process.stdout.write('Cancelled by Ctrl+C. No workspace or repository changes were applied.\n');
       process.exitCode = 130;
     }
+  } catch (error) {
+    if (!error.interactiveReported) {
+      process.stderr.write('\nERROR / BLOCKED — Interactive setup could not continue.\n');
+      process.stderr.write(`Failed operation: ${error.message}\n`);
+      process.stderr.write('No success was reported. If application had started, inspect the selected Control Workspace before retrying.\n');
+    }
+    process.exitCode = 2;
   } finally { prompt.close(); }
 }
 
@@ -2665,7 +2744,9 @@ try {
   else if (options.command === '--help' || options.command === '-h') usage(0);
   else throw new Error(`Unknown command: ${options.command}`);
 } catch (error) {
-  process.stderr.write(`${error.code ? `${error.code}: ` : ''}${error.message}\n`);
-  process.stderr.write('Run npx triad-plus --help for command syntax.\n');
+  if (!error.interactiveReported) {
+    process.stderr.write(`${error.code ? `${error.code}: ` : ''}${error.message}\n`);
+    process.stderr.write('Run npx triad-plus --help for command syntax.\n');
+  }
   process.exitCode = 2;
 }

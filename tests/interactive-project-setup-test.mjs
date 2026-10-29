@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import {
   assertNoSymlinkPath,
   confirmAndApplySetup,
+  formatInteractiveSetupSummary,
   formatSetupPreview,
   initializeGreenfieldRepositories,
   inspectControlRoot,
@@ -135,6 +136,36 @@ try {
   assert.equal(didApply, false, 'confirmation is exact; whitespace cancels');
   assert.equal(applies, 0);
   assert.match(output.join(''), /No files were changed/);
+
+  const gatedPrompt = prompt(['install', 'details', 'install']);
+  const gatedOutput = [];
+  let gatedApplies = 0;
+  assert.equal(await confirmAndApplySetup({
+    prompt: gatedPrompt,
+    preview: 'exact user-level path: /owner/profile/file.md\n',
+    summary: 'compact first-run plan\n',
+    requireDetails: true,
+    apply: async () => { gatedApplies += 1; },
+    write: (value) => gatedOutput.push(value),
+  }), true);
+  assert.equal(gatedPrompt.questions.length, 3, 'global plans require details before install can be approved');
+  assert.match(gatedOutput.join(''), /exact user-level path: \/owner\/profile\/file\.md/);
+  assert.equal(gatedApplies, 1);
+
+  const compactSummary = formatInteractiveSetupSummary({
+    root: '/tmp/control',
+    repositories: [],
+    adapters: [{ id: 'codex', label: 'Codex' }],
+    adapterPlans: new Map([['codex', { created: ['.triad-runtime/a', '.triad-runtime/b'], reused: ['.triad-runtime/c'] }]]),
+    globalEntryPlans: new Map(),
+    projectYamlPlan: { changed: true, before: null },
+    readiness: { ready: false, missing: ['PRD.md', 'required quality-gates'] },
+    currentVersion: '1.22.1',
+  });
+  assert.match(compactSummary, /Triad\+ first-run plan/);
+  assert.match(compactSummary, /No files are written until you type "install"/);
+  assert.doesNotMatch(compactSummary, /Readiness|runtime|\.loop\/quality-gates/);
+  assert.doesNotMatch(compactSummary, /\.triad-runtime\/a/, 'the compact summary omits per-file paths available in details');
   await writeProjectYamlPlan(configPlan);
   assert.match(await readFile(configPlan.path, 'utf8'), /owner: "Owner"|owner: Ainz/);
   assert.match(await readFile(configPlan.path, 'utf8'), /id: "other"/);
@@ -231,13 +262,12 @@ try {
     adapters: [{ id: 'opencode', label: 'OpenCode' }],
     adapterPlans: new Map([['opencode', { created: ['.opencode/commands/triad.md'] }]]),
     projectYamlPlan: { changed: true, before: null },
-    readiness: readinessBefore,
     currentVersion: '1.18.0',
     teamMode: 'create requested team config',
     roleOverlayPlan: { action: 'append', target: path.join(emptyRoot, 'AGENTS.md') },
     roleBindingActions: [{ adapterId: 'opencode', target: path.join(emptyRoot, '.opencode', 'agents', 'triad-orchestrator.md') }],
   });
-  assert.match(teamPreview, /NOT READY/);
+  assert.doesNotMatch(teamPreview, /Readiness:|NOT READY|quality-gates|baseline commit/);
   assert.match(teamPreview, /\.triad-plus\/team\.json: CREATE/);
   assert.match(teamPreview, /AGENTS\.md role instructions: APPEND/);
   assert.match(teamPreview, /opencode: CONFIGURE/);

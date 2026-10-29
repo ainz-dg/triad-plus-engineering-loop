@@ -36,12 +36,16 @@ The first harness selected is visibly marked as primary because it supplies
 the current singleton runtime metadata; multi-harness installation does not
 provide per-Attempt cross-harness dispatch. Escape cancels from repository
 selection and goes back from harness selection. Ctrl+C exits without applying
-the plan. Review the complete preview and type exactly
-`install` to apply it. An additional optional screen can select the Codex
-`$triad` or Hermes `/triad` global entry; the exact files and profile paths are
-previewed and written only after the final confirmation. Skipping it leaves
-global host files unchanged. The wizard does not clone repositories or push
-changes. For full setup behavior and limitations, see
+the plan. The concise confirmation can be expanded with `details`; when a
+user-level entry is selected, reviewing its exact paths is required before
+typing exactly `install` to apply the plan. The selected adapter's project assets can be installed
+without its native host executable being present; setup does not probe host
+availability. An additional optional screen can select the Codex `$triad` or
+Hermes `/triad` user-level entry. The concise plan can be expanded with
+`details`; when a user-level entry is selected, that exact-path review is
+required before `install` is accepted. Skipping it leaves user-level files
+unchanged. The wizard does not clone repositories or push changes. For full
+setup behavior and limitations, see
 [npx installation](npx-installation.md). Selecting an adapter does not prove
 native host discovery or route an Attempt to that host. See the
 [adapter compatibility matrix](compatibility.md).
@@ -52,15 +56,14 @@ At the Control Workspace root, create `PRD.md` with a small goal, one
 observable acceptance criterion, and a deterministic verification command.
 Also add `.loop/quality-gates.yaml`, make an initial commit in each mapped
 repository, and create the declared worktree. Setup does not create these
-inputs implicitly. The wizard preview is only a structural check: it looks for
-the root PRD and gate file, an initial commit for each mapped repository, and
-the configured worktree paths. It does not assess PRD or gate quality and does
-not execute the gates.
+inputs implicitly. The wizard's first-run summary is an installation plan; it
+does not inspect or attest to project readiness, probe host availability,
+assess PRD or gate quality, or execute gates. Check the project inputs
+separately. `doctor` diagnoses selected adapter installation, managed assets,
+the host executable, and available host/verifier configuration; it is not a
+readiness check and does not run quality gates.
 
-`doctor` answers a different question. It diagnoses the selected adapter and
-managed project assets, host executable, and available host/verifier
-configuration; it does **not** report the structural project-readiness checks
-or run quality gates. Run it for host and installation diagnostics:
+Run `doctor` separately for host and installation diagnostics:
 
 ```bash
 npx triad-plus doctor --host opencode --control .

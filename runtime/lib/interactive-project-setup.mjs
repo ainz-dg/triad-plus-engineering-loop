@@ -517,7 +517,7 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
   return [rootLine, `Native entry: ${adapter.entry ?? 'not declared'}.`];
 }
 
-export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, readiness, currentVersion, teamMode = 'leave unconfigured', roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map() }) {
+export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map() }) {
   const directories = new Set();
   for (const adapter of adapters) {
     for (const target of adapterPlans.get(adapter.id)?.created ?? []) {
@@ -550,7 +550,7 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
     `  ${root} (create only if absent)`,
     ...[...directories].sort().map((directory) => `  ${path.join(root, directory)}`),
     'Repository actions:',
-    ...(repositories.length ? repositories.map((repository) => `  ${repository.status === 'proposed-new' ? 'INIT local Git only (after approval; no remote/push)' : 'KEEP existing Git repository unchanged'} ${repository.id}: ${repository.path}; base=${repository.base_branch}; project=${repository.project_branch}; worktree=${repository.worktree}`) : ['  Deferred; workspace will be NOT READY until repository mappings are added.']),
+    ...(repositories.length ? repositories.map((repository) => `  ${repository.status === 'proposed-new' ? 'INIT local Git only (after approval; no remote/push)' : 'KEEP existing Git repository unchanged'} ${repository.id}: ${repository.path}; base=${repository.base_branch}; project=${repository.project_branch}; worktree=${repository.worktree}`) : ['  Deferred; no repository will be initialized or mapped by this plan.']),
     'Adapter assets:',
     ...adapters.flatMap((adapter) => {
       const plan = adapterPlans.get(adapter.id);
@@ -569,21 +569,59 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
       ])
       : ['  Not selected; no user-level files will be written.']),
     `Initial runtime metadata: ${adapters[0]?.id ?? 'none'} writes .triad-runtime/adapter.json; later adapter additions will not replace it.`,
-    `Readiness: ${readiness.ready ? 'READY' : 'NOT READY'}${readiness.missing.length ? ` — missing: ${readiness.missing.join('; ')}` : ''}`,
     'Attempt-bound multi-harness dispatch remains unsupported; installation does not enable per-Attempt host selection.',
   ];
   return `${lines.join('\n')}\n`;
 }
 
-export async function confirmAndApplySetup({ prompt, preview, apply, write = (value) => process.stdout.write(value) }) {
-  write(`\n${preview}`);
-  const confirm = await prompt.question('Type install to apply this exact plan; anything else cancels: ');
-  if (confirm !== 'install') {
+export function formatInteractiveSetupSummary({ root, repositories, adapters, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, globalEntryPlans = new Map(), heading = 'Triad+ first-run plan', showDetailsHint = true }) {
+  const repositoryLines = repositories.length
+    ? repositories.map((repository) => `  ${repository.id}: ${repository.path} → ${repository.project_branch}; worktree ${repository.worktree}`)
+    : ['  deferred; no repository will be initialized or mapped by this plan'];
+  const globalAdapters = [...globalEntryPlans.keys()];
+  const evaluator = teamMode === 'leave unconfigured'
+    ? 'not configured'
+    : team?.roles?.evaluator?.enabled === true ? 'enabled' : 'disabled';
+  const lines = [
+    heading,
+    `Control Workspace: ${root}`,
+    `Triad+ version: ${currentVersion}`,
+    'Repository mappings:',
+    ...repositoryLines,
+    `Harnesses: ${adapters.map((adapter) => `${adapter.label} (${adapter.id})`).join(', ')}`,
+    `Team: ${teamMode}; Evaluator+: ${evaluator}`,
+    `Project mapping file: ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'new' : 'repositories mapping update' : 'unchanged'}`,
+    `Scope: project-local${globalAdapters.length ? ` plus consent-gated user-level entry files for ${globalAdapters.join(', ')}` : '; no user-level files'}`,
+    'No files are written until you type "install".',
+    ...(showDetailsHint ? ['Type "details" to inspect the exact file plan before approval.'] : []),
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+export async function confirmAndApplySetup({ prompt, preview, summary = preview, apply, requireDetails = false, write = (value) => process.stdout.write(value) }) {
+  write(`\n${summary}`);
+  let reviewedDetails = false;
+  while (true) {
+    const question = requireDetails && !reviewedDetails
+      ? 'Type details to review exact user-level paths before install (install is not accepted yet): '
+      : 'Type install to apply this exact plan, details to inspect it, or anything else to cancel: ';
+    const answer = await prompt.question(question);
+    if (answer === 'details') {
+      write(`\n${preview}`);
+      reviewedDetails = true;
+      continue;
+    }
+    if (answer === 'install' && (!requireDetails || reviewedDetails)) {
+      await apply();
+      return true;
+    }
+    if (answer === 'install') {
+      write('Review the exact user-level paths with "details" before approving this plan.\n');
+      continue;
+    }
     write('Cancelled. No files were changed.\n');
     return false;
   }
-  await apply();
-  return true;
 }
 
 export function parseAdapterSelection(answer, adapters) {
