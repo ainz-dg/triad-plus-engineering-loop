@@ -128,7 +128,7 @@ export function formatCompactRetroHeader({
   locale = process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG || '',
 } = {}) {
   if (!stream?.isTTY) return '';
-  if (rows < 12 || term === 'dumb' || columns < 40 || !/(?:utf-8|utf8)/i.test(locale)) return 'TRIAD+';
+  if (rows < 14 || term === 'dumb' || columns < 40 || !/(?:utf-8|utf8)/i.test(locale)) return 'TRIAD+';
   return compactRetroHeader(stream, columns, false);
 }
 

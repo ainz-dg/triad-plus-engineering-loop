@@ -107,6 +107,8 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 20, term: 'xterm-256color', locale: 'C' }), 'TRIAD+ / Engineering Loop', '80x20 with a non-UTF-8 locale uses the text fallback');
   assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 20, term: 'xterm-256color', locale: '' }), 'TRIAD+ / Engineering Loop', 'missing locale metadata uses the text fallback rather than assuming UTF-8');
   assert.equal(formatCompactRetroHeader({ stream: output, columns: 60, rows: 20, term: 'xterm-256color', locale: 'C.UTF-8' }).split('\n').length, 4, 'checklist redraws use a compact persistent brand mark');
+  assert.equal(formatCompactRetroHeader({ stream: output, columns: 60, rows: 12, term: 'xterm-256color', locale: 'C.UTF-8' }), 'TRIAD+', '12-row terminals use the single-line header fallback');
+  assert.equal(formatCompactRetroHeader({ stream: output, columns: 60, rows: 13, term: 'xterm-256color', locale: 'C.UTF-8' }), 'TRIAD+', '13-row terminals use the single-line header fallback');
   assert.equal(formatCompactRetroHeader({ stream: output, columns: 80, rows: 24, term: 'dumb', locale: 'C.UTF-8' }), 'TRIAD+', 'dumb terminal gets a compact ASCII header');
   assert.equal(formatRetroPixelHeader({ stream: { isTTY: false }, columns: 80, rows: 24 }), '', 'redirected output gets no splash');
 }
@@ -137,7 +139,9 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.ok(redraws.slice(1).every((write) => /^\u001b\[\d+A\r\u001b\[2K/.test(write)), 'redraws return to the previous frame relative to the live cursor');
   assert.doesNotMatch(redraws.join(''), /\u001b\[2J/, 'redraw does not clear the visible screen first');
   assert.doesNotMatch(redraws.join(''), /\u001b\[J/, 'redraw clears only its bounded rows');
-  assert.doesNotMatch(redraws.join(''), /TRIAD\+/, 'the static header is not duplicated by menu redraws');
+  const screen = terminalScreen(session.output.writes.join(''), { rows: 16, columns: 48 });
+  assert.equal(screen.filter((line) => line.includes('TRIAD+')).length, 1, 'the compact header remains on screen exactly once after redraws');
+  assert.ok(screen[0].includes('TRIAD+'), 'the compact header is visible above the checklist');
   keys(session.input, '\u001b');
   await session.promise;
 }

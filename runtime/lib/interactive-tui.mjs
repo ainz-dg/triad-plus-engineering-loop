@@ -137,6 +137,7 @@ export async function selectChecklist({
         return;
       }
       const lines = [
+        ...(header ? header.trimEnd().split('\n') : []),
         style(clip(step, width), 'hint', output),
         style(clip(title, width), 'title', output),
         ...context.map((line) => style(clip(line, width), 'hint', output)),
