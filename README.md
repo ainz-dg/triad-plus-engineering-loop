@@ -101,11 +101,14 @@ back to plain text when the terminal is narrow or lacks Unicode support.
 
 After setup, create root `PRD.md` and `.loop/quality-gates.yaml`, commit the
 mapped repositories, and create their declared worktrees; the wizard does not
-create these inputs. Its preview checks only their structural presence (plus
-an initial commit and configured worktree path for each mapping). It does not
-judge PRD or gate quality, nor run the gates. `doctor` is a separate host and
-installation diagnostic: it does not establish project readiness or execute
-the gates. Review both outputs for their distinct purposes, then start OpenCode:
+create these inputs. Its first-run summary is an installation plan, not a
+project-readiness result or host-runtime probe. The wizard does not use these
+inputs to report readiness or assess their quality, and it does not run gates;
+selected repository/worktree paths still go through setup preflight validation.
+`doctor` is a
+separate host and installation diagnostic; it does not establish project
+readiness or execute the gates. Check project inputs separately, then start
+OpenCode:
 
 ```bash
 npx triad-plus doctor --host opencode --control .

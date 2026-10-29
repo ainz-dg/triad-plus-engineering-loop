@@ -323,6 +323,56 @@ try {
     assert.equal(git(sampleApp, ['rev-parse', 'HEAD']), repoHeadBefore, 'the fixture commit is preserved');
     assert.equal(git(sampleApp, ['status', '--porcelain']), repoStatusBefore, 'product repository contents remain unchanged');
     assert.deepEqual(await treeSnapshot(sampleApp), repoBefore, 'all committed repository files remain byte-identical');
+
+    // Release smoke: complete a harness-free first run at every owner-requested
+    // Linux terminal size. TERM=dumb also exercises the readable no-ANSI brand
+    // fallback, while the two UTF-8 terminals render the retro identity.
+    const noHarnessPath = path.join(fixture, 'no-harness-bin');
+    await mkdir(noHarnessPath);
+    for (const command of ['git', 'python3']) {
+      const executable = spawnSync('which', [command], { encoding: 'utf8' });
+      assert.equal(executable.status, 0, `the ${command} fixture executable is available`);
+      await symlink(executable.stdout.trim(), path.join(noHarnessPath, command));
+    }
+    assert.equal(await readFile(path.join(noHarnessPath, 'codex')).then(() => true, () => false), false);
+    assert.equal(await readFile(path.join(noHarnessPath, 'opencode')).then(() => true, () => false), false);
+    for (const [columns, rows, term, locale] of [
+      [80, 24, 'xterm-256color', 'C.UTF-8'],
+      [80, 20, 'xterm-256color', 'C.UTF-8'],
+      [60, 20, 'dumb', 'C'],
+    ]) {
+      const smokeRoot = path.join(fixture, `LINUX-TTY-SMOKE-${columns}x${rows}-${term}`);
+      const smokeHome = path.join(fixture, `home-${columns}x${rows}-${term}`);
+      await mkdir(smokeRoot);
+      const smoke = terminalInput(smokeRoot, [
+        line(''), line(''), key('down'), key('down'), key('enter'),
+        key('down'), key('space'), key('enter'), line('n'), line('details'), line('install'),
+      ], {
+        HOME: smokeHome,
+        PATH: noHarnessPath,
+        TERM: term,
+        LANG: locale,
+        LC_ALL: locale,
+        TMPDIR: isolatedTmp,
+        TRIAD_TEST_PTY_COLS: String(columns),
+        TRIAD_TEST_PTY_ROWS: String(rows),
+      });
+      assert.equal(smoke.status, 0, `TTY ${columns}x${rows} ${term}: ${smoke.stderr}\n${smoke.stdout}`);
+      const smokeText = smoke.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+      assert.match(smokeText, /TRIAD\+/);
+      assert.match(smokeText, /Harnesses: OpenCode \(opencode\)/);
+      assert.match(smokeText, /Repository mappings:[\s\S]*deferred/);
+      assert.match(smokeText, /Triad\+ installed/);
+      assert.doesNotMatch(smokeText, /Readiness:|NOT READY|Host runtimes: optional|host runtime=optional/);
+      assert.doesNotMatch(smoke.stdout, /\u001b\[2J/, 'wizard navigation does not clear the entire display');
+      assert.ok(await readFile(path.join(smokeRoot, '.triad-plus', 'installation.json')));
+      if (term === 'dumb') {
+        assert.doesNotMatch(smoke.stdout, /\u001b\[/, 'TERM=dumb stays readable without ANSI controls');
+        assert.match(smokeText, /TRIAD\+ \/ Engineering Loop/);
+      } else {
+        assert.match(smokeText, /ENGINEERING LOOP/, 'UTF-8 terminal renders the retro brand');
+      }
+    }
     assert.deepEqual(await treeSnapshot(loopRoot), loopBefore, '.loop owner state and evidence remain byte-identical');
     assert.deepEqual(await readFile(path.join(root, '.triad-plus', 'team.json')), teamBytes, 'existing team owner data is reused unchanged');
     const projectYaml = await readFile(path.join(root, 'project.yaml'), 'utf8');
@@ -904,7 +954,7 @@ try {
     await writeFile(path.join(collisionRoot, '.opencode', 'commands', 'triad.md'), ownerCommand);
     const collision = terminalInput(collisionRoot, [
       line(''), line(''), key('down'), key('down'), key('enter'), key('down'), key('space'), key('enter'), key('enter'), line('n'),
-    ], { HOME: path.join(fixture, 'home-collision') });
+    ], { HOME: path.join(fixture, 'home-collision'), PATH: noHarnessPath });
     assert.equal(collision.status, 2, `${collision.stderr}\n${collision.stdout}`);
     await saveTranscript('preflight-collision', collision);
     assert.match(collision.stdout, /ERROR \/ BLOCKED — Setup preflight failed; no files were changed/);
@@ -934,7 +984,7 @@ try {
     const partialManifest = JSON.parse(await readFile(path.join(partialRoot, '.triad-plus', 'installation.json'), 'utf8'));
     assert.equal(partialManifest.adapter, 'opencode');
 
-    process.stdout.write('Interactive setup CLI pseudo-terminal fixtures passed: A01-A09, A13; native discovery gates are reported rather than inferred.\n');
+    process.stdout.write('Interactive setup CLI pseudo-terminal fixtures passed: A01-A09, A13; TTY success at 80x24/80x20/60x20 (no Codex/OpenCode binaries), cancellation without writes, blocking preflight, and dumb-terminal fallback; native discovery is not inferred.\n');
   }
 } finally {
   await rm(fixture, { recursive: true, force: true });

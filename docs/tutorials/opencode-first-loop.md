@@ -31,10 +31,12 @@ npx triad-plus
 
 In the wizard, choose **New workspace**, keep this separate directory as the
 Control Workspace, map the existing local product repository, declare its base
-and project branches plus worktree, select **OpenCode**, and review the full
-preview before confirming the exact `install` action. The wizard does not
-create the product worktree, PRD, quality gates, or initial product-repository
-commit. It does not log in to OpenCode or write global host configuration.
+and project branches plus worktree, and select **OpenCode**. The concise
+confirmation can be expanded with `details`; exact-path review is required
+when a user-level entry is selected before confirming `install`. The wizard
+does not create the product worktree, PRD, quality gates, or initial
+product-repository commit. It does not log in to OpenCode or write global host
+configuration unless an optional entry is selected and approved.
 
 Check the installed version and host/installation diagnostics from the Control
 Workspace:
@@ -44,12 +46,12 @@ npx triad-plus version --control .
 npx triad-plus doctor --host opencode --control .
 ```
 
-The setup preview checks structural presence of the root PRD and quality-gate
-file, initial commits for mapped repositories, and configured worktree paths.
-It does not evaluate PRD/gate quality or run a gate. `doctor` diagnoses the
+The setup preview is an installation plan; it does not inspect project
+readiness or probe host availability. `doctor` separately diagnoses the
 adapter, managed project assets, host executable, and available host/verifier
-configuration; it does not perform those project-readiness checks. A
-successful installation is not the same as a ready project.
+configuration; it does not establish project readiness or run quality gates.
+A successful installation is not the same as a ready project. Check the
+required project inputs separately before starting the loop.
 
 ## 2. Write the goal and deterministic quality gates
 

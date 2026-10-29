@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.22.2
+
+Patch release preparation for PR #41.
+
+- Align first-run guidance with the current wizard: it presents an installation
+  plan, does not report project readiness or probe host-runtime availability,
+  and keeps `doctor` as a separate diagnostic.
+- Bump the package and runtime version to `1.22.2`; no Core, verifier,
+  Reviewer, or adapter-dispatch behavior changes are included.
+- Release notes: [Triad+ 1.22.2](docs/releases/1.22.2.md).
+
 ## 1.22.1
 
 Retro Pixel TUI stability, following v1.22.0. The product changes below were
