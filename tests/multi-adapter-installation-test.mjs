@@ -129,10 +129,12 @@ try {
 
   const missingBinaryList = run(['adapter', 'list', '--control', control], { home, pathValue: '' });
   assert.equal(missingBinaryList.status, 0, missingBinaryList.stderr);
-  assert.match(missingBinaryList.stdout, /copilot\s+project=installed global=not_configured host=unavailable/);
+  assert.match(missingBinaryList.stdout, /copilot\s+project=installed global=not_configured host runtime=optional\/not checked/);
+  assert.doesNotMatch(missingBinaryList.stdout, /host=unavailable/);
   const doctorMulti = run(['adapter', 'doctor', '--control', control], { home, pathValue: '' });
   assert.equal(doctorMulti.status, 0, doctorMulti.stderr);
-  assert.match(doctorMulti.stdout, /host=unavailable/);
+  assert.match(doctorMulti.stdout, /host runtime=optional\/not checked/);
+  assert.doesNotMatch(doctorMulti.stdout, /host=unavailable/);
   assert.match(doctorMulti.stdout, /attempt dispatch=unsupported/);
   const beforeDoctor = await readFile(manifestPath);
   const doctorAgain = run(['adapter', 'doctor', '--control', control], { home, pathValue: '' });
@@ -153,6 +155,57 @@ try {
   assert.deepEqual(afterRemove.adapters.map((entry) => entry.id), ['claude-code']);
   assert.equal(digest(await readFile(path.join(control, '.triad-runtime/triad-control-run.mjs'))), claudeHashes.get('.triad-runtime/triad-control-run.mjs'));
   for (const [relative, expected] of beforeMigrationOwnerFiles) assert.equal(digest(await readFile(path.join(control, relative))), expected);
+
+  // Managed AGENTS ownership follows only the marked block through v2 migration,
+  // adapter diagnostics, upgrade, and removal; owner text outside remains theirs.
+  const blockControl = path.join(root, 'managed-block/control');
+  await mkdir(blockControl, { recursive: true });
+  const blockTeamPath = path.join(root, 'managed-block/team.json');
+  await put(blockTeamPath, `${JSON.stringify(teamConfiguration(), null, 2)}\n`);
+  assert.equal(run(['init', '--host', 'opencode', '--control', blockControl, '--team-config', blockTeamPath], { home }).status, 0);
+  assert.equal(run(['adapter', 'add', 'copilot', '--control', blockControl, '--apply'], { home }).status, 0);
+  const blockManifestPath = path.join(blockControl, '.triad-plus/installation.json');
+  let blockManifest = JSON.parse(await readFile(blockManifestPath, 'utf8'));
+  assert.equal(blockManifest.schema_version, 2);
+  const opencodeRecord = blockManifest.adapters.find((entry) => entry.id === 'opencode');
+  const ownedBlock = opencodeRecord.managed_assets.find((asset) => asset.path === 'AGENTS.md' && asset.kind === 'managed_block');
+  assert.ok(ownedBlock, 'v1-to-v2 migration retains marker-scoped AGENTS ownership');
+  const blockAgentsPath = path.join(blockControl, 'AGENTS.md');
+  const ownerAgentsText = `${await readFile(blockAgentsPath, 'utf8')}\n# Owner addition outside the managed block\n`;
+  await writeFile(blockAgentsPath, ownerAgentsText);
+  const blockStart = ownerAgentsText.indexOf(ownedBlock.start_marker);
+  const blockEnd = ownerAgentsText.indexOf(ownedBlock.end_marker) + ownedBlock.end_marker.length;
+  const expectedAgentsAfterRemoval = `${ownerAgentsText.slice(0, blockStart)}${ownerAgentsText.slice(blockEnd)}`;
+  const blockDoctor = run(['adapter', 'doctor', 'opencode', '--control', blockControl], { home });
+  assert.equal(blockDoctor.status, 0, blockDoctor.stderr);
+  assert.match(blockDoctor.stdout, /opencode: manifest=OK/);
+  const blockUpgrade = run(['adapter', 'upgrade', 'opencode', '--control', blockControl, '--apply'], { home });
+  assert.equal(blockUpgrade.status, 0, `${blockUpgrade.stderr}\n${blockUpgrade.stdout}`);
+  assert.equal(await readFile(blockAgentsPath, 'utf8'), ownerAgentsText, 'adapter upgrade does not rewrite owner text outside the marker block');
+  blockManifest = JSON.parse(await readFile(blockManifestPath, 'utf8'));
+  assert.equal(blockManifest.adapters.find((entry) => entry.id === 'opencode').managed_assets.find((asset) => asset.path === 'AGENTS.md').sha256, ownedBlock.sha256);
+  const blockRemoval = run(['adapter', 'remove', 'opencode', '--control', blockControl, '--apply'], { home });
+  assert.equal(blockRemoval.status, 0, `${blockRemoval.stderr}\n${blockRemoval.stdout}`);
+  assert.equal(await readFile(blockAgentsPath, 'utf8'), expectedAgentsAfterRemoval, 'adapter remove removes only the managed block');
+
+  const changedBlockControl = path.join(root, 'changed-managed-block/control');
+  await mkdir(changedBlockControl, { recursive: true });
+  assert.equal(run(['init', '--host', 'opencode', '--control', changedBlockControl, '--team-config', blockTeamPath], { home }).status, 0);
+  assert.equal(run(['adapter', 'add', 'copilot', '--control', changedBlockControl, '--apply'], { home }).status, 0);
+  const changedBlockAgentsPath = path.join(changedBlockControl, 'AGENTS.md');
+  const changedBlockText = (await readFile(changedBlockAgentsPath, 'utf8')).replace('Triad+ role-run overlay', 'Owner-modified managed content');
+  await writeFile(changedBlockAgentsPath, changedBlockText);
+  const changedBlockManifest = await readFile(path.join(changedBlockControl, '.triad-plus/installation.json'));
+  const blockedBlockDoctor = run(['adapter', 'doctor', 'opencode', '--control', changedBlockControl], { home });
+  assert.match(blockedBlockDoctor.stdout, /AGENTS\.md: modified/);
+  const blockedBlockUpgrade = run(['adapter', 'upgrade', 'opencode', '--control', changedBlockControl, '--apply'], { home });
+  assert.notEqual(blockedBlockUpgrade.status, 0);
+  assert.match(blockedBlockUpgrade.stderr, /Managed block is modified, ambiguous, or missing; refusing upgrade/);
+  const blockedBlockRemove = run(['adapter', 'remove', 'opencode', '--control', changedBlockControl, '--apply'], { home });
+  assert.notEqual(blockedBlockRemove.status, 0);
+  assert.match(blockedBlockRemove.stderr, /AGENTS\.md: modified; preserved/);
+  assert.equal(await readFile(changedBlockAgentsPath, 'utf8'), changedBlockText);
+  assert.deepEqual(await readFile(path.join(changedBlockControl, '.triad-plus/installation.json')), changedBlockManifest);
 
   // A modified managed file blocks removal instead of being deleted or falsely
   // reported as uninstalled.

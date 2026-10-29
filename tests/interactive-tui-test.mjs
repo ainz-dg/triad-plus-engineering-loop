@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { selectChecklist } from '../runtime/lib/interactive-tui.mjs';
-import { formatRetroPixelHeader } from '../runtime/lib/terminal.mjs';
+import { formatCompactRetroHeader, formatRetroPixelHeader } from '../runtime/lib/terminal.mjs';
 import { terminalScreen } from './terminal-screen-emulator.mjs';
 
 const originalTerm = process.env.TERM;
@@ -97,8 +97,17 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
 
   assert.equal(formatRetroPixelHeader({ stream: output, columns: 36, rows: 24, term: 'xterm-256color', locale: 'C.UTF-8' }), 'TRIAD+ / Engineering Loop');
   assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'dumb', locale: 'C.UTF-8' }), 'TRIAD+ / Engineering Loop');
-  assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 20, term: 'xterm-256color', locale: 'C.UTF-8' }), 'TRIAD+ / Engineering Loop', 'short viewports prioritize menu space');
+  const shortWide = formatRetroPixelHeader({ stream: output, columns: 80, rows: 20, term: 'xterm-256color', locale: 'C.UTF-8' });
+  assert.match(stripAnsi(shortWide), /TRIAD\+/);
+  assert.ok(stripAnsi(shortWide).split('\n').length <= 5, '80x20 uses the compact mark to preserve menu space');
+  const medium = formatRetroPixelHeader({ stream: output, columns: 60, rows: 20, term: 'xterm-256color', locale: 'C.UTF-8' });
+  assert.match(stripAnsi(medium), /TRIAD\+/);
+  assert.ok(stripAnsi(medium).split('\n').every((line) => Array.from(line).length <= 60), '60x20 logo fits the terminal width');
   assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'xterm-256color', locale: 'C' }), 'TRIAD+ / Engineering Loop', 'non-UTF-8 locales avoid glyphs');
+  assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 20, term: 'xterm-256color', locale: 'C' }), 'TRIAD+ / Engineering Loop', '80x20 with a non-UTF-8 locale uses the text fallback');
+  assert.equal(formatRetroPixelHeader({ stream: output, columns: 80, rows: 20, term: 'xterm-256color', locale: '' }), 'TRIAD+ / Engineering Loop', 'missing locale metadata uses the text fallback rather than assuming UTF-8');
+  assert.equal(formatCompactRetroHeader({ stream: output, columns: 60, rows: 20, term: 'xterm-256color', locale: 'C.UTF-8' }).split('\n').length, 4, 'checklist redraws use a compact persistent brand mark');
+  assert.equal(formatCompactRetroHeader({ stream: output, columns: 80, rows: 24, term: 'dumb', locale: 'C.UTF-8' }), 'TRIAD+', 'dumb terminal gets a compact ASCII header');
   assert.equal(formatRetroPixelHeader({ stream: { isTTY: false }, columns: 80, rows: 24 }), '', 'redirected output gets no splash');
 }
 
@@ -218,7 +227,7 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.deepEqual(session.input.rawTransitions, [true, false]);
 }
 
-// Dumb terminals keep a readable, width-limited focus and selection update.
+// Dumb terminals keep focus and selection on one stable, width-limited status line.
 {
   process.env.TERM = 'dumb';
   const session = start({ items: [
@@ -229,9 +238,11 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   keys(session.input, '\u001b[B');
   keys(session.input, ' ');
   const updates = session.output.writes.slice(-2).join('');
-  assert.match(updates, /Focus: two/);
-  assert.match(updates, /Selection: 1/);
-  assert.ok(updates.split('\n').every((line) => Array.from(line).length <= 19), 'dumb-terminal updates stay within the available width');
+  assert.match(updates, /two \| 0 selected/);
+  assert.match(updates, /two \| 1 selected/);
+  assert.equal((updates.match(/\r/g) ?? []).length, 2, 'dumb-terminal redraws return to the same status line');
+  assert.doesNotMatch(updates, /\n/, 'dumb-terminal navigation does not scroll on each key');
+  assert.ok(updates.split('\r').filter(Boolean).every((line) => Array.from(line).length === 19), 'dumb-terminal updates pad to the same available width');
   keys(session.input, '\u001b');
   await session.promise;
   process.env.TERM = 'xterm-256color';

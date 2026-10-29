@@ -114,9 +114,22 @@ export function formatRetroPixelHeader({
   if (term === 'dumb' || columns < 40 || !/(?:utf-8|utf8)/i.test(locale)) {
     return plainRetroHeader(columns);
   }
-  if (columns >= 72 && rows >= 22) return fullRetroHeader(stream, columns, rows >= 24);
-  if (columns >= 40 && columns <= 71 && rows >= 14) return compactRetroHeader(stream, columns, rows >= 18);
+  if (columns >= 72 && rows >= 24) return fullRetroHeader(stream, columns, rows >= 24);
+  if (columns >= 40 && rows >= 14) return compactRetroHeader(stream, columns, rows >= 18);
   return plainRetroHeader(columns);
+}
+
+/** Keep the initial brand mark compact when checklist screens are redrawn. */
+export function formatCompactRetroHeader({
+  stream = process.stdout,
+  columns = Number(stream?.columns) || 80,
+  rows = Number(stream?.rows) || 24,
+  term = process.env.TERM,
+  locale = process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG || '',
+} = {}) {
+  if (!stream?.isTTY) return '';
+  if (rows < 12 || term === 'dumb' || columns < 40 || !/(?:utf-8|utf8)/i.test(locale)) return 'TRIAD+';
+  return compactRetroHeader(stream, columns, false);
 }
 
 export function paint(value, tone, { stream = process.stdout } = {}) {

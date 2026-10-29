@@ -112,6 +112,16 @@ try {
   const configuredManifest = await manifestAt(configuredControl);
   const overlayAsset = configuredManifest.managed_assets.find((asset) => asset.kind === 'managed_block' && asset.path === 'AGENTS.md');
   assert.ok(overlayAsset, 'expected managed AGENTS.md block record');
+  const configuredAgents = join(configuredControl, 'AGENTS.md');
+  const ownerEditedAgents = `${await readFile(configuredAgents, 'utf8')}\n# Owner addition outside the managed block\n`;
+  const managedStart = ownerEditedAgents.indexOf(overlayAsset.start_marker);
+  const managedEnd = ownerEditedAgents.indexOf(overlayAsset.end_marker) + overlayAsset.end_marker.length;
+  const expectedOwnerTextAfterRemoval = `${ownerEditedAgents.slice(0, managedStart)}${ownerEditedAgents.slice(managedEnd)}`;
+  await writeFile(configuredAgents, ownerEditedAgents);
+  const ownerEditDoctor = assertOk(run(['doctor', '--host', 'opencode', '--control', configuredControl], { NO_COLOR: '1' })).stdout;
+  assert.match(ownerEditDoctor, /Manifest\s+OK/, 'doctor hashes only the managed block, not owner text around it');
+  assertOk(run(['upgrade', '--host', 'opencode', '--control', configuredControl, '--apply']));
+  assert.equal(await readFile(configuredAgents, 'utf8'), ownerEditedAgents, 'upgrade preserves owner text outside the unchanged managed block');
   const configuredDryRun = assertOk(run(['uninstall', '--host', 'opencode', '--control', configuredControl]));
   assert.match(configuredDryRun.stdout, /WOULD REMOVE block AGENTS\.md/);
   const customAgent = join(configuredControl, '.opencode', 'agents', 'custom-user-agent.md');
@@ -121,8 +131,9 @@ try {
   assert.match(configuredUninstall.stdout, /Preserved state/);
   assert.equal(await readFile(teamPath, 'utf8'), teamBeforeUninstall);
   assert.equal(await readFile(customAgent, 'utf8'), 'user-owned agent\n');
-  const agentsAfterUninstall = await readFile(join(configuredControl, 'AGENTS.md'), 'utf8');
+  const agentsAfterUninstall = await readFile(configuredAgents, 'utf8');
   assert.match(agentsAfterUninstall, /# User instructions\nKeep this content\./);
+  assert.equal(agentsAfterUninstall, expectedOwnerTextAfterRemoval, 'uninstall removes only the unchanged managed block and retains owner text');
   assert.doesNotMatch(agentsAfterUninstall, /triad-plus:managed-instructions:/);
 
   // upgrade --apply is the managed restore path after uninstall; user state and
@@ -137,6 +148,7 @@ try {
   const restoredAgents = await readFile(join(configuredControl, 'AGENTS.md'), 'utf8');
   assert.equal((restoredAgents.match(/triad-plus:managed-instructions:start/g) ?? []).length, 1);
   assert.equal((restoredAgents.match(/triad-plus:managed-instructions:end/g) ?? []).length, 1);
+  assert.match(restoredAgents, /# Owner addition outside the managed block/, 'upgrade preserves owner text outside the managed block');
   const restoredDoctor = assertOk(run(['doctor', '--host', 'opencode', '--control', configuredControl], { NO_COLOR: '1' })).stdout;
   assert.match(restoredDoctor, new RegExp(`Installed version\\s+${packageVersion}`));
   assert.match(restoredDoctor, /Manifest\s+OK/);
@@ -165,6 +177,16 @@ try {
   assert.match(modifiedOverlayUninstall.stdout, /PRESERVE\s+AGENTS\.md/);
   assert.match(await readFile(modifiedAgents, 'utf8'), /User-modified overlay/);
   assert.equal((await manifestAt(modifiedOverlayControl)).status, 'partial');
+
+  const modifiedUpgradeControl = join(fixtureRoot, 'modified-upgrade-control');
+  assertOk(run(['init', '--host', 'opencode', '--control', modifiedUpgradeControl, '--team-config', configuredTeam]));
+  const modifiedUpgradeAgents = join(modifiedUpgradeControl, 'AGENTS.md');
+  await writeFile(modifiedUpgradeAgents, `${(await readFile(modifiedUpgradeAgents, 'utf8')).replace('Triad+ role-run overlay', 'Owner-modified managed content')}`);
+  const beforeBlockedUpgrade = await readFile(modifiedUpgradeAgents);
+  const blockedUpgrade = run(['upgrade', '--host', 'opencode', '--control', modifiedUpgradeControl, '--apply']);
+  assert.notEqual(blockedUpgrade.status, 0);
+  assert.match(blockedUpgrade.stderr, /Managed block is modified, ambiguous, or missing; refusing upgrade: AGENTS\.md\. No files were changed\./);
+  assert.deepEqual(await readFile(modifiedUpgradeAgents), beforeBlockedUpgrade, 'upgrade refuses to overwrite a modified managed block');
 
   const legacyControl = join(fixtureRoot, 'legacy-upgrade-control');
   assertOk(run(['init', '--host', 'opencode', '--control', legacyControl]));

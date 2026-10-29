@@ -48,11 +48,11 @@ function clip(value, width) {
   return `${takeCells(chars, left).join('')}…${takeCells(chars, right, true).join('')}`;
 }
 
-function clipEnd(value, width) {
-  const chars = Array.from(graphemes.segment(String(value)), (entry) => entry.segment);
-  if (chars.reduce((total, character) => total + cellWidth(character), 0) <= width) return chars.join('');
-  if (width <= 1) return '…'.slice(0, width);
-  return `${takeCells(chars, width - 1).join('')}…`;
+function padCells(value, width) {
+  const clipped = clip(value, width);
+  const used = Array.from(graphemes.segment(clipped), (entry) => entry.segment)
+    .reduce((total, character) => total + cellWidth(character), 0);
+  return `${clipped}${' '.repeat(Math.max(0, width - used))}`;
 }
 
 function style(value, tone, output) {
@@ -117,7 +117,7 @@ export async function selectChecklist({
       if (useScreenControls) {
         const restore = process.env.NO_COLOR === undefined ? '\u001b[?25h\u001b[0m\n' : '\u001b[?25h\n';
         try { output.write(restore); } catch {}
-      }
+      } else try { output.write('\n'); } catch {}
     };
     const finish = (value) => { cleanup(); resolve(value); };
     const fail = (error) => { cleanup(); reject(error); };
@@ -131,8 +131,8 @@ export async function selectChecklist({
       const width = Math.max(1, (Number(output.columns) || 80) - 1);
       if (!useScreenControls && !full) {
         const focused = items[focus];
-        output.write(`\n${clip(`Focus: ${focused.label}`, width)}\n${clipEnd(`Selection: ${selectionSummary(selectedIds())}`, width)}\n`);
-        if (message) output.write(`${clip(message, width)}\n`);
+        const status = message || `${focused.label} | ${selectionSummary(selectedIds())}`;
+        output.write(`\r${padCells(status, width)}`);
         message = '';
         return;
       }
