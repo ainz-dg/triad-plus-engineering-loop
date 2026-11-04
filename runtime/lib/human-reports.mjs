@@ -59,6 +59,121 @@ function markdownBullet(value) {
   return `- ${text(value)}`;
 }
 
+function numberValue(value, label) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw reportError("human_report_invalid", `${label} must be a non-negative number`);
+  }
+  return number;
+}
+
+function formatDuration(milliseconds) {
+  if (!Number.isFinite(milliseconds)) return "Not recorded";
+  const ms = Math.max(0, milliseconds);
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m${seconds ? ` ${seconds}s` : ""}`;
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  if (hours < 24) return `${hours}h${remainderMinutes ? ` ${remainderMinutes}m` : ""}`;
+  return `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ""}`;
+}
+
+function formatTokenCount(value) {
+  if (!Number.isFinite(value)) return "Not recorded";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Math.round(value));
+}
+
+function formatCost(value) {
+  if (!Number.isFinite(value)) return "Not recorded";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
+
+function normalizeEffortMetric(metric, { valueKey, label }) {
+  if (metric === null || metric === undefined) return null;
+  if (typeof metric === "number") {
+    return { value: numberValue(metric, label), basis: "not recorded", method: "not recorded", sources: [] };
+  }
+  if (!objectLike(metric)) throw reportError("human_report_invalid", `${label} must be a number or object`);
+  const raw = metric[valueKey] ?? metric.value ?? (valueKey === "total_ms" ? metric.total : undefined);
+  return {
+    value: numberValue(raw, label),
+    basis: text(metric.basis, "not recorded"),
+    method: text(metric.method, "not recorded"),
+    sources: list(metric.sources).filter((source) => typeof source === "string" && source.trim()).map((source) => source.trim()),
+  };
+}
+
+function sumCardEffort(cards, key, label) {
+  const values = cards.map((card) => card[key]).filter((value) => Number.isFinite(value));
+  if (!values.length) return null;
+  const complete = values.length === cards.length;
+  return {
+    value: values.reduce((total, value) => total + value, 0),
+    basis: complete ? "sum of per-card values" : "partial sum of per-card values",
+    method: `Sum of ${label} supplied for ${values.length} of ${cards.length} card(s) in the handoff context.`,
+    sources: [],
+  };
+}
+
+/**
+ * Effort figures are optional, informational, and never delivery evidence.
+ * They may be measured or estimated, but the basis and method must travel with
+ * the number so the handoff cannot present an estimate as canonical evidence.
+ */
+function normalizeEffort(input) {
+  if (input === null || input === undefined) return null;
+  if (!objectLike(input)) throw reportError("human_report_invalid", "handoff effort must be an object");
+  const cards = list(input.cards).map((card, index) => {
+    if (!objectLike(card)) throw reportError("human_report_invalid", `effort card ${index + 1} must be an object`);
+    return {
+      id: requiredString(card.id, `effort card ${index + 1} id`),
+      elapsed_ms: numberValue(card.elapsed_ms, `effort card ${index + 1} elapsed_ms`),
+      tokens: numberValue(card.tokens, `effort card ${index + 1} tokens`),
+      cost_usd: numberValue(card.cost_usd, `effort card ${index + 1} cost_usd`),
+      basis: text(card.basis, null),
+    };
+  });
+  const explicitTime = normalizeEffortMetric(input.time, { valueKey: "total_ms", label: "effort time" });
+  const explicitTokens = normalizeEffortMetric(input.tokens, { valueKey: "total", label: "effort tokens" });
+  const explicitCost = normalizeEffortMetric(input.cost, { valueKey: "total_usd", label: "effort cost" });
+  return {
+    time: explicitTime?.value !== null && explicitTime?.value !== undefined
+      ? explicitTime
+      : sumCardEffort(cards, "elapsed_ms", "elapsed time") ?? explicitTime,
+    tokens: explicitTokens?.value !== null && explicitTokens?.value !== undefined
+      ? explicitTokens
+      : sumCardEffort(cards, "tokens", "token usage") ?? explicitTokens,
+    cost: explicitCost?.value !== null && explicitCost?.value !== undefined
+      ? explicitCost
+      : sumCardEffort(cards, "cost_usd", "cost") ?? explicitCost,
+    cards,
+  };
+}
+
+function effortBasis(time, tokens, cost) {
+  const basisOf = (metric) => metric?.basis && metric.basis !== "not recorded" ? metric.basis : null;
+  const timeBasis = basisOf(time);
+  const tokenBasis = basisOf(tokens);
+  const costBasis = basisOf(cost);
+  const present = [timeBasis, tokenBasis, costBasis].filter(Boolean);
+  if (present.length && present.every((value) => value === present[0])) return present[0];
+  return [
+    timeBasis && `time: ${timeBasis}`,
+    tokenBasis && `tokens: ${tokenBasis}`,
+    costBasis && `cost: ${costBasis}`,
+  ].filter(Boolean).join("; ") || "not recorded";
+}
+
 function within(root, target) {
   const base = path.resolve(root);
   const resolved = path.resolve(target);
@@ -545,6 +660,7 @@ function normalizeHandoffInput(input, options = {}) {
     delivery_closure_record: text(input.delivery_closure_record, "Not recorded."),
     final_message: text(input.final_message, "Not recorded."),
     risks: list(input.risks),
+    effort: normalizeEffort(input.effort),
     generated_from: text(input.generated_from, "canonical control-plane evidence"),
   }, {
     cards: rawCards.map((card) => ({
@@ -557,12 +673,46 @@ function normalizeHandoffInput(input, options = {}) {
   });
 }
 
+function renderEffortSection(effort, context) {
+  if (!effort || (!effort.time && !effort.tokens && !effort.cost && !effort.cards.length)) {
+    return `## Effort estimate
+
+No effort estimate recorded. Time, token, and cost figures are optional and informational; they are not delivery evidence.`;
+  }
+  const rows = [];
+  const totalBasis = effortBasis(effort.time, effort.tokens, effort.cost);
+  const metricCell = (metric, formatter) =>
+    metric?.value !== null && metric?.value !== undefined ? formatter(metric.value) : "Not recorded";
+  if (effort.time || effort.tokens || effort.cost) {
+    rows.push(`| Project | ${metricCell(effort.time, formatDuration)} | ${metricCell(effort.tokens, formatTokenCount)} | ${metricCell(effort.cost, formatCost)} | ${tableCell(totalBasis)} |`);
+  }
+  for (const card of effort.cards) {
+    rows.push(`| ${tableCell(card.id)} | ${card.elapsed_ms !== null ? formatDuration(card.elapsed_ms) : "Not recorded"} | ${card.tokens !== null ? formatTokenCount(card.tokens) : "Not recorded"} | ${card.cost_usd !== null ? formatCost(card.cost_usd) : "Not recorded"} | ${tableCell(card.basis ?? totalBasis)} |`);
+  }
+  const details = [];
+  if (effort.time) details.push(`- Time basis: ${text(effort.time.basis)}${effort.time.method !== "not recorded" ? ` — ${effort.time.method}` : ""}`);
+  if (effort.tokens) details.push(`- Token basis: ${text(effort.tokens.basis)}${effort.tokens.method !== "not recorded" ? ` — ${effort.tokens.method}` : ""}`);
+  if (effort.cost) details.push(`- Cost basis: ${text(effort.cost.basis)}${effort.cost.method !== "not recorded" ? ` — ${effort.cost.method}` : ""}`);
+  const sources = [...new Set([...(effort.time?.sources ?? []), ...(effort.tokens?.sources ?? []), ...(effort.cost?.sources ?? [])])];
+  if (sources.length) details.push(`- Effort sources: ${sources.map((source) => reportReference(source, context, null, source)).join(", ")}`);
+  return `## Effort estimate
+
+Estimates are informational and are not verification, review, delivery, or billing evidence.
+
+| Scope | Wall-clock time | Tokens | Cost (USD) | Basis |
+| --- | --- | --- | --- | --- |
+${rows.join("\n")}
+
+${details.join("\n")}`;
+}
+
 export function renderHandoffReport(input, options = {}) {
   const handoff = input.project_id && Array.isArray(input.cards) && input.cards[0]?.report_path !== undefined
     ? input
     : normalizeHandoffInput(input, options);
   const context = { ...(handoff.context ?? {}), ...options };
   const referenceSources = handoff[REFERENCE_SOURCES] ?? {};
+  const effortSection = renderEffortSection(normalizeEffort(handoff.effort), context);
   const cardRows = handoff.cards.map((card, index) => {
     const sources = referenceSources.cards?.[index] ?? {};
     const evaluatorReport = reportReference(card.evaluator_report, context, null, sources.evaluatorReport ?? card.evaluator_report);
@@ -588,6 +738,8 @@ ${handoff.executive_summary}
 ${cardRows.join("\n")}
 
 ${links}
+
+${effortSection}
 
 ## Main code areas, problem, and resolution
 

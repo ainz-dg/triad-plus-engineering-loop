@@ -91,6 +91,12 @@ links to the technical evidence, branch/commit map, quality-contract closure,
 Evaluator+ result, delivery gates, demo details, risks, and practical test.
 It is a view for people, not an alternative delivery state machine.
 
+An optional effort estimate may also be supplied. It is explicitly labeled as
+informational and must never be read as verification, review, delivery, or
+billing evidence. The renderer displays project-level and optional per-Card
+rows for wall-clock time, tokens, and cost, plus the declared basis and method
+for each metric.
+
 When the output exists, its Card-report links are relative to `handoff.md`, and
 explicit local evidence references are linked relative to that output. A report
 or evidence file that was not supplied, does not exist, is external, or fails
@@ -110,8 +116,56 @@ The derived handoff context must include a non-empty `cards` list and a
 `delivery_criteria`, `demo`, `evidence_refs`, `exceptions`, `prd_baseline`,
 `approved_cards`, `push_evidence`, `gate_metrics`,
 `local_worktree_integration`, `delivery_closure_record`, `final_message`,
-`risks`, and `generated_from`.
+`risks`, `effort`, and `generated_from`.
 
 Populate fields from canonical run, card, verifier, Reviewer, Evaluator+, and
 delivery records. Do not pass Developer reasoning, queue-control narrative, or
 unbounded source documents merely to satisfy the renderer.
+
+### Effort estimate
+
+Time, token, and cost figures are optional. Add an `effort` object when a
+measured or defensible estimate exists:
+
+```json
+{
+  "effort": {
+    "time": {
+      "total_ms": 8040000,
+      "basis": "measured",
+      "method": "sum of role wall-clock timings",
+      "sources": [".loop/runtime/deterministic-control-run.json"]
+    },
+    "tokens": {
+      "total": 184000,
+      "basis": "estimated",
+      "method": "host step_finish totals plus per-turn estimates",
+      "sources": []
+    },
+    "cost": {
+      "total_usd": 3.158971,
+      "basis": "measured",
+      "method": "sum of provider session cost for the run window",
+      "sources": []
+    },
+    "cards": [
+      { "id": "CARD-001", "elapsed_ms": 600000, "tokens": 20000, "cost_usd": 0.222637, "basis": "estimated" }
+    ]
+  }
+}
+```
+
+Prefer measured data: deterministic control-run `timings` and `tokens`,
+verification gate `duration_ms`, host-reported token totals, and host/provider
+session cost. When only partial data exists, estimate from recorded timestamps
+and observed work and state `basis` (`measured`, `estimated`, or `partial`) plus
+the `method`. Never invent a figure; omit a metric when neither measurement nor
+a defensible estimate is available. If project totals are omitted but per-Card
+values are present, the renderer reports their sum and labels it as such.
+
+Cost is expressed in USD from provider/session accounting. It is not an invoice
+and may include pricing components, such as cache reads, that the token
+headline excludes. The method must name the source and accounting basis.
+
+Estimates do not reopen or justify a gate, Reviewer verdict, Evaluator+ result,
+or delivery decision.

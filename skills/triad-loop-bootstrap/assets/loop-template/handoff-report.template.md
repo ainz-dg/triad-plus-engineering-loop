@@ -14,6 +14,22 @@ The Markdown reports are derived views. The control-workspace run state,
 verification evidence, review records, delivery gates, and optional Evaluator+
 report remain authoritative.
 
+## Effort estimate
+
+Estimates are informational and are not verification, review, delivery, or
+billing evidence. Cost figures are provider/session accounting, not an invoice.
+State the measurement or estimation basis and method; never invent a figure.
+
+| Scope | Wall-clock time | Tokens | Cost (USD) | Basis |
+| --- | --- | --- | --- | --- |
+| `<project total>` | `<duration>` | `<count>` | `<amount>` | `<measured|estimated|partial>` |
+| `<Card ID>` | `<duration>` | `<count>` | `<amount>` | `<measured|estimated|partial>` |
+
+- Time basis: `<how elapsed time was measured or estimated>`
+- Token basis: `<how token usage was measured or estimated>`
+- Cost basis: `<how cost was measured or estimated; name the provider/session source>`
+- Effort sources: `<relative evidence paths>`
+
 ## Decision
 
 `delivered | delivery_blocked | delivered_without_demo`

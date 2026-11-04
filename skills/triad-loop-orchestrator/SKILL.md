@@ -378,6 +378,31 @@ Missing or invalid final evidence is a report-generation error, not a success
 claim. Do not add a second report agent or overwrite an approved report with a
 later non-terminal candidate.
 
+Add an optional `effort` block to the handoff context with the best available
+time, token, and cost figures:
+
+```json
+{
+  "effort": {
+    "time": { "total_ms": 8040000, "basis": "measured", "method": "sum of role wall-clock timings", "sources": [".loop/runtime/deterministic-control-run.json"] },
+    "tokens": { "total": 184000, "basis": "estimated", "method": "host step_finish totals plus a per-turn estimate for uninstrumented turns", "sources": [] },
+    "cost": { "total_usd": 3.158971, "basis": "measured", "method": "sum of provider session cost for the run window", "sources": [] },
+    "cards": [{ "id": "CARD-001", "elapsed_ms": 600000, "tokens": 20000, "cost_usd": 0.222637, "basis": "estimated" }]
+  }
+}
+```
+
+Prefer measured values: control-run `timings`/`tokens`, verification gate
+`duration_ms`, host-reported token usage, and host/provider session cost. When
+only partial evidence exists, derive a defensible estimate from recorded
+timestamps and observed work, state `basis` as `measured`, `estimated`, or
+`partial`, and explain the `method`. Never invent a figure; leave a metric
+absent when neither measurement nor a defensible estimate is available. Cost is
+provider/session accounting, not an invoice, and must identify its currency and
+source. These figures are informational and are not verification, review,
+delivery, or billing evidence, so never use them to justify a gate, verdict, or
+delivery decision.
+
 ## Unattended continuation rule
 
 The normal chain is unattended: Developer completion → verification → Reviewer
@@ -443,8 +468,9 @@ or ready for owner testing until this gate has completed:
 2. If configured, complete the isolated Evaluator+ dispatch and record its
    report. Its verdict still cannot reopen Triad.
 3. Write the final handoff from the handoff template with cards, commits,
-   pushes, verifier evidence, reviewer decisions, risks, exceptions, and
-   practical-test instructions.
+   pushes, verifier evidence, reviewer decisions, risks, exceptions,
+   practical-test instructions, and a clearly labeled time/token/cost effort
+   estimate when one can be derived.
 4. Update the control-workspace run record with the delivery decision, handoff
    reference, final branch/commit map, and optional Evaluator+ reference.
 5. Give the owner one final delivery message that links the handoff, names the
