@@ -21,6 +21,8 @@ import {
 
 const nonTty = { isTTY: false };
 const tty = { isTTY: true };
+const originalTerm = process.env.TERM;
+process.env.TERM = 'xterm';
 
 const team = {
   schema_version: 1,
@@ -124,4 +126,7 @@ try {
 } catch (error) {
   process.stderr.write(`${error.stack}\n`);
   process.exitCode = 1;
+} finally {
+  if (originalTerm === undefined) delete process.env.TERM;
+  else process.env.TERM = originalTerm;
 }

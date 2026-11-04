@@ -504,8 +504,8 @@ export async function setupReadiness(controlRoot, repositories) {
 
 export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled = false } = {}) {
   const rootLine = `Open this Control Workspace in your IDE: ${controlRoot}`;
-  if (adapter.id === 'opencode') return [rootLine, 'OpenCode local entry: /triad.'];
-  if (adapter.id === 'claude-code') return [rootLine, 'Claude Code local entry: /triad.'];
+  if (adapter.id === 'opencode') return [rootLine, 'In OpenCode, run `/triad <PRD location or concise project request>` to start.'];
+  if (adapter.id === 'claude-code') return [rootLine, 'In Claude Code, run `/triad <PRD location or concise project request>` to start.'];
   if (adapter.id === 'copilot') return [rootLine, 'GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.'];
   if (adapter.id === 'antigravity') return [rootLine, 'Antigravity local assets are installed; native discovery still needs a host smoke test.'];
   if (adapter.id === 'codex') return [rootLine, globalEntryInstalled
@@ -530,8 +530,8 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
   }
   directories.add('.triad-plus');
   const lines = [
-    'Triad+ first-run setup preview',
-    `Control Workspace (open this path): ${root}`,
+    'What this setup will change',
+    `Setup folder (Control Workspace): ${root}`,
     `Triad+ version: ${currentVersion}`,
     `project.yaml: ${projectYamlPlan.changed ? `${projectYamlPlan.before === null ? 'CREATE' : 'UPDATE repositories mapping only'}` : 'unchanged'}`,
     `Team configuration: ${teamMode}`,
@@ -544,9 +544,9 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
       ] : []),
     ]),
     globalEntryPlans.size
-      ? 'Host scope: project-local assets plus the exact user-level entry and workspace-binding files listed below; the binding is written only after this exact plan is approved. No credentials, account settings, or unrelated profile files will be changed.'
-      : 'Host scope: project-local only; no user-level/global files, credentials, or account settings will be changed.',
-    'Workspace/asset directories after approval:',
+      ? 'Coding-tool files: local setup files plus the exact user-level shortcuts and workspace links listed below. No credentials, account settings, or unrelated profile files will be changed.'
+      : 'Coding-tool files: local to this setup folder; no user-level files, credentials, or account settings will be changed.',
+    'Folders created under the setup folder after approval:',
     `  ${root} (create only if absent)`,
     ...[...directories].sort().map((directory) => `  ${path.join(root, directory)}`),
     'Repository actions:',
@@ -560,7 +560,7 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
         ...(plan?.reused ?? []).map((target) => `    REUSE ${target}`),
       ];
     }),
-    'Global host-entry bridge files (Codex/Hermes; optional and consent-gated):',
+    'Optional user-level shortcuts (Codex/Hermes; separate approval required):',
     ...(globalEntryPlans.size
       ? [...globalEntryPlans.values()].flatMap((plan) => [
         `  ${plan.adapterId}:`,
@@ -568,15 +568,14 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
         ...plan.reused.map((target) => `    REUSE identical ${target}`),
       ])
       : ['  Not selected; no user-level files will be written.']),
-    `Initial runtime metadata: ${adapters[0]?.id ?? 'none'} writes .triad-runtime/adapter.json; later adapter additions will not replace it.`,
-    'Attempt-bound multi-harness dispatch remains unsupported; installation does not enable per-Attempt host selection.',
+    `Primary tool: ${adapters[0]?.label ?? 'none'}; adding another tool does not switch tools automatically during a run.`,
   ];
   return `${lines.join('\n')}\n`;
 }
 
-export function formatInteractiveSetupSummary({ root, repositories, adapters, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, globalEntryPlans = new Map(), heading = 'Triad+ first-run plan', showDetailsHint = true }) {
+export function formatInteractiveSetupSummary({ root, repositories, adapters, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, globalEntryPlans = new Map(), heading = 'Setup summary', showDetailsHint = true }) {
   const repositoryLines = repositories.length
-    ? repositories.map((repository) => `  ${repository.id}: ${repository.path} → ${repository.project_branch}; worktree ${repository.worktree}`)
+    ? repositories.map((repository) => `  ${repository.id}: ${repository.path} → base ${repository.base_branch}; project ${repository.project_branch}; worktree ${repository.worktree}`)
     : ['  deferred; no repository will be initialized or mapped by this plan'];
   const globalAdapters = [...globalEntryPlans.keys()];
   const evaluator = teamMode === 'leave unconfigured'
@@ -586,12 +585,13 @@ export function formatInteractiveSetupSummary({ root, repositories, adapters, pr
     heading,
     `Control Workspace: ${root}`,
     `Triad+ version: ${currentVersion}`,
-    'Repository mappings:',
+    'Repositories:',
     ...repositoryLines,
-    `Harnesses: ${adapters.map((adapter) => `${adapter.label} (${adapter.id})`).join(', ')}`,
-    `Team: ${teamMode}; Evaluator+: ${evaluator}`,
-    `Project mapping file: ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'new' : 'repositories mapping update' : 'unchanged'}`,
-    `Scope: project-local${globalAdapters.length ? ` plus consent-gated user-level entry files for ${globalAdapters.join(', ')}` : '; no user-level files'}`,
+    `Coding tools: ${adapters.map((adapter) => `${adapter.label} (${adapter.id})`).join(', ')}`,
+    `Changes planned: local tool entries; project settings ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'will be created' : 'will be updated' : 'stay unchanged'}.`,
+    `Team setup: ${teamMode === 'leave unconfigured' ? 'not configured (optional)' : teamMode}; Evaluator+: ${evaluator}`,
+    `Project settings: ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'new' : 'repository mapping update' : 'unchanged'}`,
+    `Files: setup-folder only${globalAdapters.length ? ` plus optional user-level shortcut files for ${globalAdapters.join(', ')}` : '; no user-level files'}`,
     'No files are written until you type "install".',
     ...(showDetailsHint ? ['Type "details" to inspect the exact file plan before approval.'] : []),
   ];

@@ -6,7 +6,9 @@ import { terminalScreen } from './terminal-screen-emulator.mjs';
 
 const originalTerm = process.env.TERM;
 const originalNoColor = process.env.NO_COLOR;
+const originalColorTerm = process.env.COLORTERM;
 process.env.TERM = 'xterm-256color';
+process.env.COLORTERM = 'truecolor';
 delete process.env.NO_COLOR;
 
 class FakeInput extends EventEmitter {
@@ -111,6 +113,21 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.equal(formatCompactRetroHeader({ stream: output, columns: 60, rows: 13, term: 'xterm-256color', locale: 'C.UTF-8' }), 'TRIAD+', '13-row terminals use the single-line header fallback');
   assert.equal(formatCompactRetroHeader({ stream: output, columns: 80, rows: 24, term: 'dumb', locale: 'C.UTF-8' }), 'TRIAD+', 'dumb terminal gets a compact ASCII header');
   assert.equal(formatRetroPixelHeader({ stream: { isTTY: false }, columns: 80, rows: 24 }), '', 'redirected output gets no splash');
+
+  const previousColorTerm = process.env.COLORTERM;
+  delete process.env.COLORTERM;
+  const xterm256 = formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'xterm-256color', locale: 'C.UTF-8' });
+  assert.match(xterm256, /\u001b\[38;5;\d+m/, '256-color terminals receive palette colors instead of unsupported 24-bit sequences');
+  assert.doesNotMatch(xterm256, /\u001b\[38;2;/, '24-bit colors require explicit truecolor support');
+  process.env.TERM = 'xterm';
+  const ansi16 = formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'xterm', locale: 'C.UTF-8' });
+  assert.match(ansi16, /\u001b\[9[346]m/, 'ordinary ANSI terminals use 16-color fallbacks');
+  process.env.TERM = 'dumb';
+  const dumb = formatRetroPixelHeader({ stream: output, columns: 80, rows: 24, term: 'dumb', locale: 'C.UTF-8' });
+  assert.doesNotMatch(dumb, /\u001b\[/, 'TERM=dumb never receives ANSI color escapes');
+  process.env.TERM = 'xterm-256color';
+  if (previousColorTerm === undefined) delete process.env.COLORTERM;
+  else process.env.COLORTERM = previousColorTerm;
 }
 
 // Real escape/arrow bytes toggle in selection order and restore the original raw mode.
@@ -127,6 +144,19 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.deepEqual(session.input.rawTransitions, [true, false]);
   assert.equal(session.input.isRaw, false);
   assert.equal(session.input.paused, true);
+}
+
+// Focus, selected items, and action rows use distinct semantic colors; labels
+// remain the textual equivalent when styling is disabled.
+{
+  const session = start({ initialSelection: ['one'], initialFocus: 'one', selectionSummary });
+  keys(session.input, '\u001b[B');
+  const frame = session.output.writes.join('');
+  assert.match(frame, /\u001b\[1m\u001b\[36mTriad\+ \/ 2 of 5/);
+  assert.match(frame, /\u001b\[32m  \[x\] one/);
+  assert.match(frame, /\u001b\[1m\u001b\[36m› \[ \] two/);
+  keys(session.input, '\u001b');
+  await session.promise;
 }
 
 // Header stays fixed while one buffered redraw updates only the menu region.
@@ -176,7 +206,10 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
     ],
   });
   keys(session.input, '\r'); // zero selection paints the long inline error
-  assert.match(session.output.writes.join(''), /Select a row with Space/);
+  const errorScreen = terminalScreen(session.output.writes.join(''), { rows: 16, columns: 48 });
+  assert.ok(errorScreen.some((line) => line.includes('Select a repository with Space')));
+  assert.ok(errorScreen.some((line) => line.includes('No setup is applied yet.')));
+  assert.ok(errorScreen.every((line) => Array.from(line).length <= 48), 'recovery text wraps within terminal width');
   keys(session.input, ' \u001b[B'); // select, move focus, and redraw
   const writes = session.output.writes.join('');
   const screen = terminalScreen(writes, { rows: 16, columns: 48 });
@@ -184,7 +217,7 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
   assert.ok(screen[1].includes('Select repositories'), `title remains at row 2:\n${screen.join('\n')}`);
   assert.equal(screen[2].trim(), 'Selection: 1 selected', `selection stays at row 3:\n${screen.join('\n')}`);
   assert.ok(screen[5].includes('› [ ] two'), `focus stays on the second option row:\n${screen.join('\n')}`);
-  assert.doesNotMatch(screen.join('\n'), /Select a row with Space/, 'the expired inline error is absent from visible cells');
+  assert.doesNotMatch(screen.join('\n'), /Select a repository with Space/, 'the expired inline error is absent from visible cells');
   assert.doesNotMatch(writes, /\u001b\[[0-9;]*m/, 'NO_COLOR remains respected while clipping error text');
   keys(session.input, '\u001b');
   await session.promise;
@@ -223,7 +256,8 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
 {
   const session = start();
   keys(session.input, '\r');
-  assert.match(session.output.writes.join(''), /Select a row with Space/);
+  assert.match(session.output.writes.join(''), /Select a repository with Space/);
+  assert.ok(terminalScreen(session.output.writes.join(''), { rows: 16, columns: 48 }).some((line) => line.includes('No setup is applied yet.')));
   keys(session.input, '\u001b');
   const result = await session.promise;
   assert.equal(result.kind, 'cancel');
@@ -276,5 +310,7 @@ const selectionSummary = (selected) => `${selected.length} selected${selected[0]
 process.stdout.write('Interactive TUI tests passed: retro header palettes/fallbacks, redraw layout, key selection, and terminal cleanup.\n');
 if (originalTerm === undefined) delete process.env.TERM;
 else process.env.TERM = originalTerm;
+if (originalColorTerm === undefined) delete process.env.COLORTERM;
+else process.env.COLORTERM = originalColorTerm;
 if (originalNoColor === undefined) delete process.env.NO_COLOR;
 else process.env.NO_COLOR = originalNoColor;

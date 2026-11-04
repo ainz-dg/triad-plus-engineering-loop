@@ -26,7 +26,7 @@ function run(command, args, cwd, env = {}) {
 }
 
 function safeParentEnvironment() {
-  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|COOKIE)/i.test(name)));
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== 'NO_COLOR' && !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|COOKIE)/i.test(name)));
 }
 
 function runCli(args, cwd, env = {}) {
@@ -101,6 +101,7 @@ if (pseudoTerminalAvailable) {
   const retro = terminalInput(retroRoot, [line('n'), line(''), key('escape')], {
     HOME: path.join(fixture, 'home-retro-header'),
     TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
     LANG: 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
     TRIAD_TEST_PTY_COLS: '80',
@@ -117,8 +118,8 @@ if (pseudoTerminalAvailable) {
   assert.match(retro.stdout, /\u001b\[38;2;124;140;255m/, 'interactive PTY uses the exact violet');
   assert.match(retro.stdout, /\u001b\[38;2;53;195;177m/, 'interactive PTY uses the exact turquoise');
   assert.match(retro.stdout, /\u001b\[38;2;245;185;94m/, 'interactive PTY uses the exact amber');
-  assert.match(retro.stdout, /Choose \[N\]ew workspace/, 'the first menu choice appears immediately');
-  assert.match(retro.stdout, /Select product repositories/, 'the next interactive screen remains available');
+  assert.match(retro.stdout, /Set up a new workspace/, 'the first menu choice appears immediately');
+  assert.match(retro.stdout, /Which product repositories belong in this setup\?/, 'the next interactive screen remains available');
   assert.equal((retro.stdout.match(/ENGINEERING LOOP/g) ?? []).length, 1, 'the header is printed once across menu redraws');
   assert.doesNotMatch(retro.stdout, /\u001b\[2J/, 'redraws do not clear the display before painting');
   assert.match(retro.stdout, /Cancelled\. No files were changed\./);
@@ -135,7 +136,7 @@ if (pseudoTerminalAvailable) {
   const scrollBefore = await treeSnapshot(scrollRepo);
   const scrolled = terminalInput(scrollRoot, [
     line('n'), line(''), key('space'), key('enter'),
-    line(''), line(''), line(''), line(''), key('escape'), key('escape'),
+    line(''), key('escape'), key('escape'),
   ], {
     HOME: path.join(fixture, 'home-scrolled-checklist'),
     TERM: 'xterm-256color',
@@ -147,15 +148,15 @@ if (pseudoTerminalAvailable) {
   assert.equal(scrolled.status, 0, `${scrolled.stderr}\n${scrolled.stdout}`);
   await saveTranscript('scrolling-checklist', scrolled);
   assert.match(scrolled.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ''), /TRIAD\+/);
-  assert.match(scrolled.stdout, /Select product repositories/);
+  assert.match(scrolled.stdout, /Which product repositories belong in this setup\?/);
   assert.match(scrolled.stdout, /Cancelled\. No files were changed\./);
   assert.equal((scrolled.stdout.match(/ENGINEERING LOOP/g) ?? []).length, 1, 'the brand mark is written once and remains readable in scrollback');
   const lastChecklistFrame = scrolled.stdout.lastIndexOf('Esc cancel');
   assert.notEqual(lastChecklistFrame, -1, 'the reopened repository checklist was actually rendered');
   const scrolledScreen = terminalScreen(scrolled.stdout.slice(0, lastChecklistFrame + 'Esc cancel'.length), { rows: 18, columns: 50 });
-  assert.equal(scrolledScreen.filter((line) => line.trim() === 'Select product repositories').length, 1, `the reopened checklist title occupies its own visible row:\n${scrolledScreen.join('\n')}`);
+  assert.equal(scrolledScreen.filter((line) => line.trim() === 'Which product repositories belong in this setup?').length, 1, `the reopened checklist title occupies its own visible row:\n${scrolledScreen.join('\n')}`);
   assert.ok(scrolledScreen.some((line) => line.includes('› [x] ./product')), `the selected repository remains legible:\n${scrolledScreen.join('\n')}`);
-  assert.match(scrolled.stdout, /worktree mapping/, 'the preceding text question remains intact in the PTY transcript');
+  assert.match(scrolled.stdout, /Suggested repository setup/, 'the defaults summary remains intact in the PTY transcript');
   assert.deepEqual(await treeSnapshot(scrollRepo), scrollBefore, 'Back/Escape leave the repository unchanged');
 }
 
@@ -284,7 +285,7 @@ try {
     const repoStatusBefore = git(sampleApp, ['status', '--porcelain']);
     const answers = [
       line(''), line(''), key('space'), key('enter'),
-      line('ketchup2'), line(''), line(''), line(''),
+      line('edit'), line('ketchup2'), line(''), line(''), line(''),
       key('down'), key('space'), key('up'), key('space'), key('enter'),
       key('space'), key('enter'), line('details'), line('install'),
     ];
@@ -303,16 +304,16 @@ try {
     assert.equal(await readFile(runtimeProbeLog).then(() => true, () => false), false, 'first-run setup never probes selected host runtimes');
     await saveTranscript('single-tty-two-harness-first-install', setup);
     const realRoot = await realpath(root);
-    assert.ok(setup.stdout.includes(`Control Workspace (open this path): ${realRoot}`), setup.stdout);
+    assert.ok(setup.stdout.includes(`Setup folder (Control Workspace): ${realRoot}`), setup.stdout);
     assert.match(setup.stdout, /Triad\+ installed/);
     assert.doesNotMatch(setup.stdout, /Readiness:|Workspace readiness|Host runtimes: optional|host runtime=optional/);
-    assert.match(setup.stdout, /Select product repositories/);
+    assert.match(setup.stdout, /Which product repositories belong in this setup\?/);
     assert.match(setup.stdout, /current branch develop/);
-    assert.match(setup.stdout, /Only immediate-child Git roots are suggested/);
-    assert.match(setup.stdout, /Select coding harnesses/);
+    assert.match(setup.stdout, /We suggest Git repositories directly inside this folder/);
+    assert.match(setup.stdout, /Which coding tools will use this setup\?/);
     assert.match(setup.stdout, /primary OpenCode \(opencode\)/);
     assert.doesNotMatch(setup.stdout, /repo-1/);
-    assert.match(setup.stdout, /Attempt-bound multi-harness dispatch remains unsupported/);
+    assert.match(setup.stdout, /adding another tool does not switch tools automatically during a run/);
     assert.match(setup.stdout, /Optional; only exact files shown in the final preview can be installed/);
     assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
     assert.doesNotMatch(setup.stdout, /PRD\.md.*quality-gates|baseline commit.*worktree/);
@@ -351,6 +352,7 @@ try {
         HOME: smokeHome,
         PATH: noHarnessPath,
         TERM: term,
+        COLORTERM: 'none',
         LANG: locale,
         LC_ALL: locale,
         TMPDIR: isolatedTmp,
@@ -360,8 +362,8 @@ try {
       assert.equal(smoke.status, 0, `TTY ${columns}x${rows} ${term}: ${smoke.stderr}\n${smoke.stdout}`);
       const smokeText = smoke.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
       assert.match(smokeText, /TRIAD\+/);
-      assert.match(smokeText, /Harnesses: OpenCode \(opencode\)/);
-      assert.match(smokeText, /Repository mappings:[\s\S]*deferred/);
+      assert.match(smokeText, /Coding tools: OpenCode \(opencode\)/);
+      assert.match(smokeText, /Repositories:[\s\S]*deferred/);
       assert.match(smokeText, /Triad\+ installed/);
       assert.doesNotMatch(smokeText, /Readiness:|NOT READY|Host runtimes: optional|host runtime=optional/);
       assert.doesNotMatch(smoke.stdout, /\u001b\[2J/, 'wizard navigation does not clear the entire display');
@@ -371,6 +373,8 @@ try {
         assert.match(smokeText, /TRIAD\+ \/ Engineering Loop/);
       } else {
         assert.match(smokeText, /ENGINEERING LOOP/, 'UTF-8 terminal renders the retro brand');
+        assert.match(smoke.stdout, /\u001b\[38;5;\d+m/, 'xterm-256color receives only supported palette colors');
+        assert.doesNotMatch(smoke.stdout, /\u001b\[38;2;/, 'the wizard does not assume truecolor support');
       }
     }
     assert.deepEqual(await treeSnapshot(loopRoot), loopBefore, '.loop owner state and evidence remain byte-identical');
@@ -393,7 +397,7 @@ try {
     const selectedIds = ['opencode', 'codex'];
     assert.deepEqual(registryIds, ['antigravity', 'claude-code', 'codex', 'copilot', 'hermes', 'opencode']);
     for (const adapter of adapters) assert.ok(setup.stdout.includes(`${adapter.label} (${adapter.id})`), `${adapter.id} is present in the six-adapter keyboard screen`);
-    assert.match(setup.stdout, /Initial runtime metadata: opencode writes/);
+    assert.match(setup.stdout, /Primary tool: OpenCode/);
     const recordedIds = multi.adapters.map((adapter) => adapter.id);
     assert.deepEqual(recordedIds, [...selectedIds].sort(), 'exactly the selected harness memberships are recorded once');
     assert.equal(new Set(multi.adapters.map((adapter) => adapter.id)).size, selectedIds.length, 'adapter membership contains no duplicates');
@@ -502,7 +506,7 @@ try {
     await mkdir(path.dirname(managedWorktree), { recursive: true });
     git(managedRepo, ['worktree', 'add', '-b', 'triad/product-feature', managedWorktree, 'main']);
     const managedAnswers = [
-      line(''), line(''), key('space'), key('enter'), line('product'), line(''), line(''), line(''),
+      line(''), line(''), key('space'), key('enter'), line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('details'), line('install'),
     ];
     const managedSetup = terminalInput(managedRoot, managedAnswers, {
@@ -649,7 +653,7 @@ try {
     await makeRepo(cancelRepo, 'cancel fixture product state\n');
     const globalCancel = terminalInput(cancelRoot, [
       line(''), line(''), key('space'), key('enter'),
-      line(''), line(''), line(''), line(''),
+      line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('n'), line('details'), line('cancel'),
     ], { HOME: path.join(fixture, 'home-global-cancel'), CODEX_HOME: cancelCodexHome });
     assert.equal(globalCancel.status, 0, `${globalCancel.stderr}\n${globalCancel.stdout}`);
@@ -672,7 +676,7 @@ try {
     await writeFile(collisionBridgeEntry, collisionBridgeBytes);
     const globalCollision = terminalInput(collisionBridgeRoot, [
       line(''), line(''), key('space'), key('enter'),
-      line(''), line(''), line(''), line(''),
+      line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('n'),
     ], { HOME: path.join(fixture, 'home-global-collision'), CODEX_HOME: collisionCodexHome });
     assert.equal(globalCollision.status, 2, `${globalCollision.stderr}\n${globalCollision.stdout}`);
@@ -695,7 +699,7 @@ try {
     await writeFile(legacyPromptPath, legacyPromptBytes);
     const legacyPromptCollision = terminalInput(legacyPromptRoot, [
       line(''), line(''), key('space'), key('enter'),
-      line(''), line(''), line(''), line(''),
+      line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('n'),
     ], { HOME: path.join(fixture, 'home-legacy-prompt'), CODEX_HOME: legacyCodexHome });
     assert.equal(legacyPromptCollision.status, 2, `${legacyPromptCollision.stderr}\n${legacyPromptCollision.stdout}`);
@@ -717,7 +721,7 @@ try {
     await makeRepo(raceRepo, 'race fixture product state\n');
     const globalRace = terminalInput(raceRoot, [
       line(''), line(''), key('space'), key('enter'),
-      line(''), line(''), line(''), line(''),
+      line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('n'), line('details'), line('install'),
     ], {
       HOME: path.join(fixture, 'home-global-race'),
@@ -747,7 +751,7 @@ try {
     const firstBindingBeforeSecondInstall = await readFile(codexBinding);
     const secondInstall = terminalInput(secondWorkspace, [
       line(''), line(''), key('space'), key('enter'),
-      line(''), line(''), line(''), line(''),
+      line(''),
       key('space'), key('enter'), key('space'), key('enter'), line('n'), line('details'), line('install'),
     ], isolatedHostEnv);
     assert.equal(secondInstall.status, 0, `${secondInstall.stderr}\n${secondInstall.stdout}`);
@@ -783,15 +787,15 @@ try {
     const multiAnswers = [
       line(''), line(''), key('enter'), // zero selection is diagnosed, not defaulted
       key('down'), key('space'), key('up'), key('space'), key('enter'), // a_app first, then a-app
-      line(''), line(''), line(''), line(''), line(''), line(''), line(''), line(''),
+      line(''),
       key('down'), key('space'), key('up'), key('space'), key('escape'), // OpenCode primary, Codex second; back
       key('enter'), // both repositories remain checked
-      line(''), line(''), line(''), line(''), line(''), line(''), line(''), line(''),
+      line(''),
       key('enter'), key('enter'), line('n'), line('cancel'), // both adapters remain checked; skip global files and cancel exact plan
     ];
     const multiSelection = terminalInput(multiRoot, multiAnswers, { HOME: path.join(fixture, 'home-multi') });
     assert.equal(multiSelection.status, 0, `${multiSelection.stderr}\n${multiSelection.stdout}`);
-    assert.match(multiSelection.stdout, /Select at least 1 items|Select a row with Space/);
+    assert.match(multiSelection.stdout, /Select a repository with Space/);
     assert.match(multiSelection.stdout, /primary OpenCode \(opencode\)/);
     assert.match(multiSelection.stdout, /a-app-2: \.\/a_app/);
     assert.match(multiSelection.stdout, /a-app: \.\/a-app/);
@@ -810,7 +814,7 @@ try {
     const externalBefore = await treeSnapshot(externalRepo);
     const customPathRun = terminalInput(customRoot, [
       line(''), line(''), key('enter'), line(externalRepo), key('enter'),
-      line(''), line(''), line(''), line(''), key('down'), key('space'), key('enter'), line('n'), line('cancel'),
+      line(''), key('down'), key('space'), key('enter'), line('n'), line('cancel'),
     ], { HOME: path.join(fixture, 'home-custom-path') });
     assert.equal(customPathRun.status, 0, `${customPathRun.stderr}\n${customPathRun.stdout}`);
     assert.match(customPathRun.stdout, /Add repository by path/);
@@ -882,8 +886,8 @@ try {
     const retryHead = git(retryRepo, ['rev-parse', 'HEAD']);
     const retryAnswers = [
       line(''), line(''), key('down'), key('enter'), line('./missing'), key('enter'), line('./ketchup2'), key('enter'),
-      line(''), line(''), line('bad..branch'), line(''),
-      line('y'), key('enter'), line(''), line(''), line('triad/ketchup2-feature'), line(''),
+      line('edit'), line(''), line(''), line('bad..branch'), line(''),
+      line('y'), key('enter'), line('edit'), line(''), line(''), line('triad/ketchup2-feature'), line(''),
       key('space'), key('enter'), key('enter'), line('n'), line('details'), line('install'),
     ];
     const retryRun = terminalInput(retryRoot, retryAnswers, {
@@ -910,7 +914,7 @@ try {
     const greenHome = path.join(fixture, 'home-green');
     await mkdir(greenHome);
     const greenAnswers = [
-      line(''), line(''), key('down'), key('enter'), line('1'), line('sample-app'), line(''), line(''), line(''), line(''),
+      line(''), line(''), key('down'), key('enter'), line('1'), line('edit'), line('sample-app'), line(''), line(''), line(''), line(''),
       key('space'), key('enter'), key('enter'), line('n'), line('details'), line('install'),
     ];
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
@@ -932,8 +936,8 @@ try {
     const blocked = terminalInput(appRoot, [line(''), line('')], { HOME: path.join(fixture, 'home-blocked') });
     assert.equal(blocked.status, 0, `${blocked.stderr}\n${blocked.stdout}`);
     await saveTranscript('git-root-boundary-cancel', blocked);
-    assert.match(blocked.stdout, /belongs to Git root/);
-    assert.match(blocked.stdout, /No sibling path will be generated/);
+    assert.match(blocked.stdout, /inside Git repository/);
+    assert.match(blocked.stdout, /no path is guessed/);
     assert.match(blocked.stdout, /Cancelled\. No files were changed\./);
     assert.equal(await readFile(path.join(appRoot, 'README.md'), 'utf8'), 'app source\n');
     assert.equal(await readFile(path.join(fixture, 'APP-ROOT-control', '.triad-plus', 'installation.json')).then(() => true, () => false), false);

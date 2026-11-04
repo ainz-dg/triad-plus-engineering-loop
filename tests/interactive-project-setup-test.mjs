@@ -154,7 +154,7 @@ try {
 
   const compactSummary = formatInteractiveSetupSummary({
     root: '/tmp/control',
-    repositories: [],
+    repositories: [{ id: 'sample', path: './sample', base_branch: 'main', project_branch: 'triad/sample-feature', worktree: 'worktrees/sample-feature' }],
     adapters: [{ id: 'codex', label: 'Codex' }],
     adapterPlans: new Map([['codex', { created: ['.triad-runtime/a', '.triad-runtime/b'], reused: ['.triad-runtime/c'] }]]),
     globalEntryPlans: new Map(),
@@ -162,7 +162,9 @@ try {
     readiness: { ready: false, missing: ['PRD.md', 'required quality-gates'] },
     currentVersion: '1.22.1',
   });
-  assert.match(compactSummary, /Triad\+ first-run plan/);
+  assert.match(compactSummary, /Setup summary/);
+  assert.match(compactSummary, /Changes planned: local tool entries/);
+  assert.match(compactSummary, /sample: \.\/sample → base main; project triad\/sample-feature; worktree worktrees\/sample-feature/);
   assert.match(compactSummary, /No files are written until you type "install"/);
   assert.doesNotMatch(compactSummary, /Readiness|runtime|\.loop\/quality-gates/);
   assert.doesNotMatch(compactSummary, /\.triad-runtime\/a/, 'the compact summary omits per-file paths available in details');
@@ -256,6 +258,7 @@ try {
   ]), /symlink/);
   assert.equal(await readFile(configPlan.path, 'utf8'), stableSnapshot);
   assert.match(projectLaunchHint({ id: 'codex' }, container).join('\n'), /optional user-level \$triad was not selected/);
+  assert.match(projectLaunchHint({ id: 'opencode', label: 'OpenCode' }, container).join('\n'), /`\/triad <PRD location or concise project request>`/);
   const teamPreview = formatSetupPreview({
     root: emptyRoot,
     repositories: greenfield,
@@ -271,7 +274,7 @@ try {
   assert.match(teamPreview, /\.triad-plus\/team\.json: CREATE/);
   assert.match(teamPreview, /AGENTS\.md role instructions: APPEND/);
   assert.match(teamPreview, /opencode: CONFIGURE/);
-  assert.match(teamPreview, /Initial runtime metadata: opencode writes \.triad-runtime\/adapter\.json/);
+  assert.match(teamPreview, /Primary tool: OpenCode; adding another tool does not switch tools automatically during a run/);
 
   process.stdout.write('Triad+ interactive project setup safety fixtures passed (A01-A06, A09-A10; lifecycle/A11 and verifier/A14 covered by existing suites).\n');
 } finally {
