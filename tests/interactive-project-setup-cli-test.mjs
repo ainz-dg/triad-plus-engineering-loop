@@ -335,10 +335,12 @@ try {
     assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
     assert.match(setupText, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
     assert.match(setupText, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
-    assert.match(setupText, /initial commit and create the mapped worktree for each mapped repository/);
+    assert.match(setupText, /create an initial commit in each mapped repository and its mapped worktree/);
     assert.match(setupText, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \./);
     assert.match(setupText, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
     assert.match(setupText, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
+    const successText = setupText.slice(setupText.lastIndexOf('\nTriad+ installed'));
+    assert.equal(successText.split('\n').filter((line) => line.startsWith('Control Workspace: ')).length, 1, 'success output names the Control Workspace once');
     assert.match(setup.stdout, /\/triad/);
     assert.match(setup.stdout, /\u001b\[1m\u001b\[36mPress Enter to use these values, or type edit to change them: \u001b\[0m(?:\u001b\[\d+G)?/, 'ordinary inline questions use semantic color outside checklist screens');
     assert.match(setup.stdout, /\u001b\[1m\u001b\[36mSetup summary\u001b\[0m/);

@@ -2608,7 +2608,6 @@ async function applyInteractiveSetup(plan) {
   }
 
   process.stdout.write(`\n${paint('Triad+ installed', 'success')}\n`);
-  process.stdout.write(`${paint('Control Workspace:', 'section')} ${plan.root}\n`);
   process.stdout.write(`${paint('Coding tools configured:', 'section')} ${plan.adapters.map((adapter) => adapter.label).join(', ')}\n`);
   const globalEntryInstalled = plan.globalEntryPlans.has(plan.adapters[0].id);
   for (const line of projectLaunchHint(plan.adapters[0], plan.root, { globalEntryInstalled })) {

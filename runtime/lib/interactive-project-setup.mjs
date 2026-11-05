@@ -508,7 +508,7 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
   const common = [
     rootLine,
     'Installation succeeded; adapter assets are installed, but project readiness was not checked.',
-    'Before a first loop: add root PRD.md and .loop/quality-gates.yaml; make an initial commit and create the mapped worktree for each mapped repository.',
+    'Before a first loop: add root PRD.md and .loop/quality-gates.yaml; create an initial commit in each mapped repository and its mapped worktree.',
     `Optional from this Control Workspace: npx triad-plus doctor --host ${adapter.id} --control . (host/install only; not readiness).`,
   ];
   let entry;
