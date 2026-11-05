@@ -23,12 +23,17 @@ The product-repository screen lists read-only immediate-child Git roots with
 their current branches. Use Up/Down to focus, Space to select, and Enter to
 confirm one or more repositories; Enter with none selected explains the
 required action. Use **Add repository by path** for an explicitly supplied
-existing local Git root outside that list, or choose **Create greenfield
-repository** / **Defer repository configuration**. Greenfield paths remain a
-text-entry flow in this prototype. A selected repository's directory name
-suggests its stable ID, project branch, and worktree mapping; these remain
-editable and pass the existing safety validation. The selected path and
-detected base branch are shown in the mapping step.
+existing local Git root outside that list, or choose **Set up a new
+repository** / **Skip repository setup for now**. For selected repositories,
+the wizard groups the suggested ID, folder, base branch, project branch, and
+worktree mapping for review; press Enter to accept those values or type `edit`
+to change them through the validated prompts. Greenfield setup asks how many
+repositories to create and presents the same grouped defaults. New local Git
+repositories are initialized only after the final approval; setup does not
+create their initial commits or worktrees. The selected path and detected
+base branch are shown in the mapping step. Final approval records repository
+mappings and installs adapter assets; recording a worktree path does not
+create that worktree or establish project readiness.
 
 Select one or more harnesses on the next checkbox screen with the same keys:
 OpenCode, Codex, Claude Code, GitHub Copilot, Antigravity, and Hermes Agent.
@@ -56,12 +61,16 @@ At the Control Workspace root, create `PRD.md` with a small goal, one
 observable acceptance criterion, and a deterministic verification command.
 Also add `.loop/quality-gates.yaml`, make an initial commit in each mapped
 repository, and create the declared worktree. Setup does not create these
-inputs implicitly. The wizard's first-run summary is an installation plan; it
-does not inspect or attest to project readiness, probe host availability,
-assess PRD or gate quality, or execute gates. Check the project inputs
-separately. `doctor` diagnoses selected adapter installation, managed assets,
-the host executable, and available host/verifier configuration; it is not a
-readiness check and does not run quality gates.
+inputs implicitly. Immediately after install, the wizard gives these staged
+next steps and an optional host/install diagnostic command; it does not imply
+that project readiness has been established. Follow this
+[quickstart](../README.md#one-quickstart-root-control-workspace-and-root-prd)
+for the documented first-run path. The wizard's first-run summary is an
+installation plan; it does not inspect or attest to project readiness, probe
+host availability, assess PRD or gate quality, or execute gates. Check the
+project inputs separately. `doctor` diagnoses selected adapter installation,
+managed assets, the host executable, and available host/verifier configuration;
+it is not a readiness check and does not run quality gates.
 
 Run `doctor` separately for host and installation diagnostics:
 

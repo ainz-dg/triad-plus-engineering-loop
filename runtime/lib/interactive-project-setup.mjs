@@ -1,6 +1,7 @@
 import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { paint } from './terminal.mjs';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const BRANCH = /^[A-Za-z0-9._/-]+$/;
@@ -503,21 +504,30 @@ export async function setupReadiness(controlRoot, repositories) {
 }
 
 export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled = false } = {}) {
-  const rootLine = `Open this Control Workspace in your IDE: ${controlRoot}`;
-  if (adapter.id === 'opencode') return [rootLine, 'In OpenCode, run `/triad <PRD location or concise project request>` to start.'];
-  if (adapter.id === 'claude-code') return [rootLine, 'In Claude Code, run `/triad <PRD location or concise project request>` to start.'];
-  if (adapter.id === 'copilot') return [rootLine, 'GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.'];
-  if (adapter.id === 'antigravity') return [rootLine, 'Antigravity local assets are installed; native discovery still needs a host smoke test.'];
-  if (adapter.id === 'codex') return [rootLine, globalEntryInstalled
-    ? 'Codex user-level native skill: $triad. Reopen Codex from this exact Control Workspace; its global preflight checks the consent-bound workspace and runtime hashes before local code runs.'
-    : 'Codex project-local skill assets are installed; optional user-level $triad was not selected.'];
-  if (adapter.id === 'hermes') return [rootLine, globalEntryInstalled
-    ? 'Hermes user-level entry: /triad in the active profile. Restart Hermes from this exact Control Workspace; its global preflight checks the consent-bound workspace and runtime hashes before local code runs.'
-    : 'Hermes project-local runtime is installed; optional user-level /triad was not selected.'];
-  return [rootLine, `Native entry: ${adapter.entry ?? 'not declared'}.`];
+  const rootLine = `Control Workspace: ${controlRoot}`;
+  const common = [
+    rootLine,
+    'Installation succeeded; adapter assets are installed, but project readiness was not checked.',
+    'Before a first loop: add root PRD.md and .loop/quality-gates.yaml; make an initial commit and create the mapped worktree for each mapped repository.',
+    `Optional from this Control Workspace: npx triad-plus doctor --host ${adapter.id} --control . (host/install only; not readiness).`,
+  ];
+  let entry;
+  if (adapter.id === 'opencode') entry = 'After readiness — OpenCode: open this Control Workspace and run `/triad ./PRD.md`.';
+  else if (adapter.id === 'claude-code') entry = 'After readiness — Claude Code: open this Control Workspace and run `/triad ./PRD.md`.';
+  else if (adapter.id === 'copilot') entry = 'After readiness — GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.';
+  else if (adapter.id === 'antigravity') entry = 'After readiness — Antigravity: local assets are installed; native discovery still needs a host smoke test.';
+  else if (adapter.id === 'codex') entry = globalEntryInstalled
+    ? 'After readiness — Codex: reopen it from this Control Workspace; the optional user-level $triad entry preflights the consent-bound workspace and runtime hashes.'
+    : 'After readiness — Codex: reopen it from this Control Workspace; project-local skill assets are installed, while optional user-level $triad was not selected.';
+  else if (adapter.id === 'hermes') entry = globalEntryInstalled
+    ? 'After readiness — Hermes: restart it from this Control Workspace; the optional user-level /triad entry preflights the consent-bound workspace and runtime hashes.'
+    : 'After readiness — Hermes: reopen it from this Control Workspace; project-local runtime is installed, while optional user-level /triad was not selected.';
+  else entry = `After readiness — native entry: ${adapter.entry ?? 'not declared'}.`;
+  return [...common, entry, 'Quickstart: https://github.com/ainz-dg/triad-plus-engineering-loop/blob/main/docs/getting-started.md'];
 }
 
-export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map() }) {
+export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map(), stream = process.stdout }) {
+  const label = (value) => paint(value, 'section', { stream });
   const directories = new Set();
   for (const adapter of adapters) {
     for (const target of adapterPlans.get(adapter.id)?.created ?? []) {
@@ -530,11 +540,11 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
   }
   directories.add('.triad-plus');
   const lines = [
-    'What this setup will change',
-    `Setup folder (Control Workspace): ${root}`,
-    `Triad+ version: ${currentVersion}`,
-    `project.yaml: ${projectYamlPlan.changed ? `${projectYamlPlan.before === null ? 'CREATE' : 'UPDATE repositories mapping only'}` : 'unchanged'}`,
-    `Team configuration: ${teamMode}`,
+    paint('What this setup will change', 'title', { stream }),
+    `${label('Setup folder (Control Workspace)')}: ${root}`,
+    `${label('Triad+ version')}: ${currentVersion}`,
+    `${label('project.yaml')}: ${projectYamlPlan.changed ? `${projectYamlPlan.before === null ? 'CREATE' : 'UPDATE repositories mapping only'}` : 'unchanged'}`,
+    `${label('Team configuration')}: ${teamMode}`,
     ...(teamMode === 'leave unconfigured' ? [] : [
       `  .triad-plus/team.json: ${teamMode === 'reuse existing without rewriting' ? 'REUSE unchanged' : 'CREATE'}`,
       ...(roleOverlayPlan ? [`  AGENTS.md role instructions: ${roleOverlayPlan.action.toUpperCase()} ${roleOverlayPlan.target}`] : []),
@@ -544,23 +554,23 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
       ] : []),
     ]),
     globalEntryPlans.size
-      ? 'Coding-tool files: local setup files plus the exact user-level shortcuts and workspace links listed below. No credentials, account settings, or unrelated profile files will be changed.'
-      : 'Coding-tool files: local to this setup folder; no user-level files, credentials, or account settings will be changed.',
-    'Folders created under the setup folder after approval:',
+      ? `${label('Coding-tool files')}: local setup files plus the exact user-level shortcuts and workspace links listed below. No credentials, account settings, or unrelated profile files will be changed.`
+      : `${label('Coding-tool files')}: local to this setup folder; no user-level files, credentials, or account settings will be changed.`,
+    label('Folders created under the setup folder after approval:'),
     `  ${root} (create only if absent)`,
     ...[...directories].sort().map((directory) => `  ${path.join(root, directory)}`),
-    'Repository actions:',
+    label('Repository actions:'),
     ...(repositories.length ? repositories.map((repository) => `  ${repository.status === 'proposed-new' ? 'INIT local Git only (after approval; no remote/push)' : 'KEEP existing Git repository unchanged'} ${repository.id}: ${repository.path}; base=${repository.base_branch}; project=${repository.project_branch}; worktree=${repository.worktree}`) : ['  Deferred; no repository will be initialized or mapped by this plan.']),
-    'Adapter assets:',
+    label('Adapter assets:'),
     ...adapters.flatMap((adapter) => {
       const plan = adapterPlans.get(adapter.id);
       return [
-        `  ${adapter.label} (${adapter.id}): ${plan?.created?.length ?? 0} new local file(s), ${plan?.reused?.length ?? 0} exact-byte reuse(s)`,
+        `  ${label(`${adapter.label} (${adapter.id})`)}: ${plan?.created?.length ?? 0} new local file(s), ${plan?.reused?.length ?? 0} exact-byte reuse(s)`,
         ...(plan?.created ?? []).map((target) => `    CREATE ${target}`),
         ...(plan?.reused ?? []).map((target) => `    REUSE ${target}`),
       ];
     }),
-    'Optional user-level shortcuts (Codex/Hermes; separate approval required):',
+    label('Optional user-level shortcuts (Codex/Hermes; separate approval required):'),
     ...(globalEntryPlans.size
       ? [...globalEntryPlans.values()].flatMap((plan) => [
         `  ${plan.adapterId}:`,
@@ -568,12 +578,13 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
         ...plan.reused.map((target) => `    REUSE identical ${target}`),
       ])
       : ['  Not selected; no user-level files will be written.']),
-    `Primary tool: ${adapters[0]?.label ?? 'none'}; adding another tool does not switch tools automatically during a run.`,
+    `${label('Primary tool')}: ${adapters[0]?.label ?? 'none'}; adding another tool does not switch tools automatically during a run.`,
   ];
   return `${lines.join('\n')}\n`;
 }
 
-export function formatInteractiveSetupSummary({ root, repositories, adapters, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, globalEntryPlans = new Map(), heading = 'Setup summary', showDetailsHint = true }) {
+export function formatInteractiveSetupSummary({ root, repositories, adapters, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, globalEntryPlans = new Map(), heading = 'Setup summary', showDetailsHint = true, stream = process.stdout }) {
+  const label = (value) => paint(value, 'section', { stream });
   const repositoryLines = repositories.length
     ? repositories.map((repository) => `  ${repository.id}: ${repository.path} → base ${repository.base_branch}; project ${repository.project_branch}; worktree ${repository.worktree}`)
     : ['  deferred; no repository will be initialized or mapped by this plan'];
@@ -582,18 +593,18 @@ export function formatInteractiveSetupSummary({ root, repositories, adapters, pr
     ? 'not configured'
     : team?.roles?.evaluator?.enabled === true ? 'enabled' : 'disabled';
   const lines = [
-    heading,
-    `Control Workspace: ${root}`,
-    `Triad+ version: ${currentVersion}`,
-    'Repositories:',
+    paint(heading, 'title', { stream }),
+    `${label('Control Workspace')}: ${root}`,
+    `${label('Triad+ version')}: ${currentVersion}`,
+    label('Repositories:'),
     ...repositoryLines,
-    `Coding tools: ${adapters.map((adapter) => `${adapter.label} (${adapter.id})`).join(', ')}`,
-    `Changes planned: local tool entries; project settings ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'will be created' : 'will be updated' : 'stay unchanged'}.`,
-    `Team setup: ${teamMode === 'leave unconfigured' ? 'not configured (optional)' : teamMode}; Evaluator+: ${evaluator}`,
-    `Project settings: ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'new' : 'repository mapping update' : 'unchanged'}`,
-    `Files: setup-folder only${globalAdapters.length ? ` plus optional user-level shortcut files for ${globalAdapters.join(', ')}` : '; no user-level files'}`,
-    'No files are written until you type "install".',
-    ...(showDetailsHint ? ['Type "details" to inspect the exact file plan before approval.'] : []),
+    `${label('Coding tools')}: ${adapters.map((adapter) => `${adapter.label} (${adapter.id})`).join(', ')}`,
+    `${label('Changes planned')}: local tool entries; project settings ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'will be created' : 'will be updated' : 'stay unchanged'}.`,
+    `${label('Team setup')}: ${teamMode === 'leave unconfigured' ? 'not configured (optional)' : teamMode}; Evaluator+: ${evaluator}`,
+    `${label('Project settings')}: ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'new' : 'repository mapping update' : 'unchanged'}`,
+    `${label('Files')}: setup-folder only${globalAdapters.length ? ` plus optional user-level shortcut files for ${globalAdapters.join(', ')}` : '; no user-level files'}`,
+    paint('No files are written until you type "install".', 'warning', { stream }),
+    ...(showDetailsHint ? [paint('Type "details" to inspect the exact file plan before approval.', 'hint', { stream })] : []),
   ];
   return `${lines.join('\n')}\n`;
 }

@@ -168,6 +168,44 @@ try {
   assert.match(compactSummary, /No files are written until you type "install"/);
   assert.doesNotMatch(compactSummary, /Readiness|runtime|\.loop\/quality-gates/);
   assert.doesNotMatch(compactSummary, /\.triad-runtime\/a/, 'the compact summary omits per-file paths available in details');
+
+  const terminalEnv = { TERM: process.env.TERM, COLORTERM: process.env.COLORTERM, NO_COLOR: process.env.NO_COLOR };
+  const ttyStream = { isTTY: true };
+  try {
+    process.env.TERM = 'xterm-256color';
+    process.env.COLORTERM = 'truecolor';
+    delete process.env.NO_COLOR;
+    const coloredSummary = formatInteractiveSetupSummary({
+      root: '/tmp/control', repositories: [], adapters: [{ id: 'opencode', label: 'OpenCode' }],
+      projectYamlPlan: { changed: false, before: null }, currentVersion: '1.22.2', stream: ttyStream,
+    });
+    assert.match(coloredSummary, /\u001b\[1m\u001b\[36mSetup summary\u001b\[0m/);
+    assert.match(coloredSummary, /\u001b\[1m\u001b\[36mControl Workspace\u001b\[0m/);
+    assert.match(coloredSummary, /\u001b\[33mNo files are written until you type "install"\.\u001b\[0m/);
+    const coloredPreview = formatSetupPreview({
+      root: '/tmp/control', repositories: [], adapters: [], adapterPlans: new Map(),
+      projectYamlPlan: { changed: false, before: null }, currentVersion: '1.22.2', stream: ttyStream,
+    });
+    assert.match(coloredPreview, /\u001b\[1m\u001b\[36mWhat this setup will change\u001b\[0m/);
+    assert.match(coloredPreview, /\u001b\[1m\u001b\[36mRepository actions:\u001b\[0m/);
+
+    process.env.NO_COLOR = '1';
+    assert.doesNotMatch(formatInteractiveSetupSummary({
+      root: '/tmp/control', repositories: [], adapters: [], projectYamlPlan: { changed: false },
+      currentVersion: '1.22.2', stream: ttyStream,
+    }), /\u001b\[/, 'summary honors NO_COLOR');
+    delete process.env.NO_COLOR;
+    process.env.TERM = 'dumb';
+    assert.doesNotMatch(formatSetupPreview({
+      root: '/tmp/control', repositories: [], adapters: [], adapterPlans: new Map(),
+      projectYamlPlan: { changed: false }, currentVersion: '1.22.2', stream: ttyStream,
+    }), /\u001b\[/, 'preview honors TERM=dumb');
+  } finally {
+    for (const [name, value] of Object.entries(terminalEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
   await writeProjectYamlPlan(configPlan);
   assert.match(await readFile(configPlan.path, 'utf8'), /owner: "Owner"|owner: Ainz/);
   assert.match(await readFile(configPlan.path, 'utf8'), /id: "other"/);
@@ -258,7 +296,20 @@ try {
   ]), /symlink/);
   assert.equal(await readFile(configPlan.path, 'utf8'), stableSnapshot);
   assert.match(projectLaunchHint({ id: 'codex' }, container).join('\n'), /optional user-level \$triad was not selected/);
-  assert.match(projectLaunchHint({ id: 'opencode', label: 'OpenCode' }, container).join('\n'), /`\/triad <PRD location or concise project request>`/);
+  const launchHints = projectLaunchHint({ id: 'opencode', label: 'OpenCode' }, container).join('\n');
+  assert.match(launchHints, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
+  assert.match(launchHints, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
+  assert.match(launchHints, /initial commit and create the mapped worktree for each mapped repository/);
+  assert.match(launchHints, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \. \(host\/install only; not readiness\)/);
+  assert.match(launchHints, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
+  assert.match(launchHints, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
+  assert.doesNotMatch(launchHints, /PRD location or concise project request/);
+  for (const id of ['opencode', 'claude-code', 'codex', 'copilot', 'antigravity', 'hermes']) {
+    const hints = projectLaunchHint({ id, label: id }, container, { globalEntryInstalled: true }).join('\n');
+    assert.match(hints, /project readiness was not checked/, `${id} does not imply readiness`);
+    assert.match(hints, new RegExp(`doctor --host ${id} --control \\.`, 'u'), `${id} uses its selected adapter for optional diagnostics`);
+    assert.match(hints, /After readiness —/, `${id} entry is staged after prerequisites`);
+  }
   const teamPreview = formatSetupPreview({
     root: emptyRoot,
     repositories: greenfield,

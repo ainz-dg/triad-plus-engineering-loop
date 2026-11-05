@@ -24,6 +24,7 @@ import {
   formatSetupSummary,
   formatCompactRetroHeader,
   formatRetroPixelHeader,
+  paint,
 } from '../runtime/lib/terminal.mjs';
 import {
   buildInstallationManifest,
@@ -1995,7 +1996,7 @@ async function cockpit(options) {
 function interactivePrompt({ header = '' } = {}) {
   let readline = createInterface({ input: process.stdin, output: process.stdout });
   return {
-    question(message) { return readline.question(message); },
+    question(message) { return readline.question(paint(message, 'value')); },
     async checklist(options) {
       readline.close();
       try {
@@ -2593,7 +2594,7 @@ async function applyInteractiveSetup(plan) {
     }
     await applyGlobalEntryPlans(plan.root, plan.globalEntryPlans);
   } catch (error) {
-    process.stderr.write('\nERROR / BLOCKED — Triad+ setup did not complete.\n');
+    process.stderr.write(`\n${paint('ERROR / BLOCKED', 'error', { stream: process.stderr })} — Triad+ setup did not complete.\n`);
     process.stderr.write(`Failed operation: ${error.message}\n`);
     process.stderr.write(`  Control Workspace: ${plan.root}\n`);
     process.stderr.write(`  Control Workspace directory created: ${createdRoot ? 'yes' : 'no'}\n`);
@@ -2606,11 +2607,14 @@ async function applyInteractiveSetup(plan) {
     throw error;
   }
 
-  process.stdout.write('\nTriad+ installed\n');
-  process.stdout.write(`Control Workspace: ${plan.root}\n`);
-  process.stdout.write(`Coding tools configured: ${plan.adapters.map((adapter) => adapter.label).join(', ')}\n`);
+  process.stdout.write(`\n${paint('Triad+ installed', 'success')}\n`);
+  process.stdout.write(`${paint('Control Workspace:', 'section')} ${plan.root}\n`);
+  process.stdout.write(`${paint('Coding tools configured:', 'section')} ${plan.adapters.map((adapter) => adapter.label).join(', ')}\n`);
   const globalEntryInstalled = plan.globalEntryPlans.has(plan.adapters[0].id);
-  for (const line of projectLaunchHint(plan.adapters[0], plan.root, { globalEntryInstalled })) process.stdout.write(`Next: ${line}\n`);
+  for (const line of projectLaunchHint(plan.adapters[0], plan.root, { globalEntryInstalled })) {
+    const split = line.match(/^([^:]+:)(.*)$/);
+    process.stdout.write(`${split ? `${paint(split[1], 'section')}${split[2]}` : line}\n`);
+  }
 }
 
 async function interactiveNewProjectSetup(prompt, currentDirectory) {
@@ -2646,11 +2650,11 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
       repositories = await validateRepositoryPlan(root, selection.repositories, { mode: selection.mode });
       repositoryPlan = selection;
     } catch (error) {
-      process.stdout.write(`ERROR / BLOCKED — Repository preflight failed; no files were changed.\nReason: ${error.message}\n`);
+      process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Repository preflight failed; no files were changed.\nReason: ${error.message}\n`);
       const answer = (await prompt.question('Correct repository mapping and retry from this workspace? [Y/n]: ')).trim().toLowerCase();
       if (answer === 'n' || answer === 'no') {
         process.stdout.write('Cancelled. No files were changed.\n');
-        process.stdout.write('Safe next action: correct the repository path/branch, or choose Defer repository configuration on a fresh run.\n');
+        process.stdout.write('Safe next action: correct the repository path/branch, or choose Skip repository setup for now on a fresh run.\n');
         process.exitCode = 2;
         return;
       }
@@ -2674,7 +2678,7 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
   globalEntryAdapters = globalSelection.adapters;
   let team = null;
   let useExistingTeam = false;
-  process.stdout.write('\nTriad+ · Setup · Optional team\n');
+  process.stdout.write(`\n${paint('Triad+ · Setup · Optional team', 'title')}\n`);
   process.stdout.write('Team setup is optional.\n');
   try {
     if (await exists(teamConfigPath(root))) {
@@ -2684,7 +2688,7 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
       team = await collectTeamConfiguration(prompt, adapters[0]);
     }
   } catch (error) {
-    process.stdout.write(`ERROR / BLOCKED — Team configuration could not be prepared; no files were changed.\nReason: ${error.message}\n`);
+    process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Team configuration could not be prepared; no files were changed.\nReason: ${error.message}\n`);
     process.stdout.write('Safe next action: inspect or repair the selected team configuration, then rerun with optional team setup left unconfigured if needed.\n');
     process.exitCode = 2;
     return;
@@ -2697,14 +2701,14 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
     });
     plan = await preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam, globalEntryAdapters });
   } catch (error) {
-    process.stdout.write(`ERROR / BLOCKED — Setup preflight failed; no files were changed.\nReason: ${error.message}\n`);
+    process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Setup preflight failed; no files were changed.\nReason: ${error.message}\n`);
     process.stdout.write('Safe next action: resolve the reported collision or unsafe path, then restart the wizard.\n');
     process.exitCode = 2;
     return;
   }
   await confirmAndApplySetup({
     prompt,
-    preview: `Triad+ · Setup · Review exact plan\n${formatSetupPreview(plan)}`,
+    preview: `${paint('Triad+ · Setup · Review exact plan', 'title')}\n${formatSetupPreview(plan)}`,
     summary: formatInteractiveSetupSummary(plan),
     requireDetails: plan.globalEntryPlans.size > 0,
     apply: () => applyInteractiveSetup(plan),
@@ -2756,7 +2760,7 @@ async function interactiveInit() {
           }
           control = candidatePath;
         } catch (error) {
-          process.stdout.write(`ERROR / BLOCKED — Cannot safely manage ${candidatePath}; no files were changed.\nReason: ${error.message}\n`);
+          process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Cannot safely manage ${candidatePath}; no files were changed.\nReason: ${error.message}\n`);
         }
       }
       await interactiveAdapterManagement({
@@ -2781,7 +2785,7 @@ async function interactiveInit() {
     }
   } catch (error) {
     if (!error.interactiveReported) {
-      process.stderr.write('\nERROR / BLOCKED — Interactive setup could not continue.\n');
+      process.stderr.write(`\n${paint('ERROR / BLOCKED', 'error', { stream: process.stderr })} — Interactive setup could not continue.\n`);
       process.stderr.write(`Failed operation: ${error.message}\n`);
       process.stderr.write('No success was reported. If application had started, inspect the selected Control Workspace before retrying.\n');
     }

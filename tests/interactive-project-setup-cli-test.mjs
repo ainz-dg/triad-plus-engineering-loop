@@ -172,6 +172,18 @@ async function saveTranscript(name, result) {
   await writeFile(path.join(directory, `${name}.txt`), transcript);
 }
 
+async function saveAnsiTranscript(name, result) {
+  const directory = process.env.TRIAD_SETUP_TRANSCRIPT_DIR;
+  if (!directory) return;
+  await mkdir(directory, { recursive: true });
+  const transcript = result.stdout
+    .replaceAll(fixture, '<temporary-fixture>')
+    .replaceAll('\u001b', '<ESC>')
+    .replaceAll('\r\n', '\n')
+    .replaceAll('\r', '<CR>');
+  await writeFile(path.join(directory, `${name}-ansi.txt`), transcript);
+}
+
 function git(cwd, args) {
   const result = run('git', ['-C', cwd, ...args], cwd);
   assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
@@ -299,12 +311,17 @@ try {
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
     });
     assert.equal(setup.status, 0, `${setup.stderr}\n${setup.stdout}`);
     assert.equal(await readFile(runtimeProbeLog).then(() => true, () => false), false, 'first-run setup never probes selected host runtimes');
     await saveTranscript('single-tty-two-harness-first-install', setup);
     const realRoot = await realpath(root);
-    assert.ok(setup.stdout.includes(`Setup folder (Control Workspace): ${realRoot}`), setup.stdout);
+    const setupText = setup.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+    assert.ok(setupText.includes(`Setup folder (Control Workspace): ${realRoot}`), setup.stdout);
     assert.match(setup.stdout, /Triad\+ installed/);
     assert.doesNotMatch(setup.stdout, /Readiness:|Workspace readiness|Host runtimes: optional|host runtime=optional/);
     assert.match(setup.stdout, /Which product repositories belong in this setup\?/);
@@ -316,8 +333,17 @@ try {
     assert.match(setup.stdout, /adding another tool does not switch tools automatically during a run/);
     assert.match(setup.stdout, /Optional; only exact files shown in the final preview can be installed/);
     assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
-    assert.doesNotMatch(setup.stdout, /PRD\.md.*quality-gates|baseline commit.*worktree/);
+    assert.match(setupText, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
+    assert.match(setupText, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
+    assert.match(setupText, /initial commit and create the mapped worktree for each mapped repository/);
+    assert.match(setupText, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \./);
+    assert.match(setupText, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
+    assert.match(setupText, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
     assert.match(setup.stdout, /\/triad/);
+    assert.match(setup.stdout, /\u001b\[1m\u001b\[36mPress Enter to use these values, or type edit to change them: \u001b\[0m(?:\u001b\[\d+G)?/, 'ordinary inline questions use semantic color outside checklist screens');
+    assert.match(setup.stdout, /\u001b\[1m\u001b\[36mSetup summary\u001b\[0m/);
+    assert.match(setup.stdout, /\u001b\[1m\u001b\[36mWhat this setup will change\u001b\[0m/);
+    assert.match(setup.stdout, /\u001b\[32mTriad\+ installed\u001b\[0m/, 'successful installation gets a restrained success tone');
     assert.equal(await readFile(path.join(root, 'PRD.md'), 'utf8'), prd);
     assert.equal(git(sampleApp, ['remote']), '');
     assert.equal(git(sampleApp, ['show', 'HEAD:README.md']), 'sample app source');
@@ -340,7 +366,7 @@ try {
     for (const [columns, rows, term, locale] of [
       [80, 24, 'xterm-256color', 'C.UTF-8'],
       [80, 20, 'xterm-256color', 'C.UTF-8'],
-      [60, 20, 'dumb', 'C'],
+      [60, 20, 'xterm-256color', 'C.UTF-8'],
     ]) {
       const smokeRoot = path.join(fixture, `LINUX-TTY-SMOKE-${columns}x${rows}-${term}`);
       const smokeHome = path.join(fixture, `home-${columns}x${rows}-${term}`);
@@ -360,22 +386,22 @@ try {
         TRIAD_TEST_PTY_ROWS: String(rows),
       });
       assert.equal(smoke.status, 0, `TTY ${columns}x${rows} ${term}: ${smoke.stderr}\n${smoke.stdout}`);
+      if (columns === 80 && rows === 24) await saveAnsiTranscript('rework-after-80x24', smoke);
+      if (columns === 60 && rows === 20) await saveAnsiTranscript('rework-after-60x20', smoke);
       const smokeText = smoke.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
       assert.match(smokeText, /TRIAD\+/);
       assert.match(smokeText, /Coding tools: OpenCode \(opencode\)/);
       assert.match(smokeText, /Repositories:[\s\S]*deferred/);
       assert.match(smokeText, /Triad\+ installed/);
+      assert.match(smoke.stdout, /\u001b\[1m\u001b\[36mConfigure team settings now\? \[y\/N\]: \u001b\[0m(?:\u001b\[\d+G)?/, 'inline questions are styled outside the checklist');
+      assert.match(smoke.stdout, /\u001b\[1m\u001b\[36mSetup summary\u001b\[0m/);
+      assert.match(smoke.stdout, /\u001b\[32mTriad\+ installed\u001b\[0m/);
       assert.doesNotMatch(smokeText, /Readiness:|NOT READY|Host runtimes: optional|host runtime=optional/);
       assert.doesNotMatch(smoke.stdout, /\u001b\[2J/, 'wizard navigation does not clear the entire display');
       assert.ok(await readFile(path.join(smokeRoot, '.triad-plus', 'installation.json')));
-      if (term === 'dumb') {
-        assert.doesNotMatch(smoke.stdout, /\u001b\[/, 'TERM=dumb stays readable without ANSI controls');
-        assert.match(smokeText, /TRIAD\+ \/ Engineering Loop/);
-      } else {
-        assert.match(smokeText, /ENGINEERING LOOP/, 'UTF-8 terminal renders the retro brand');
-        assert.match(smoke.stdout, /\u001b\[38;5;\d+m/, 'xterm-256color receives only supported palette colors');
-        assert.doesNotMatch(smoke.stdout, /\u001b\[38;2;/, 'the wizard does not assume truecolor support');
-      }
+      assert.match(smokeText, /ENGINEERING LOOP/, 'UTF-8 terminal renders the retro brand');
+      assert.match(smoke.stdout, /\u001b\[38;5;\d+m/, 'xterm-256color receives only supported palette colors');
+      assert.doesNotMatch(smoke.stdout, /\u001b\[38;2;/, 'the wizard does not assume truecolor support');
     }
     assert.deepEqual(await treeSnapshot(loopRoot), loopBefore, '.loop owner state and evidence remain byte-identical');
     assert.deepEqual(await readFile(path.join(root, '.triad-plus', 'team.json')), teamBytes, 'existing team owner data is reused unchanged');
@@ -397,7 +423,7 @@ try {
     const selectedIds = ['opencode', 'codex'];
     assert.deepEqual(registryIds, ['antigravity', 'claude-code', 'codex', 'copilot', 'hermes', 'opencode']);
     for (const adapter of adapters) assert.ok(setup.stdout.includes(`${adapter.label} (${adapter.id})`), `${adapter.id} is present in the six-adapter keyboard screen`);
-    assert.match(setup.stdout, /Primary tool: OpenCode/);
+    assert.match(setupText, /Primary tool: OpenCode/);
     const recordedIds = multi.adapters.map((adapter) => adapter.id);
     assert.deepEqual(recordedIds, [...selectedIds].sort(), 'exactly the selected harness memberships are recorded once');
     assert.equal(new Set(multi.adapters.map((adapter) => adapter.id)).size, selectedIds.length, 'adapter membership contains no duplicates');
@@ -851,6 +877,7 @@ try {
       TRIAD_TEST_PTY_ROWS: '12',
     });
     assert.equal(narrow.status, 0, `${narrow.stderr}\n${narrow.stdout}`);
+    await saveAnsiTranscript('rework-after-60x12-dumb', narrow);
     assert.doesNotMatch(narrow.stdout, /\u001b\[/, 'TERM=dumb and NO_COLOR stay readable without ANSI controls');
     assert.match(narrow.stdout, /TRIAD\+ \/ Engineering Loop/, 'short dumb terminals use a one-line identity fallback');
     assert.match(narrow.stdout, /…/, 'long paths are clipped to the terminal width');
@@ -893,10 +920,13 @@ try {
     const retryRun = terminalInput(retryRoot, retryAnswers, {
       HOME: path.join(fixture, 'home-path-recovery'),
       CODEX_HOME: path.join(fixture, 'home-path-recovery', '.codex'),
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
     });
     assert.equal(retryRun.status, 0, retryRun.stderr + '\n' + retryRun.stdout);
     assert.match(retryRun.stdout, /Path was not added; no workspace changes were made:/);
-    assert.match(retryRun.stdout, /ERROR \/ BLOCKED — Repository preflight failed; no files were changed\./);
+    assert.match(retryRun.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ''), /ERROR \/ BLOCKED — Repository preflight failed; no files were changed\./);
+    assert.match(retryRun.stdout, /\u001b\[31mERROR \/ BLOCKED\u001b\[0m/, 'blocking setup outcomes use the error tone');
     assert.match(retryRun.stdout, /Correct repository mapping and retry from this workspace\?/);
     assert.match(retryRun.stdout, /Triad\+ installed/);
     assert.match(await readFile(path.join(retryRoot, 'project.yaml'), 'utf8'), /path: "\.\/ketchup2"/);
@@ -921,7 +951,8 @@ try {
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
     await saveTranscript('greenfield-not-ready', green);
     assert.match(green.stdout, /INIT local Git only \(after approval; no remote\/push\)/);
-    assert.doesNotMatch(green.stdout, /Readiness|NOT READY|root PRD\.md/);
+    assert.doesNotMatch(green.stdout, /Readiness:|Workspace ready|NOT READY/);
+    assert.match(green.stdout, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
     const greenRepo = path.join(greenRoot, 'sample-app');
     assert.equal(git(greenRepo, ['branch', '--show-current']), 'main');
     assert.equal(git(greenRepo, ['remote']), '');
