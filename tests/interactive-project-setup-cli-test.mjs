@@ -335,7 +335,7 @@ try {
     assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
     assert.match(setupText, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
     assert.match(setupText, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
-    assert.match(setupText, /create an initial commit in each mapped repository and its mapped worktree/);
+    assert.match(setupText, /make an initial commit in each mapped repository, then create its mapped worktree/);
     assert.match(setupText, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \./);
     assert.match(setupText, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
     assert.match(setupText, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
@@ -952,9 +952,10 @@ try {
     const green = terminalInput(greenRoot, greenAnswers, { HOME: greenHome, CODEX_HOME: path.join(greenHome, '.codex') });
     assert.equal(green.status, 0, `${green.stderr}\n${green.stdout}`);
     await saveTranscript('greenfield-not-ready', green);
+    const greenText = green.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
     assert.match(green.stdout, /INIT local Git only \(after approval; no remote\/push\)/);
     assert.doesNotMatch(green.stdout, /Readiness:|Workspace ready|NOT READY/);
-    assert.match(green.stdout, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
+    assert.match(greenText, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
     const greenRepo = path.join(greenRoot, 'sample-app');
     assert.equal(git(greenRepo, ['branch', '--show-current']), 'main');
     assert.equal(git(greenRepo, ['remote']), '');
@@ -994,8 +995,9 @@ try {
     ], { HOME: path.join(fixture, 'home-collision'), PATH: noHarnessPath });
     assert.equal(collision.status, 2, `${collision.stderr}\n${collision.stdout}`);
     await saveTranscript('preflight-collision', collision);
-    assert.match(collision.stdout, /ERROR \/ BLOCKED — Setup preflight failed; no files were changed/);
-    assert.match(collision.stdout, /Safe next action: resolve the reported collision or unsafe path, then restart the wizard/);
+    const collisionText = collision.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+    assert.match(collisionText, /ERROR \/ BLOCKED — Setup preflight failed; no files were changed/);
+    assert.match(collisionText, /Safe next action: resolve the reported collision or unsafe path, then restart the wizard/);
     assert.equal(await readFile(path.join(collisionRoot, '.opencode', 'commands', 'triad.md'), 'utf8'), ownerCommand);
     assert.equal(await readFile(path.join(collisionRoot, 'project.yaml')).then(() => true, () => false), false);
     assert.equal(await readFile(path.join(collisionRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
@@ -1013,9 +1015,10 @@ try {
     });
     assert.equal(partial.status, 2, `${partial.stderr}\n${partial.stdout}`);
     await saveTranscript('partial-second-adapter-failure', partial);
-    assert.match(partial.stdout, /ERROR \/ BLOCKED — Triad\+ setup did not complete/);
-    assert.match(partial.stdout, /Harnesses fully installed: opencode/);
-    assert.match(partial.stdout, /Safe next action: inspect this workspace with adapter doctor/);
+    const partialText = partial.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+    assert.match(partialText, /ERROR \/ BLOCKED — Triad\+ setup did not complete/);
+    assert.match(partialText, /Harnesses fully installed: opencode/);
+    assert.match(partialText, /Safe next action: inspect this workspace with adapter doctor/);
     assert.doesNotMatch(partial.stdout, /Triad\+ installed/);
     assert.equal(await readFile(conflict, 'utf8'), 'introduced after preview\n');
     const partialManifest = JSON.parse(await readFile(path.join(partialRoot, '.triad-plus', 'installation.json'), 'utf8'));

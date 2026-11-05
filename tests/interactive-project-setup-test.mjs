@@ -299,7 +299,7 @@ try {
   const launchHints = projectLaunchHint({ id: 'opencode', label: 'OpenCode' }, container).join('\n');
   assert.match(launchHints, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
   assert.match(launchHints, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
-  assert.match(launchHints, /create an initial commit in each mapped repository and its mapped worktree/);
+  assert.match(launchHints, /make an initial commit in each mapped repository, then create its mapped worktree/);
   assert.match(launchHints, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \. \(host\/install only; not readiness\)/);
   assert.match(launchHints, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
   assert.match(launchHints, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
