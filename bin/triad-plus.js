@@ -24,6 +24,7 @@ import {
   formatSetupSummary,
   formatCompactRetroHeader,
   formatRetroPixelHeader,
+  paint,
 } from '../runtime/lib/terminal.mjs';
 import {
   buildInstallationManifest,
@@ -50,6 +51,7 @@ import {
   initializeGreenfieldRepositories,
   inspectControlRoot,
   parsePositiveCount,
+  projectLaunchHint,
   readProjectYamlPlan,
   validateRepositoryPlan,
   writeProjectYamlPlan,
@@ -1994,7 +1996,7 @@ async function cockpit(options) {
 function interactivePrompt({ header = '' } = {}) {
   let readline = createInterface({ input: process.stdin, output: process.stdout });
   return {
-    question(message) { return readline.question(message); },
+    question(message) { return readline.question(paint(message, 'value')); },
     async checklist(options) {
       readline.close();
       try {
@@ -2030,15 +2032,16 @@ function uniqueRepositoryIds(repositories) {
 }
 
 async function chooseNewControlRoot(prompt, currentDirectory) {
-  process.stdout.write('Triad+ / 1 of 6 — Control Workspace\n');
+  process.stdout.write('Triad+ · Setup · Control Workspace\n');
+  process.stdout.write("Where should Triad+ keep this project's setup? The Control Workspace holds configuration, not product source.\n");
   const current = await inspectControlRoot(currentDirectory);
   if (current.gitBoundary) {
-    process.stdout.write(`Current directory belongs to Git root ${current.gitBoundary}. It cannot be selected as a clean Control Workspace; choose a separate root explicitly. No sibling path will be generated.\n`);
+    process.stdout.write(`This folder is inside Git repository ${current.gitBoundary}. Choose a separate setup folder outside it; no path is guessed.\n`);
   }
   while (true) {
     const answer = (await prompt.question(current.gitBoundary
-      ? 'Separate Control Workspace absolute path (blank cancels): '
-      : `Control Workspace root to open in the IDE [${currentDirectory}] (absolute or relative; blank uses this path): `)).trim();
+      ? 'Separate setup folder (absolute path; blank cancels): '
+      : `Setup folder [${currentDirectory}] (absolute or relative; blank uses this path): `)).trim();
     if (!answer && current.gitBoundary) return null;
     const candidate = resolve(currentDirectory, answer || currentDirectory);
     try {
@@ -2061,7 +2064,7 @@ async function chooseNewControlRoot(prompt, currentDirectory) {
 }
 
 async function collectGreenfieldRepositoryPlan(prompt, controlRoot, previousPlan = null) {
-  process.stdout.write('\nGreenfield repository setup remains a text-entry flow in this P0 prototype; candidate discovery never creates a repository.\n');
+  process.stdout.write('\nNew repositories are created only after the final approval.\n');
   let count = null;
   const previous = previousPlan?.mode === 'greenfield' ? previousPlan.repositories : [];
   while (!count) {
@@ -2070,32 +2073,64 @@ async function collectGreenfieldRepositoryPlan(prompt, controlRoot, previousPlan
     count = parsePositiveCount(answer || suggested, 20);
     if (!count) process.stdout.write('Enter a whole number from 1 to 20.\n');
   }
-  const repositories = [];
+  const suggestedPlans = [];
   for (let index = 0; index < count; index += 1) {
     const prior = previous[index];
     const suggestedId = prior?.id ?? `repo-${index + 1}`;
-    const id = (await prompt.question(`Greenfield repository ${index + 1} stable ID [${suggestedId}]: `)).trim() || suggestedId;
-    const suggestedPath = prior?.path ?? `./${id}`;
-    const repoPath = (await prompt.question(`${id} repository path [${suggestedPath}]: `)).trim() || suggestedPath;
-    const suggestedBase = prior?.base_branch ?? 'main';
-    const baseBranch = (await prompt.question(`${id} base branch [${suggestedBase}]: `)).trim() || suggestedBase;
-    const branchDefault = prior?.projectBranchEdited ? prior.project_branch : `triad/${id}-feature`;
-    const branchAnswer = (await prompt.question(`${id} project branch [${branchDefault}]: `)).trim();
-    const projectBranch = branchAnswer || branchDefault;
-    const worktreeDefault = prior?.worktreeEdited ? prior.worktree : `worktrees/${id}-feature`;
-    const worktreeAnswer = (await prompt.question(`${id} worktree mapping [${worktreeDefault}]: `)).trim();
-    const worktree = worktreeAnswer || worktreeDefault;
+    suggestedPlans.push({
+      prior,
+      defaults: {
+        id: suggestedId,
+        path: prior?.pathEdited ? prior.path : `./${suggestedId}`,
+        base_branch: prior?.base_branch ?? 'main',
+        project_branch: prior?.projectBranchEdited ? prior.project_branch : `triad/${suggestedId}-feature`,
+        worktree: prior?.worktreeEdited ? prior.worktree : `worktrees/${suggestedId}-feature`,
+      },
+    });
+  }
+  process.stdout.write('\nSuggested setup (shown again in the final review):\n');
+  for (const [index, { defaults }] of suggestedPlans.entries()) {
+    process.stdout.write(`  Repository ${index + 1} · ${defaults.id} · ${defaults.path}\n`);
+    process.stdout.write(`    Base branch: ${defaults.base_branch}; project branch: ${defaults.project_branch}; worktree mapping: ${defaults.worktree}\n`);
+  }
+  const edit = await editSuggestedValues(prompt);
+  const repositories = [];
+  for (const { prior, defaults } of suggestedPlans) {
+    const values = { ...defaults };
+    let projectBranchEdited = Boolean(prior?.projectBranchEdited);
+    let worktreeEdited = Boolean(prior?.worktreeEdited);
+    if (edit) {
+      values.id = (await prompt.question(`Repository ID [${defaults.id}]: `)).trim() || defaults.id;
+      const pathDefault = prior?.pathEdited ? prior.path : `./${values.id}`;
+      const pathAnswer = (await prompt.question(`Repository folder [${pathDefault}]: `)).trim();
+      values.path = pathAnswer || pathDefault;
+      values.base_branch = (await prompt.question(`Base branch [${defaults.base_branch}]: `)).trim() || defaults.base_branch;
+      const branchDefault = prior?.projectBranchEdited ? prior.project_branch : `triad/${values.id}-feature`;
+      const branchAnswer = (await prompt.question(`Project branch [${branchDefault}]: `)).trim();
+      values.project_branch = branchAnswer || branchDefault;
+      const worktreeDefault = prior?.worktreeEdited ? prior.worktree : `worktrees/${values.id}-feature`;
+      const worktreeAnswer = (await prompt.question(`Worktree mapping [${worktreeDefault}]: `)).trim();
+      values.worktree = worktreeAnswer || worktreeDefault;
+      projectBranchEdited ||= Boolean(branchAnswer);
+      worktreeEdited ||= Boolean(worktreeAnswer);
+    }
     repositories.push({
-      id,
-      path: repoPath,
-      base_branch: baseBranch,
-      project_branch: projectBranch,
-      worktree,
-      projectBranchEdited: Boolean(branchAnswer) || Boolean(prior?.projectBranchEdited),
-      worktreeEdited: Boolean(worktreeAnswer) || Boolean(prior?.worktreeEdited),
+      ...values,
+      pathEdited: edit ? values.path !== (prior?.pathEdited ? prior.path : `./${values.id}`) || Boolean(prior?.pathEdited) : Boolean(prior?.pathEdited),
+      projectBranchEdited,
+      worktreeEdited,
     });
   }
   return { mode: 'greenfield', repositories };
+}
+
+async function editSuggestedValues(prompt) {
+  while (true) {
+    const answer = (await prompt.question('Press Enter to use these values, or type edit to change them: ')).trim().toLowerCase();
+    if (!answer) return false;
+    if (answer === 'edit') return true;
+    process.stdout.write('Press Enter to accept the suggestions or type edit to change them.\n');
+  }
 }
 
 async function collectRepositoryPlan(prompt, controlRoot, previousPlan = null) {
@@ -2146,14 +2181,14 @@ async function collectRepositoryPlan(prompt, controlRoot, previousPlan = null) {
     }));
     items.push(
       { kind: 'action', id: 'add-repository', action: 'add-path', label: 'Add repository by path', description: 'explicit existing local Git root' },
-      { kind: 'action', id: 'greenfield', action: 'greenfield', label: previousMode === 'greenfield' ? 'Continue greenfield setup' : 'Create greenfield repository', description: 'text-based paths; created only after approval' },
-      { kind: 'action', id: 'defer', action: 'defer', label: 'Defer repository configuration', description: 'explicitly leave mappings empty' },
+      { kind: 'action', id: 'greenfield', action: 'greenfield', label: previousMode === 'greenfield' ? 'Continue new repository setup' : 'Set up a new repository', description: 'created only after approval' },
+      { kind: 'action', id: 'defer', action: 'defer', label: 'Skip repository setup for now', description: 'leave repository mappings empty' },
     );
     const result = await prompt.checklist({
-      step: 'Triad+ / 2 of 6 — Product repositories',
-      title: 'Select product repositories',
+      step: 'Triad+ · Setup · Product repositories',
+      title: 'Which product repositories belong in this setup?',
       context: [`Control Workspace: ${controlRoot}`],
-      description: 'Only immediate-child Git roots are suggested. No ancestor/sibling search, clone, or implicit selection.',
+      description: 'We suggest Git repositories directly inside this folder. Nothing is cloned or created; adding another path is explicit.',
       items,
       initialSelection: selectedPaths,
       initialFocus: focusId,
@@ -2171,28 +2206,56 @@ async function collectRepositoryPlan(prompt, controlRoot, previousPlan = null) {
       selectedPaths = result.selected;
       const selectedCandidates = selectedPaths.map((id) => candidates.find((candidate) => candidate.absolutePath === id)).filter(Boolean);
       const suggestedIds = uniqueRepositoryIds(selectedCandidates);
-      const repositories = [];
+      const suggestedPlans = [];
       for (const [index, candidate] of selectedCandidates.entries()) {
         const prior = priorByPath.get(candidate.absolutePath);
         const suggestedId = prior?.id ?? generatedIdByPath.get(candidate.absolutePath) ?? suggestedIds[index];
-        const idAnswer = (await prompt.question(`${candidate.path} stable ID [${suggestedId}]: `)).trim();
-        const id = idAnswer || suggestedId;
         const baseDefault = prior?.base_branch ?? candidate.currentBranch ?? 'main';
-        const baseBranch = (await prompt.question(`${id} detected base branch ${candidate.currentBranch ?? '(detached HEAD)'} [${baseDefault}]: `)).trim() || baseDefault;
-        const branchDefault = prior?.projectBranchEdited ? prior.project_branch : `triad/${id}-feature`;
-        const branchAnswer = (await prompt.question(`${id} project branch [${branchDefault}]: `)).trim();
-        const projectBranch = branchAnswer || branchDefault;
-        const worktreeDefault = prior?.worktreeEdited ? prior.worktree : `worktrees/${id}-feature`;
-        const worktreeAnswer = (await prompt.question(`${id} worktree mapping [${worktreeDefault}]: `)).trim();
-        const worktree = worktreeAnswer || worktreeDefault;
+        suggestedPlans.push({
+          candidate,
+          prior,
+          id: suggestedId,
+          base_branch: baseDefault,
+          project_branch: prior?.projectBranchEdited ? prior.project_branch : `triad/${suggestedId}-feature`,
+          worktree: prior?.worktreeEdited ? prior.worktree : `worktrees/${suggestedId}-feature`,
+        });
+      }
+      process.stdout.write('\nSuggested repository setup (shown again in the final review):\n');
+      for (const plan of suggestedPlans) {
+        process.stdout.write(`  ${plan.id} · ${plan.candidate.path}\n`);
+        process.stdout.write(`    Base branch: ${plan.base_branch}; project branch: ${plan.project_branch}; worktree mapping: ${plan.worktree}\n`);
+      }
+      const edit = await editSuggestedValues(prompt);
+      const repositories = [];
+      for (const plan of suggestedPlans) {
+        let values = plan;
+        let branchEdited = Boolean(plan.prior?.projectBranchEdited);
+        let worktreeEdited = Boolean(plan.prior?.worktreeEdited);
+        if (edit) {
+          const id = (await prompt.question(`Repository ID for ${plan.candidate.path} [${plan.id}]: `)).trim() || plan.id;
+          const baseBranch = (await prompt.question(`${id} base branch (detected ${plan.candidate.currentBranch ?? 'detached HEAD'}) [${plan.base_branch}]: `)).trim() || plan.base_branch;
+          const branchDefault = plan.prior?.projectBranchEdited ? plan.prior.project_branch : `triad/${id}-feature`;
+          const worktreeDefault = plan.prior?.worktreeEdited ? plan.prior.worktree : `worktrees/${id}-feature`;
+          const branchAnswer = (await prompt.question(`${id} project branch [${branchDefault}]: `)).trim();
+          const worktreeAnswer = (await prompt.question(`${id} worktree mapping [${worktreeDefault}]: `)).trim();
+          branchEdited = Boolean(branchAnswer) || branchEdited;
+          worktreeEdited = Boolean(worktreeAnswer) || worktreeEdited;
+          values = {
+            ...plan,
+            id,
+            base_branch: baseBranch,
+            project_branch: branchAnswer || branchDefault,
+            worktree: worktreeAnswer || worktreeDefault,
+          };
+        }
         repositories.push({
-          id,
-          path: candidate.path,
-          base_branch: baseBranch,
-          project_branch: projectBranch,
-          worktree,
-          projectBranchEdited: Boolean(branchAnswer) || Boolean(prior?.projectBranchEdited),
-          worktreeEdited: Boolean(worktreeAnswer) || Boolean(prior?.worktreeEdited),
+          id: values.id,
+          path: values.candidate.path,
+          base_branch: values.base_branch,
+          project_branch: values.project_branch,
+          worktree: values.worktree,
+          projectBranchEdited: branchEdited,
+          worktreeEdited,
         });
       }
       return { mode: 'existing', repositories, selectedPaths };
@@ -2231,18 +2294,18 @@ async function collectRepositoryPlan(prompt, controlRoot, previousPlan = null) {
 async function collectAdapterSelection(prompt, initialSelection = []) {
   const adapters = listAdapters();
   const explanations = {
-    opencode: 'project-local agents and /triad command',
-    codex: 'project-local skills and role launcher',
-    'claude-code': 'project-local agents and commands',
-    copilot: 'project-local agent and instructions',
-    antigravity: 'project-local rules and workflow assets',
-    hermes: 'project-local skills and runtime assets',
+    opencode: 'Triad+ guidance and the /triad command',
+    codex: 'Triad+ guidance and role instructions',
+    'claude-code': 'Triad+ guidance and the /triad command',
+    copilot: 'Triad+ guidance for the coding agent',
+    antigravity: 'Triad+ guidance for this coding tool',
+    hermes: 'Triad+ guidance and role instructions',
   };
   const result = await prompt.checklist({
-    step: 'Triad+ / 3 of 6 — Harnesses',
-    title: 'Select coding harnesses',
+    step: 'Triad+ · Setup · Coding tools',
+    title: 'Which coding tools will use this setup?',
     context: ['Control Workspace project-local install only; no host/global files or settings.'],
-    description: 'Multi-adapter installation is supported. Per-Attempt cross-harness dispatch is not.',
+    description: 'Choose one or more tools. The first is primary; adding others does not switch tools automatically during a run.',
     items: adapters.map((adapter) => ({
       kind: 'checkbox',
       id: adapter.id,
@@ -2268,10 +2331,10 @@ async function collectGlobalEntrySelection(prompt, adapters, initialSelection = 
   const available = adapters.filter((adapter) => adapter.globalEntry && adapter.globalAssets?.length);
   if (!available.length) return { kind: 'selected', adapters: [] };
   const result = await prompt.checklist({
-    step: 'Triad+ / 4 of 6 — Optional global entry bridge',
-    title: 'Install user-level host entries?',
+    step: 'Triad+ · Setup · Optional user-level shortcut',
+    title: 'Add an optional user-level shortcut?',
     context: ['Optional; only exact files shown in the final preview can be installed.'],
-    description: 'Optional entries are available only for supported adapters. This does not enforce a pre-LLM security boundary.',
+    description: 'Available for some coding tools. The final review lists each exact file; this shortcut does not block model access.',
     items: available.map((adapter) => ({
       kind: 'checkbox',
       id: adapter.id,
@@ -2531,7 +2594,7 @@ async function applyInteractiveSetup(plan) {
     }
     await applyGlobalEntryPlans(plan.root, plan.globalEntryPlans);
   } catch (error) {
-    process.stderr.write('\nERROR / BLOCKED — Triad+ setup did not complete.\n');
+    process.stderr.write(`\n${paint('ERROR / BLOCKED', 'error', { stream: process.stderr })} — Triad+ setup did not complete.\n`);
     process.stderr.write(`Failed operation: ${error.message}\n`);
     process.stderr.write(`  Control Workspace: ${plan.root}\n`);
     process.stderr.write(`  Control Workspace directory created: ${createdRoot ? 'yes' : 'no'}\n`);
@@ -2544,10 +2607,13 @@ async function applyInteractiveSetup(plan) {
     throw error;
   }
 
-  process.stdout.write('\nTriad+ installed\n');
-  process.stdout.write(`Control Workspace: ${plan.root}\n`);
-  process.stdout.write(`Configured adapters: ${plan.adapters.map((adapter) => adapter.label).join(', ')}\n`);
-  process.stdout.write(`Next: open this workspace in ${plan.adapters[0].label}; use that adapter's Triad+ entry when ready to start a run.\n`);
+  process.stdout.write(`\n${paint('Triad+ installed', 'success')}\n`);
+  process.stdout.write(`${paint('Coding tools configured:', 'section')} ${plan.adapters.map((adapter) => adapter.label).join(', ')}\n`);
+  const globalEntryInstalled = plan.globalEntryPlans.has(plan.adapters[0].id);
+  for (const line of projectLaunchHint(plan.adapters[0], plan.root, { globalEntryInstalled })) {
+    const split = line.match(/^([^:]+:)(.*)$/);
+    process.stdout.write(`${split ? `${paint(split[1], 'section')}${split[2]}` : line}\n`);
+  }
 }
 
 async function interactiveNewProjectSetup(prompt, currentDirectory) {
@@ -2583,11 +2649,11 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
       repositories = await validateRepositoryPlan(root, selection.repositories, { mode: selection.mode });
       repositoryPlan = selection;
     } catch (error) {
-      process.stdout.write(`ERROR / BLOCKED — Repository preflight failed; no files were changed.\nReason: ${error.message}\n`);
+      process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Repository preflight failed; no files were changed.\nReason: ${error.message}\n`);
       const answer = (await prompt.question('Correct repository mapping and retry from this workspace? [Y/n]: ')).trim().toLowerCase();
       if (answer === 'n' || answer === 'no') {
         process.stdout.write('Cancelled. No files were changed.\n');
-        process.stdout.write('Safe next action: correct the repository path/branch, or choose Defer repository configuration on a fresh run.\n');
+        process.stdout.write('Safe next action: correct the repository path/branch, or choose Skip repository setup for now on a fresh run.\n');
         process.exitCode = 2;
         return;
       }
@@ -2611,16 +2677,17 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
   globalEntryAdapters = globalSelection.adapters;
   let team = null;
   let useExistingTeam = false;
-  process.stdout.write('\nTriad+ / 5 of 6 — Optional team setup\n');
+  process.stdout.write(`\n${paint('Triad+ · Setup · Optional team', 'title')}\n`);
+  process.stdout.write('Team setup is optional.\n');
   try {
     if (await exists(teamConfigPath(root))) {
       team = await currentTeam(root);
       useExistingTeam = Boolean(team);
-    } else if (['y', 'yes'].includes((await prompt.question('Configure optional Triad+ team identities/models now? [y/N]: ')).trim().toLowerCase())) {
+    } else if (['y', 'yes'].includes((await prompt.question('Configure team settings now? [y/N]: ')).trim().toLowerCase())) {
       team = await collectTeamConfiguration(prompt, adapters[0]);
     }
   } catch (error) {
-    process.stdout.write(`ERROR / BLOCKED — Team configuration could not be prepared; no files were changed.\nReason: ${error.message}\n`);
+    process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Team configuration could not be prepared; no files were changed.\nReason: ${error.message}\n`);
     process.stdout.write('Safe next action: inspect or repair the selected team configuration, then rerun with optional team setup left unconfigured if needed.\n');
     process.exitCode = 2;
     return;
@@ -2633,14 +2700,14 @@ async function interactiveNewProjectSetup(prompt, currentDirectory) {
     });
     plan = await preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam, globalEntryAdapters });
   } catch (error) {
-    process.stdout.write(`ERROR / BLOCKED — Setup preflight failed; no files were changed.\nReason: ${error.message}\n`);
+    process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Setup preflight failed; no files were changed.\nReason: ${error.message}\n`);
     process.stdout.write('Safe next action: resolve the reported collision or unsafe path, then restart the wizard.\n');
     process.exitCode = 2;
     return;
   }
   await confirmAndApplySetup({
     prompt,
-    preview: `Triad+ / 6 of 6 — Review exact plan\n${formatSetupPreview(plan)}`,
+    preview: `${paint('Triad+ · Setup · Review exact plan', 'title')}\n${formatSetupPreview(plan)}`,
     summary: formatInteractiveSetupSummary(plan),
     requireDetails: plan.globalEntryPlans.size > 0,
     apply: () => applyInteractiveSetup(plan),
@@ -2659,19 +2726,19 @@ async function interactiveInit() {
     catch (error) { currentManifestError = error; }
     const defaultMode = currentManifest ? 'm' : 'n';
     process.stdout.write(`${header}\n`);
+    process.stdout.write('Triad+ · Setup · Start\n');
     if (currentManifest) {
       process.stdout.write(`Detected a valid ${currentManifest.manifest.schema_version === 1 ? 'schema-v1' : 'schema-v2'} installation manifest in the current Control Workspace.\n`);
     } else if (currentManifestError) {
       process.stdout.write(`The current directory does not have a valid installation manifest: ${currentManifestError.message}\n`);
     } else {
-      process.stdout.write('No valid installation manifest was found in the current directory.\n');
+      process.stdout.write('No setup is installed in this folder.\n');
     }
-    process.stdout.write('No sibling directories will be searched.\n');
-    const mode = (await prompt.question(`Choose [N]ew workspace or [M]anage existing [${defaultMode.toUpperCase()}]: `)).trim().toLowerCase() || defaultMode;
+    const mode = (await prompt.question(`Set up a new workspace or manage one already installed here? [N]ew / [M]anage [${defaultMode.toUpperCase()}]: `)).trim().toLowerCase() || defaultMode;
     if (mode === 'm' || mode === 'manage' || mode === 'manage existing') {
       let control = currentManifest ? currentDirectory : null;
       while (!control) {
-        const candidate = (await prompt.question('Enter the existing Control Workspace path explicitly (blank cancels): ')).trim();
+        const candidate = (await prompt.question('Path to the existing setup folder (blank cancels): ')).trim();
         if (!candidate) {
           process.stdout.write('Cancelled. No files were changed.\n');
           return;
@@ -2692,7 +2759,7 @@ async function interactiveInit() {
           }
           control = candidatePath;
         } catch (error) {
-          process.stdout.write(`ERROR / BLOCKED — Cannot safely manage ${candidatePath}; no files were changed.\nReason: ${error.message}\n`);
+          process.stdout.write(`${paint('ERROR / BLOCKED', 'error')} — Cannot safely manage ${candidatePath}; no files were changed.\nReason: ${error.message}\n`);
         }
       }
       await interactiveAdapterManagement({
@@ -2717,7 +2784,7 @@ async function interactiveInit() {
     }
   } catch (error) {
     if (!error.interactiveReported) {
-      process.stderr.write('\nERROR / BLOCKED — Interactive setup could not continue.\n');
+      process.stderr.write(`\n${paint('ERROR / BLOCKED', 'error', { stream: process.stderr })} — Interactive setup could not continue.\n`);
       process.stderr.write(`Failed operation: ${error.message}\n`);
       process.stderr.write('No success was reported. If application had started, inspect the selected Control Workspace before retrying.\n');
     }

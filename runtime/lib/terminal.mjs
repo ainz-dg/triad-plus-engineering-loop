@@ -6,7 +6,6 @@ const ANSI = {
   bold: '\u001b[1m',
   dim: '\u001b[2m',
   cyan: '\u001b[36m',
-  blue: '\u001b[34m',
   green: '\u001b[32m',
   yellow: '\u001b[33m',
   red: '\u001b[31m'
@@ -14,8 +13,8 @@ const ANSI = {
 
 const toneCodes = {
   title: `${ANSI.bold}${ANSI.cyan}`,
-  section: `${ANSI.bold}${ANSI.blue}`,
-  value: ANSI.bold,
+  section: `${ANSI.bold}${ANSI.cyan}`,
+  value: `${ANSI.bold}${ANSI.cyan}`,
   success: ANSI.green,
   warning: ANSI.yellow,
   error: ANSI.red,
@@ -37,16 +36,30 @@ const retroGlyphs = {
 };
 
 export function colorEnabled(stream = process.stdout) {
-  return Boolean(stream?.isTTY) && process.env.NO_COLOR === undefined;
+  return Boolean(stream?.isTTY) && process.env.NO_COLOR === undefined && process.env.TERM !== 'dumb';
 }
 
 function paintHex(value, hex, stream) {
   const text = String(value);
   if (!colorEnabled(stream)) return text;
+  const term = process.env.TERM ?? '';
+  const colorTerm = process.env.COLORTERM ?? '';
+  const supportsTrueColor = /(?:truecolor|24bit)/i.test(`${term} ${colorTerm}`);
+  if (!supportsTrueColor) {
+    const fallback = { '#7C8CFF': 94, '#35C3B1': 96, '#F5B95E': 93 }[hex] ?? 37;
+    if (!/256color/i.test(term) && !/256/i.test(colorTerm)) return `\u001b[${fallback}m${text}\u001b[39m`;
+  }
   const digits = hex.slice(1);
   const red = Number.parseInt(digits.slice(0, 2), 16);
   const green = Number.parseInt(digits.slice(2, 4), 16);
   const blue = Number.parseInt(digits.slice(4, 6), 16);
+  if (!supportsTrueColor) {
+    const redCube = Math.round(red / 255 * 5);
+    const greenCube = Math.round(green / 255 * 5);
+    const blueCube = Math.round(blue / 255 * 5);
+    const colorIndex = 16 + 36 * redCube + 6 * greenCube + blueCube;
+    return `\u001b[38;5;${colorIndex}m${text}\u001b[39m`;
+  }
   return `\u001b[38;2;${red};${green};${blue}m${text}\u001b[39m`;
 }
 

@@ -154,7 +154,7 @@ try {
 
   const compactSummary = formatInteractiveSetupSummary({
     root: '/tmp/control',
-    repositories: [],
+    repositories: [{ id: 'sample', path: './sample', base_branch: 'main', project_branch: 'triad/sample-feature', worktree: 'worktrees/sample-feature' }],
     adapters: [{ id: 'codex', label: 'Codex' }],
     adapterPlans: new Map([['codex', { created: ['.triad-runtime/a', '.triad-runtime/b'], reused: ['.triad-runtime/c'] }]]),
     globalEntryPlans: new Map(),
@@ -162,10 +162,50 @@ try {
     readiness: { ready: false, missing: ['PRD.md', 'required quality-gates'] },
     currentVersion: '1.22.1',
   });
-  assert.match(compactSummary, /Triad\+ first-run plan/);
+  assert.match(compactSummary, /Setup summary/);
+  assert.match(compactSummary, /Changes planned: local tool entries/);
+  assert.match(compactSummary, /sample: \.\/sample → base main; project triad\/sample-feature; worktree worktrees\/sample-feature/);
   assert.match(compactSummary, /No files are written until you type "install"/);
   assert.doesNotMatch(compactSummary, /Readiness|runtime|\.loop\/quality-gates/);
   assert.doesNotMatch(compactSummary, /\.triad-runtime\/a/, 'the compact summary omits per-file paths available in details');
+
+  const terminalEnv = { TERM: process.env.TERM, COLORTERM: process.env.COLORTERM, NO_COLOR: process.env.NO_COLOR };
+  const ttyStream = { isTTY: true };
+  try {
+    process.env.TERM = 'xterm-256color';
+    process.env.COLORTERM = 'truecolor';
+    delete process.env.NO_COLOR;
+    const coloredSummary = formatInteractiveSetupSummary({
+      root: '/tmp/control', repositories: [], adapters: [{ id: 'opencode', label: 'OpenCode' }],
+      projectYamlPlan: { changed: false, before: null }, currentVersion: '1.22.2', stream: ttyStream,
+    });
+    assert.match(coloredSummary, /\u001b\[1m\u001b\[36mSetup summary\u001b\[0m/);
+    assert.match(coloredSummary, /\u001b\[1m\u001b\[36mControl Workspace\u001b\[0m/);
+    assert.match(coloredSummary, /\u001b\[33mNo files are written until you type "install"\.\u001b\[0m/);
+    const coloredPreview = formatSetupPreview({
+      root: '/tmp/control', repositories: [], adapters: [], adapterPlans: new Map(),
+      projectYamlPlan: { changed: false, before: null }, currentVersion: '1.22.2', stream: ttyStream,
+    });
+    assert.match(coloredPreview, /\u001b\[1m\u001b\[36mWhat this setup will change\u001b\[0m/);
+    assert.match(coloredPreview, /\u001b\[1m\u001b\[36mRepository actions:\u001b\[0m/);
+
+    process.env.NO_COLOR = '1';
+    assert.doesNotMatch(formatInteractiveSetupSummary({
+      root: '/tmp/control', repositories: [], adapters: [], projectYamlPlan: { changed: false },
+      currentVersion: '1.22.2', stream: ttyStream,
+    }), /\u001b\[/, 'summary honors NO_COLOR');
+    delete process.env.NO_COLOR;
+    process.env.TERM = 'dumb';
+    assert.doesNotMatch(formatSetupPreview({
+      root: '/tmp/control', repositories: [], adapters: [], adapterPlans: new Map(),
+      projectYamlPlan: { changed: false }, currentVersion: '1.22.2', stream: ttyStream,
+    }), /\u001b\[/, 'preview honors TERM=dumb');
+  } finally {
+    for (const [name, value] of Object.entries(terminalEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
   await writeProjectYamlPlan(configPlan);
   assert.match(await readFile(configPlan.path, 'utf8'), /owner: "Owner"|owner: Ainz/);
   assert.match(await readFile(configPlan.path, 'utf8'), /id: "other"/);
@@ -256,6 +296,20 @@ try {
   ]), /symlink/);
   assert.equal(await readFile(configPlan.path, 'utf8'), stableSnapshot);
   assert.match(projectLaunchHint({ id: 'codex' }, container).join('\n'), /optional user-level \$triad was not selected/);
+  const launchHints = projectLaunchHint({ id: 'opencode', label: 'OpenCode' }, container).join('\n');
+  assert.match(launchHints, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
+  assert.match(launchHints, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
+  assert.match(launchHints, /make an initial commit in each mapped repository, then create its mapped worktree/);
+  assert.match(launchHints, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \. \(host\/install only; not readiness\)/);
+  assert.match(launchHints, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
+  assert.match(launchHints, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
+  assert.doesNotMatch(launchHints, /PRD location or concise project request/);
+  for (const id of ['opencode', 'claude-code', 'codex', 'copilot', 'antigravity', 'hermes']) {
+    const hints = projectLaunchHint({ id, label: id }, container, { globalEntryInstalled: true }).join('\n');
+    assert.match(hints, /project readiness was not checked/, `${id} does not imply readiness`);
+    assert.match(hints, new RegExp(`doctor --host ${id} --control \\.`, 'u'), `${id} uses its selected adapter for optional diagnostics`);
+    assert.match(hints, /After readiness —/, `${id} entry is staged after prerequisites`);
+  }
   const teamPreview = formatSetupPreview({
     root: emptyRoot,
     repositories: greenfield,
@@ -271,7 +325,7 @@ try {
   assert.match(teamPreview, /\.triad-plus\/team\.json: CREATE/);
   assert.match(teamPreview, /AGENTS\.md role instructions: APPEND/);
   assert.match(teamPreview, /opencode: CONFIGURE/);
-  assert.match(teamPreview, /Initial runtime metadata: opencode writes \.triad-runtime\/adapter\.json/);
+  assert.match(teamPreview, /Primary tool: OpenCode; adding another tool does not switch tools automatically during a run/);
 
   process.stdout.write('Triad+ interactive project setup safety fixtures passed (A01-A06, A09-A10; lifecycle/A11 and verifier/A14 covered by existing suites).\n');
 } finally {

@@ -55,9 +55,40 @@ function padCells(value, width) {
   return `${clipped}${' '.repeat(Math.max(0, width - used))}`;
 }
 
+function wrapCells(value, width) {
+  const lines = [];
+  let line = '';
+  for (const word of String(value).split(/\s+/).filter(Boolean)) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (cellWidth(candidate) <= width) {
+      line = candidate;
+      continue;
+    }
+    if (line) lines.push(line);
+    line = '';
+    const remaining = Array.from(graphemes.segment(word), (entry) => entry.segment);
+    let offset = 0;
+    while (offset < remaining.length) {
+      const chunk = takeCells(remaining.slice(offset), width);
+      if (!chunk.length) break;
+      offset += chunk.length;
+      if (offset < remaining.length) lines.push(chunk.join(''));
+      else line = chunk.join('');
+    }
+  }
+  if (line || !lines.length) lines.push(line);
+  return lines;
+}
+
 function style(value, tone, output) {
   if (process.env.TERM === 'dumb') return String(value);
   return paint(value, tone, { stream: output });
+}
+
+function messageTone(message) {
+  if (/^(?:ERROR \/ BLOCKED|Unsafe|Select at least|Select a (?:row|repository))/i.test(message)) return 'error';
+  if (/^(?:That Git root|Repository path validated)/i.test(message)) return 'success';
+  return 'warning';
 }
 
 /** A small raw-key checklist with deterministic terminal restoration. */
@@ -138,7 +169,7 @@ export async function selectChecklist({
       }
       const lines = [
         ...(header ? header.trimEnd().split('\n') : []),
-        style(clip(step, width), 'hint', output),
+        style(clip(step, width), 'section', output),
         style(clip(title, width), 'title', output),
         ...context.map((line) => style(clip(line, width), 'hint', output)),
         ...(description ? [style(clip(description, width), 'hint', output)] : []),
@@ -158,12 +189,12 @@ export async function selectChecklist({
           line = `${isSelected ? '[x]' : '[ ]'} ${item.label}${primary}${item.description ? ` — ${item.description}` : ''}`;
         }
         const clipped = clip(`${active ? '›' : ' '} ${line}`, width);
-        const tone = active ? 'value' : item.kind === 'action' ? 'warning' : selected.has(item.id) ? 'success' : 'hint';
+        const tone = active ? 'value' : item.kind === 'action' ? 'section' : selected.has(item.id) ? 'success' : 'hint';
         lines.push(style(clipped, tone, output));
       }
       if (items.length > rows) lines.push(`Options ${scrollTop + 1}–${Math.min(items.length, scrollTop + rows)} of ${items.length}`);
       lines.push('', clip(hint, width));
-      if (message) lines.push(style(clip(message, width), 'error', output));
+      if (message) lines.push(...wrapCells(message, width).map((line) => style(line, messageTone(message), output)));
       if (useScreenControls) {
         // Anchor subsequent frames to the live cursor rather than an absolute
         // row: readline prompts may have scrolled since the one-time brand mark.
@@ -221,7 +252,7 @@ export async function selectChecklist({
         }
         if (selected.size < minimum) {
           message = minimum === 1
-            ? 'Select a row with Space, or choose an explicit repository action.'
+            ? 'Select a repository with Space, or choose a repository action. No setup is applied yet.'
             : `Select at least ${minimum} items to continue.`;
           changed();
           return;
