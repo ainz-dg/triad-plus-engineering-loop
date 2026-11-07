@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.22.3
+
+Patch release for PR #42. No Core changes.
+
+- Clarify first-run setup labels and stages, show suggested repository defaults
+  together, and provide one explicit `edit` path for advanced fields.
+- Apply semantic terminal colors to prompts, review, success, and errors, with
+  truecolor, 256-color, ANSI, `NO_COLOR`, and `TERM=dumb` fallbacks.
+- Distinguish installation from project readiness and show concrete next steps
+  for the root PRD, quality gates, initial commits, and mapped worktrees.
+- Release notes: [Triad+ 1.22.3](docs/releases/1.22.3.md).
+
 ## 1.22.2
 
 Patch release for PR #41. No Core changes.
