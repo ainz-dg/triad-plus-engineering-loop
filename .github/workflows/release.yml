@@ -152,6 +152,30 @@ jobs:
           TARBALL_NAME: ${{ needs.gate.outputs.tarball_name }}
         run: npm publish "${{ runner.temp }}/verified-release/$TARBALL_NAME" --provenance --access public
 
+  verify-npm:
+    name: Verify exact npm archive identity after propagation
+    needs:
+      - gate
+      - publish-npm
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the immutable release event commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node 24 and npm registry
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Pin npm CLI
+        run: npm install --global npm@11.5.1
+
       - name: Verify npm version, integrity, and shasum with bounded retries
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -164,6 +188,7 @@ jobs:
     needs:
       - gate
       - publish-npm
+      - verify-npm
     if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     permissions:
@@ -198,6 +223,7 @@ jobs:
     needs:
       - gate
       - publish-npm
+      - verify-npm
       - publish-release-assets
     if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest

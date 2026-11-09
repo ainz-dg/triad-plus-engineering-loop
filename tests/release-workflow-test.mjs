@@ -22,6 +22,8 @@ import {
   waitForPublishedRegistry,
 } from '../scripts/release/release-guard.mjs';
 
+import { validateRecoveryInputs, validateRecoverySource, originalChecksums, verifyRecoveryBytes } from '../scripts/release/recovery-verify.mjs';
+
 const workflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
 const ownerGuide = readFileSync(new URL('../docs/maintainers/releasing.md', import.meta.url), 'utf8');
 const guardPath = fileURLToPath(new URL('../scripts/release/release-guard.mjs', import.meta.url));
@@ -202,7 +204,11 @@ function createReleaseCliFixture(root) {
 
 function writeImmediateTimerHook(root) {
   const path = join(root, 'immediate-timers.mjs');
-  writeFileSync(path, 'globalThis.setTimeout = (callback) => { queueMicrotask(callback); return 0; };\n');
+  writeFileSync(path, `import { performance } from 'node:perf_hooks';
+let clock = 0;
+Object.defineProperty(performance, 'now', { value: () => clock });
+globalThis.setTimeout = (callback, delay) => { clock += delay; queueMicrotask(callback); return 0; };
+`);
   return path;
 }
 
@@ -259,31 +265,32 @@ test('npm registry metadata accepts npm dotted or nested fields only when unambi
 test('bounded npm propagation retries only temporary E404, accepts eventual visibility, and never retries mismatch', async () => {
   const expected = { integrity: 'sha512-good', shasum: 'a'.repeat(40) };
   const sleeps = [];
+  let clock = 0;
   let calls = 0;
   const visible = await waitForPublishedRegistry({
-    expectedVersion: '1.22.2', expected, attempts: 4,
+    expectedVersion: '1.22.2', expected, budgetMs: 600_000, now: () => clock,
     probe: async () => {
       calls += 1;
       return calls < 3
         ? { status: 1, stderr: 'npm error code E404' }
         : { status: 0, stdout: JSON.stringify({ version: '1.22.2', dist: expected }) };
     },
-    sleep: async (delay) => sleeps.push(delay),
+    sleep: async (delay) => { sleeps.push(delay); clock += delay; },
   });
   assert.equal(visible.attempts, 3);
-  assert.deepEqual(sleeps, [5_000, 10_000]);
+  assert.deepEqual(sleeps, [15_000, 15_000]);
 
   let missingCalls = 0;
   await assert.rejects(waitForPublishedRegistry({
-    expectedVersion: '1.22.2', expected, attempts: 3,
+    expectedVersion: '1.22.2', expected, budgetMs: 45_000, now: () => clock,
     probe: async () => { missingCalls += 1; return { status: 1, stderr: 'E404' }; },
-    sleep: async () => {},
+    sleep: async (delay) => { clock += delay; },
   }), /manual recovery and do not republish/);
   assert.equal(missingCalls, 3);
 
   let mismatchCalls = 0;
   await assert.rejects(waitForPublishedRegistry({
-    expectedVersion: '1.22.2', expected, attempts: 8,
+    expectedVersion: '1.22.2', expected,
     probe: async () => {
       mismatchCalls += 1;
       return { status: 0, stdout: JSON.stringify({ version: '1.22.2', dist: { ...expected, shasum: 'c'.repeat(40) } }) };
@@ -361,7 +368,11 @@ test('release workflow is published-event driven, fail-closed, and has isolated 
   assert.match(workflow, /verify-release-downloads/);
   assert.match(workflow, /registry-smoke/);
   assert.doesNotMatch(workflow, /gh release create|git tag\s|--clobber/);
-  const npmJob = workflow.slice(workflow.indexOf('  publish-npm:'), workflow.indexOf('  publish-release-assets:'));
+  const npmJob = workflow.slice(workflow.indexOf('  publish-npm:'), workflow.indexOf('  verify-npm:'));
+  assert.doesNotMatch(npmJob, /verify-registry/);
+  for (const job of ['publish-release-assets', 'verify-published']) {
+    assert.match(workflow.slice(workflow.indexOf('  ' + job + ':')).split('    steps:')[0], /- verify-npm/);
+  }
   assert.match(npmJob, /id-token:\s*write/);
   assert.doesNotMatch(workflow.slice(workflow.indexOf('  publish-release-assets:')), /id-token:\s*write/);
 });
@@ -493,7 +504,7 @@ test('publish-preflight subprocess accepts only the exact stable published relea
     assert.ok(commands.some(({ bin, args }) => bin === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD'));
     assert.ok(commands.some(({ bin, args }) => bin === 'git' && args[0] === 'ls-remote' && args.at(-1) === 'refs/heads/main'));
     assert.ok(commands.some(({ bin, args }) => bin === 'gh' && args[0] === 'api'));
-    assert.ok(commands.some(({ bin, args }) => bin === 'npm' && args.join(' ') === 'view triad-plus@1.22.2 version --json'));
+    assert.ok(commands.some(({ bin, args }) => bin === 'npm' && args.join(' ') === 'view triad-plus@1.22.2 version --json --prefer-online --registry=https://registry.npmjs.org'));
 
     fixture.setNpmResponses([{ status: 0, stdout: '"1.22.2"' }]);
     const duplicate = fixture.run('publish-preflight');
@@ -547,7 +558,7 @@ test('verify-registry subprocess retries transient E404 and accepts npm dotted d
     assert.match(result.stdout, /npm registry identity verified: 1\.22\.2/);
     const npmCalls = fixture.commands().filter(({ bin }) => bin === 'npm');
     assert.equal(npmCalls.length, 2);
-    assert.ok(npmCalls.every(({ args }) => args.join(' ') === 'view triad-plus@1.22.2 version dist.integrity dist.shasum --json'));
+    assert.ok(npmCalls.every(({ args }) => args.join(' ') === 'view triad-plus@1.22.2 version dist.integrity dist.shasum --json --prefer-online --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=30000'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -580,8 +591,8 @@ test('verify-registry subprocess fails closed on integrity mismatch, permanent e
     {
       name: 'bounded-timeout',
       responses: [{ status: 1, stderr: 'npm error code E404' }],
-      expected: /did not become visible after 8 bounded checks/,
-      calls: 8,
+      expected: /did not become visible within 30000ms after 2 bounded checks/,
+      calls: 2,
     },
   ];
   for (const scenario of cases) {
@@ -592,6 +603,7 @@ test('verify-registry subprocess fails closed on integrity mismatch, permanent e
       const result = fixture.run('verify-registry', {
         EXPECTED_INTEGRITY: 'sha512-fixture-integrity',
         EXPECTED_SHASUM: 'c'.repeat(40),
+        REGISTRY_BUDGET_MS: '30000',
       }, ['--import', writeImmediateTimerHook(root)]);
       assert.equal(result.status, 1, scenario.name + ' unexpectedly passed');
       assert.match(result.stderr, scenario.expected);
@@ -679,7 +691,302 @@ test('owner guide documents OIDC setup, event semantics, partial-publication rec
   for (const text of [
     'ainz-dg', 'triad-plus-engineering-loop', 'release.yml', 'Trusted Publisher',
     'GITHUB_SHA', 'refs/tags/', 'published', 'prerelease', 'never republish',
-    'static-token fallback', 'recover manually',
+    'static-token fallback', 'release-recovery.yml',
   ]) assert.ok(ownerGuide.includes(text), 'missing owner guidance: ' + text);
   assert.match(ownerGuide, /GitHub Release is already public before npm publication/);
+});
+
+test('registry uses the full ten minute budget with slow propagation and no real waiting', async () => {
+  const expected = { integrity: 'sha512-good', shasum: 'a'.repeat(40) };
+  let clock = 0;
+  let probes = 0;
+  const diagnostics = [];
+  const state = await waitForPublishedRegistry({
+    expectedVersion: '1.22.2', expected, now: () => clock,
+    sleep: async (delay) => { clock += delay; }, report: (line) => diagnostics.push(line),
+    probe: async (_attempt, remaining) => {
+      assert.equal(remaining, 600_000 - clock);
+      probes += 1;
+      return probes < 40 ? { status: 1, stderr: 'No match found for version 1.22.2' }
+        : { status: 0, stdout: JSON.stringify({ version: '1.22.2', dist: expected }) };
+    },
+  });
+  assert.equal(state.attempts, 40);
+  assert.equal(clock, 585_000);
+  assert.match(diagnostics.at(-1), /VERIFIED.*attempt=40 elapsed=585000ms/);
+
+  clock = 0;
+  probes = 0;
+  await assert.rejects(waitForPublishedRegistry({
+    expectedVersion: '1.22.2', expected, now: () => clock,
+    sleep: async (delay) => { clock += delay; }, report: () => {},
+    probe: async () => { probes += 1; clock += 1_000; return { status: 1, stderr: 'E404' }; },
+  }), (error) => error.code === 'REGISTRY_NOT_VISIBLE');
+  assert.equal(clock, 600_000);
+  assert.equal(probes, 38); // Probe latency also consumes the budget.
+});
+
+test('registry immediately rejects wrong identity, malformed metadata, mixed errors, and invalid policies', async () => {
+  const expected = { integrity: 'sha512-good', shasum: 'a'.repeat(40) };
+  for (const result of [
+    { status: 0, stdout: JSON.stringify({ version: '1.22.1', dist: expected }) },
+    { status: 0, stdout: 'not-json' },
+    { status: 0, stdout: JSON.stringify({ version: '1.22.2' }) },
+    { status: 0, stdout: JSON.stringify({ version: '1.22.2', dist: { ...expected, integrity: 'sha512-wrong' } }) },
+    { status: 0, stdout: JSON.stringify({ version: '1.22.2', dist: { ...expected, shasum: 'b'.repeat(40) } }) },
+    { status: 1, stderr: 'E401 E404' },
+    { status: 1, stderr: 'ETIMEDOUT' },
+    { status: 1, stderr: 'E500' },
+  ]) {
+    let probes = 0;
+    await assert.rejects(waitForPublishedRegistry({ expectedVersion: '1.22.2', expected,
+      probe: () => { probes += 1; return result; },
+      sleep: () => assert.fail('Permanent failure must never sleep'), report: () => {},
+    }));
+    assert.equal(probes, 1);
+  }
+  for (const policy of [{ budgetMs: 0 }, { budgetMs: 600_001 }, { delayMs: 0 }, { delayMs: 700_000 }]) {
+    await assert.rejects(waitForPublishedRegistry({ ...policy, expectedVersion: '1.22.2', expected,
+      probe: () => assert.fail('Invalid policy must not probe'),
+    }));
+  }
+});
+
+const recoveryWorkflow = readFileSync(new URL('../.github/workflows/release-recovery.yml', import.meta.url), 'utf8');
+const recoveryPath = fileURLToPath(new URL('../scripts/release/recovery-verify.mjs', import.meta.url));
+
+function recoveryEvidence() {
+  const input = validateRecoveryInputs({ tag: 'v1.22.3', commit: sha, runId: '12345' });
+  const run = { id: input.runId, repository: { id: 99, full_name: 'ainz-dg/triad-plus-engineering-loop' },
+    head_repository: { full_name: 'ainz-dg/triad-plus-engineering-loop' }, head_sha: sha, head_branch: input.tag,
+    path: '.github/workflows/release.yml', event: 'release', status: 'completed', conclusion: 'failure', run_attempt: 1,
+    actor: { login: 'ainz-dg' }, triggering_actor: { login: 'ainz-dg' }, created_at: '2026-11-07T15:53:20Z' };
+  const release = { id: 42, tag_name: input.tag, draft: false, prerelease: false, target_commitish: 'main',
+    author: { login: 'ainz-dg' }, published_at: '2026-11-07T15:53:16Z', assets: [] };
+  const step = (name, number) => ({ name, number, status: 'completed', conclusion: 'success' });
+  const jobs = [
+    { id: 1, name: 'Validate, test, and build the exact release archive', conclusion: 'success', steps: [
+      step('Pack, inspect, and smoke-install one exact archive', 13), step('Preserve the verified archive for the release event only', 14),
+    ] },
+    { id: 2, name: 'Publish the verified archive to npm with OIDC', conclusion: 'failure', steps: [
+      step('Verify archive identity and repeat the fail-closed preflight', 6), step('Publish the exact verified archive with provenance', 7),
+    ] },
+  ].map((job) => ({ ...job, head_sha: sha, run_attempt: 1, run_id: input.runId, status: 'completed' }));
+  const artifact = { id: 987, name: 'triad-plus-release-1.22.3-' + sha.slice(0, 12), expired: false,
+    digest: 'sha256:' + 'c'.repeat(64), workflow_run: {
+      id: input.runId, repository_id: 99, head_repository_id: 99, head_sha: sha, head_branch: input.tag,
+    } };
+  return { input, run, jobs, release, artifacts: [artifact] };
+}
+
+test('recovery rejects caller injection and every unsafe original run/Release/artifact identity', () => {
+  for (const overrides of [ { tag: 'v1.22.3;echo bad' }, { commit: 'main' }, { commit: sha.toUpperCase() },
+    { runId: '-1' }, { runId: '01' }, { runId: '1/../2' }, { runId: '9007199254740992' },
+  ]) assert.throws(() => validateRecoveryInputs({ tag: 'v1.22.3', commit: sha, runId: '12345', ...overrides }));
+  assert.equal(validateRecoverySource(recoveryEvidence()).artifact.id, 987);
+  for (const mutate of [
+    (e) => { e.run.id += 1; }, (e) => { e.run.head_sha = otherSha; }, (e) => { e.run.head_branch = 'v1.22.2'; },
+    (e) => { e.run.repository.full_name = 'fork/repo'; }, (e) => { e.run.head_repository.full_name = 'fork/repo'; },
+    (e) => { e.run.path = '.github/workflows/release-recovery.yml'; }, (e) => { e.run.event = 'workflow_dispatch'; },
+    (e) => { e.run.run_attempt = 2; }, (e) => { e.run.status = 'in_progress'; }, (e) => { e.run.conclusion = 'cancelled'; },
+    (e) => { e.run.actor.login = 'other'; }, (e) => { e.run.triggering_actor.login = 'other'; },
+    (e) => { e.jobs[0].conclusion = 'failure'; }, (e) => { e.jobs[1].steps[1].conclusion = 'failure'; },
+    (e) => { e.jobs[1].steps[0].conclusion = 'skipped'; }, (e) => { e.jobs[1].steps[0].number = 9; },
+    (e) => { e.jobs.push(e.jobs[0]); }, (e) => { e.jobs[0].head_sha = otherSha; },
+    (e) => { e.release.tag_name = 'v1.22.2'; }, (e) => { e.release.prerelease = true; },
+    (e) => { e.release.author.login = 'other'; }, (e) => { e.release.target_commitish = otherSha; },
+    (e) => { e.release.published_at = '2026-11-08T00:00:00Z'; }, (e) => { e.release.published_at = 'invalid'; },
+    (e) => { e.artifacts = []; }, (e) => { e.artifacts.push(e.artifacts[0]); },
+    (e) => { e.artifacts[0].expired = true; }, (e) => { delete e.artifacts[0].digest; },
+    (e) => { e.artifacts[0].workflow_run.id += 1; }, (e) => { e.artifacts[0].workflow_run.head_sha = otherSha; },
+    (e) => { e.artifacts[0].workflow_run.repository_id = 1; },
+  ]) {
+    const evidence = recoveryEvidence();
+    mutate(evidence);
+    assert.throws(() => validateRecoverySource(evidence), String(mutate));
+  }
+});
+
+function recoveryLogs(evidence, archive, zip) {
+  const { input, artifacts: [artifact] } = evidence;
+  artifact.digest = 'sha256:' + createHash('sha256').update(zip).digest('hex');
+  const archiveSha256 = createHash('sha256').update(archive).digest('hex');
+  const sidecar = Buffer.from(archiveSha256 + '  triad-plus-1.22.3.tgz\n');
+  const expected = { archiveSha256, sidecarSha256: createHash('sha256').update(sidecar).digest('hex'),
+    integrity: 'sha512-' + createHash('sha512').update(archive).digest('base64'), shasum: createHash('sha1').update(archive).digest('hex') };
+  const gateLogs = [
+    'Release gate passed for ' + input.tag + ' at ' + input.commit + '.',
+    'Verified tarball: triad-plus-1.22.3.tgz sha256=' + archiveSha256 + ' integrity=' + expected.integrity + '.',
+    'SHA256 digest of uploaded artifact zip is ' + artifact.digest.slice(7),
+    'Artifact ' + artifact.name + '.zip successfully finalized. Artifact ID ' + artifact.id,
+  ].join('\n');
+  const publishLogs = [
+    '  EXPECTED_ARCHIVE_SHA256: ' + archiveSha256, '  EXPECTED_SIDECAR_SHA256: ' + expected.sidecarSha256,
+    '  EXPECTED_INTEGRITY: ' + expected.integrity, '  EXPECTED_SHASUM: ' + expected.shasum,
+    'Verified release artifact bytes: triad-plus-1.22.3.tgz sha256=' + archiveSha256 + '.', '+ triad-plus@1.22.3',
+  ].join('\n');
+  return { gateLogs, publishLogs, expected, sidecar };
+}
+
+test('original log anchors and all four byte hashes reject substitution and missing evidence', () => {
+  const evidence = recoveryEvidence();
+  const archive = Buffer.from('original-archive');
+  const logs = recoveryLogs(evidence, archive, Buffer.from('original-zip'));
+  const params = { input: evidence.input, artifact: evidence.artifacts[0], ...logs };
+  assert.deepEqual(originalChecksums(params), logs.expected);
+  assert.deepEqual(verifyRecoveryBytes({ archive, sidecar: logs.sidecar, version: '1.22.3', expected: logs.expected }), logs.expected);
+  for (const override of [
+    { gateLogs: '' }, { publishLogs: '' }, { artifact: { ...params.artifact, id: 988 } },
+    { artifact: { ...params.artifact, digest: 'sha256:' + 'd'.repeat(64) } },
+    { publishLogs: logs.publishLogs + '\n  EXPECTED_SHASUM: ' + 'd'.repeat(40) },
+    { gateLogs: logs.gateLogs.replace(sha, otherSha) },
+    { publishLogs: logs.publishLogs.replace('+ triad-plus@1.22.3', '+ triad-plus@1.22.2') },
+  ]) assert.throws(() => originalChecksums({ ...params, ...override }));
+  for (const override of [
+    { archive: Buffer.from('modified') }, { sidecar: Buffer.from('modified') }, { version: '1.22.2' },
+    ...Object.keys(logs.expected).map((key) => ({ expected: { ...logs.expected, [key]: 'wrong' } })),
+  ]) assert.throws(() => verifyRecoveryBytes({ archive, sidecar: logs.sidecar, version: '1.22.3', expected: logs.expected, ...override }));
+});
+
+test('recovery workflow has only read permissions and one fixed verification entry with no input interpolation in shell', () => {
+  assert.match(recoveryWorkflow, /workflow_dispatch:/);
+  assert.doesNotMatch(recoveryWorkflow, /^\s*(release|push|pull_request|workflow_run|schedule):/m);
+  assert.match(recoveryWorkflow, /permissions:\n  contents: read\n  actions: read/);
+  assert.doesNotMatch(recoveryWorkflow, /:\s*write|id-token:|secrets\.|npm publish|gh release|git tag|upload-artifact|workflow_call/);
+  assert.match(recoveryWorkflow, /ref: \$\{\{ github.sha \}\}/);
+  assert.match(recoveryWorkflow, /persist-credentials: false/);
+  assert.deepEqual(recoveryWorkflow.match(/^\s+run: .+$/gm)?.map((line) => line.trim()), ['run: node scripts/release/recovery-verify.mjs']);
+  assert.equal((recoveryWorkflow.match(/^\s+uses:/gm) || []).length, 2);
+});
+
+function createRecoveryCliFixture(root) {
+  const evidence = recoveryEvidence();
+  const bin = join(root, 'bin');
+  const contents = join(root, 'contents');
+  const packed = join(root, 'packed');
+  mkdirSync(bin);
+  mkdirSync(join(contents, 'package'), { recursive: true });
+  mkdirSync(packed);
+  writeFileSync(join(contents, 'package/package.json'), JSON.stringify({ name: 'triad-plus', version: '1.22.3' }));
+  const name = 'triad-plus-1.22.3.tgz';
+  assert.equal(spawnSync('tar', ['-czf', join(packed, name), '-C', contents, 'package']).status, 0);
+  const archive = readFileSync(join(packed, name));
+  const provisional = recoveryLogs(evidence, archive, Buffer.from('provisional'));
+  writeFileSync(join(packed, name + '.sha256'), provisional.sidecar);
+  const zipPath = join(root, 'original.zip');
+  assert.equal(spawnSync('zip', ['-q', zipPath, name, name + '.sha256'], { cwd: packed }).status, 0);
+  const logs = recoveryLogs(evidence, archive, readFileSync(zipPath));
+  const statePath = join(root, 'state.json');
+  const logPath = join(root, 'commands.jsonl');
+  const state = { ...evidence, ...logs, zipPath, name, packed };
+  const save = () => writeFileSync(statePath, JSON.stringify(state));
+  save();
+  writeFileSync(logPath, '');
+  writeExecutable(join(bin, 'git'), `
+    const { appendFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    appendFileSync(process.env.COMMAND_LOG, JSON.stringify({ bin: 'git', args }) + '\\n');
+    if (args[0] === 'rev-parse') process.stdout.write('${sha}\\n');
+    else if (args[0] === 'ls-remote') process.stdout.write((process.env.WRONG_TAG_SHA || '${sha}') + '\\trefs/tags/v1.22.3\\n');
+    else if (args.join(' ') !== 'merge-base --is-ancestor ${sha} origin/main') process.exit(2);
+  `);
+  writeExecutable(join(bin, 'gh'), `
+    const { appendFileSync, readFileSync } = require('node:fs');
+    const { join } = require('node:path');
+    const args = process.argv.slice(2);
+    const s = JSON.parse(readFileSync(process.env.RECOVERY_STATE, 'utf8'));
+    appendFileSync(process.env.COMMAND_LOG, JSON.stringify({ bin: 'gh', args }) + '\\n');
+    if (args[0] !== 'api' || args[1] !== '--method' || args[2] !== 'GET') process.exit(90);
+    const path = args.at(-1);
+    let value;
+    if (path.endsWith('/actions/runs/12345')) value = s.run;
+    else if (path.endsWith('/releases/tags/v1.22.3')) value = s.release;
+    else if (path.includes('/attempts/1/jobs?')) value = { total_count: s.jobs.length, jobs: s.jobs };
+    else if (path.includes('/12345/artifacts?')) value = { total_count: s.artifacts.length, artifacts: s.artifacts };
+    else if (path.endsWith('/jobs/1/logs')) value = s.gateLogs;
+    else if (path.endsWith('/jobs/2/logs')) value = s.publishLogs;
+    else if (path.endsWith('/artifacts/987/zip')) { process.stdout.write(readFileSync(s.zipPath)); process.exit(0); }
+    else if (path.endsWith('/releases/assets/11')) { process.stdout.write(readFileSync(join(s.packed, s.name))); process.exit(0); }
+    else if (path.endsWith('/releases/assets/12')) { process.stdout.write(readFileSync(join(s.packed, s.name + '.sha256'))); process.exit(0); }
+    else process.exit(91);
+    process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value));
+  `);
+  writeExecutable(join(bin, 'npm'), `
+    const { appendFileSync, readFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    const s = JSON.parse(readFileSync(process.env.RECOVERY_STATE, 'utf8'));
+    appendFileSync(process.env.COMMAND_LOG, JSON.stringify({ bin: 'npm', args }) + '\\n');
+    if (args[0] !== 'view') process.exit(92);
+    if (s.npmError) { process.stderr.write(s.npmError); process.exit(1); }
+    process.stdout.write(JSON.stringify(s.npmMetadata || { version: '1.22.3', dist: s.expected }));
+  `);
+  return { state, save, run(overrides = {}) {
+    return spawnSync(process.execPath, ['--import', writeImmediateTimerHook(root), recoveryPath], { cwd: root, encoding: 'utf8', env: {
+      ...process.env, PATH: bin + ':' + process.env.PATH, COMMAND_LOG: logPath, RECOVERY_STATE: statePath,
+      GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: sha,
+      GITHUB_ACTOR: 'ainz-dg', GITHUB_REPOSITORY: 'ainz-dg/triad-plus-engineering-loop',
+      RELEASE_TAG: 'v1.22.3', EXPECTED_COMMIT: sha, ORIGINAL_RUN_ID: '12345', ...overrides,
+    } });
+  }, commands: () => readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) };
+}
+
+test('recovery CLI may run twice, verifies existing asset bytes, and cannot invoke any publisher', () => {
+  const root = mkdtempSync(join(tmpdir(), 'triad-recovery-cli-'));
+  try {
+    const fixture = createRecoveryCliFixture(root);
+    const first = fixture.run();
+    assert.equal(first.status, 0, first.stderr + first.stdout);
+    assert.match(first.stdout, /VERIFIED v1.22.3/);
+    assert.match(first.stdout, /Original run 12345 remains failure/);
+    assert.match(first.stdout, /Missing GitHub Release assets: triad-plus-1.22.3.tgz/);
+    fixture.state.release.assets = [
+      { id: 11, name: fixture.state.name, digest: 'sha256:' + fixture.state.expected.archiveSha256 },
+      { id: 12, name: fixture.state.name + '.sha256', digest: 'sha256:' + fixture.state.expected.sidecarSha256 },
+    ];
+    fixture.save();
+    const second = fixture.run();
+    assert.equal(second.status, 0, second.stderr + second.stdout);
+    assert.match(second.stdout, /Missing GitHub Release assets: none/);
+    assert.equal(fixture.commands().filter(({ bin }) => bin === 'npm').length, 2);
+    for (const { bin, args } of fixture.commands()) {
+      if (bin === 'npm') { assert.equal(args[0], 'view'); assert.ok(args.includes('--prefer-online')); }
+      if (bin === 'gh') assert.deepEqual(args.slice(0, 3), ['api', '--method', 'GET']);
+      if (bin === 'git') assert.ok(['rev-parse', 'merge-base', 'ls-remote'].includes(args[0]));
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('recovery CLI blocks unavailable or modified evidence and all npm mismatches without fallback', () => {
+  const scenarios = [
+    { mutate: (s) => { s.run.id += 1; } },
+    { env: { WRONG_TAG_SHA: otherSha } },
+    { env: { EXPECTED_COMMIT: otherSha } },
+    { mutate: (s) => { s.artifacts = []; } },
+    { mutate: (s) => { s.publishLogs = ''; } },
+    { mutate: (s) => { writeFileSync(s.zipPath, 'modified artifact'); } },
+    { mutate: (s) => { s.release.assets = [{ id: 11, name: s.name, digest: 'sha256:' + 'f'.repeat(64) }]; } },
+    { mutate: (s) => { s.npmMetadata = { version: '1.22.2', dist: s.expected }; }, npm: true },
+    { mutate: (s) => { s.npmMetadata = { version: '1.22.3', dist: { ...s.expected, integrity: 'wrong' } }; }, npm: true },
+    { mutate: (s) => { s.npmMetadata = { version: '1.22.3', dist: { ...s.expected, shasum: 'wrong' } }; }, npm: true },
+    { mutate: (s) => { s.npmError = 'E401'; }, npm: true },
+    { mutate: (s) => { s.npmError = 'E404'; }, waiting: true },
+    { mutate: (s) => {
+      s.release.assets = [{ id: 11, name: s.name, digest: 'sha256:' + s.expected.archiveSha256 }];
+      writeFileSync(join(s.packed, s.name), 'modified Release asset bytes');
+    } },
+  ];
+  for (const scenario of scenarios) {
+    const root = mkdtempSync(join(tmpdir(), 'triad-recovery-reject-'));
+    try {
+      const fixture = createRecoveryCliFixture(root);
+      scenario.mutate?.(fixture.state);
+      fixture.save();
+      const rejected = fixture.run(scenario.env);
+      assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
+      assert.match(rejected.stdout, scenario.waiting ? /WAITING\/NOT YET VISIBLE/ : /BLOCKED\/MISMATCH/);
+      assert.equal(fixture.commands().filter(({ bin }) => bin === 'npm').length, scenario.waiting ? 40 : scenario.npm ? 1 : 0);
+      assert.ok(fixture.commands().every(({ bin, args }) => bin !== 'npm' || args[0] === 'view'));
+      assert.ok(fixture.commands().every(({ bin, args }) => bin !== 'gh' || args[2] === 'GET'));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
 });

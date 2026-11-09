@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writ
 import { createHash as cryptoCreateHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
@@ -106,7 +107,9 @@ export function validateDispatchContext({
 }
 
 function isMissingVersionOutput(output) {
-  return /E404|No match found for version/i.test(output);
+  const codes = output.match(/\bE[A-Z0-9]+\b/g) || [];
+  return !codes.some((code) => code !== 'E404')
+    && /\bE404\b|No match found for version/i.test(output);
 }
 
 export function classifyNpmVersionProbe(result, version) {
@@ -186,26 +189,49 @@ export async function waitForPublishedRegistry({
   probe,
   expectedVersion,
   expected,
-  attempts = 8,
-  initialDelayMs = 5_000,
-  maxDelayMs = 30_000,
+  budgetMs = 600_000,
+  delayMs = 15_000,
+  now = () => performance.now(),
+  report = (message) => console.log(message),
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }) {
-  if (!Number.isInteger(attempts) || attempts < 1) fail('Registry retry attempts must be a positive integer.');
-  if (!Number.isInteger(initialDelayMs) || initialDelayMs < 0 || !Number.isInteger(maxDelayMs) || maxDelayMs < 0) {
-    fail('Registry retry delays must be non-negative integers.');
+  if (!Number.isInteger(budgetMs) || budgetMs < 1 || budgetMs > 600_000
+    || !Number.isInteger(delayMs) || delayMs < 1 || delayMs > budgetMs) {
+    fail('Registry time budget must be 1..600000ms and delay must be 1..budget ms.');
   }
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const result = await probe(attempt);
+  if (!expected?.integrity || !expected?.shasum) fail('Expected original archive identity is required.');
+  const start = now();
+  let attempt = 0;
+  while (true) {
+    const remaining = budgetMs - (now() - start);
+    if (remaining <= 0) break;
+    attempt += 1;
+    const result = await probe(attempt, remaining);
     const state = classifyPublishedNpmProbe(result, expectedVersion, expected);
-    if (state.visible) return { ...state, attempts: attempt };
-    if (attempt < attempts) {
-      const delay = Math.min(maxDelayMs, initialDelayMs * (2 ** (attempt - 1)));
-      await sleep(delay);
+    const elapsed = Math.round(now() - start);
+    if (elapsed > budgetMs) break;
+    if (state.visible) {
+      report('VERIFIED npm ' + expectedVersion + ': attempt=' + attempt + ' elapsed=' + elapsed + 'ms.');
+      return { ...state, attempts: attempt };
     }
+    report('WAITING/NOT YET VISIBLE npm ' + expectedVersion + ': attempt=' + attempt
+      + ' elapsed=' + elapsed + 'ms; temporary E404/No match only.');
+    const wait = Math.min(delayMs, budgetMs - (now() - start));
+    if (wait > 0) await sleep(wait);
   }
-  fail('npm version ' + expectedVersion + ' did not become visible after ' + attempts
+  const error = new Error('WAITING/NOT YET VISIBLE: npm version ' + expectedVersion
+    + ' did not become visible within ' + budgetMs + 'ms after ' + attempt
     + ' bounded checks; follow the documented manual recovery and do not republish.');
+  error.code = 'REGISTRY_NOT_VISIBLE';
+  throw error;
+}
+
+export function publishedRegistryProbe(version, remainingMs) {
+  return command('npm', [
+    'view', PACKAGE_NAME + '@' + version, 'version', 'dist.integrity', 'dist.shasum',
+    '--json', '--prefer-online', '--registry=https://registry.npmjs.org',
+    '--fetch-retries=0', '--fetch-timeout=' + Math.max(1, Math.min(30_000, Math.floor(remainingMs))),
+  ], { timeout: Math.max(1, Math.ceil(remainingMs)) });
 }
 
 export function classifyTagProbe(result, tagName) {
@@ -383,7 +409,7 @@ function validateReleaseEvent({ checkRegistryConflict = true } = {}) {
     fail('Current GitHub Release no longer matches the stable published event; stopping closed.');
   }
   if (checkRegistryConflict) {
-    const npm = classifyNpmVersionProbe(command('npm', ['view', PACKAGE_NAME + '@' + version, 'version', '--json']), version);
+    const npm = classifyNpmVersionProbe(command('npm', ['view', PACKAGE_NAME + '@' + version, 'version', '--json', '--prefer-online', '--registry=https://registry.npmjs.org']), version);
     if (npm.present) fail('npm version ' + version + ' already exists; immutable versions are never overwritten.');
   }
   return context;
@@ -405,7 +431,7 @@ function validateDispatchDryRun() {
     packageVersion: packageJson.version,
   });
   const conflicts = {
-    npm: classifyNpmVersionProbe(command('npm', ['view', PACKAGE_NAME + '@' + version, 'version', '--json']), version),
+    npm: classifyNpmVersionProbe(command('npm', ['view', PACKAGE_NAME + '@' + version, 'version', '--json', '--prefer-online', '--registry=https://registry.npmjs.org']), version),
     tag: releaseTagProbe(tagName),
     release: classifyReleaseProbe(command('gh', ['release', 'view', tagName, '--json', 'tagName'], {
       env: { ...process.env, GH_TOKEN: process.env.GH_TOKEN || process.env.GITHUB_TOKEN },
@@ -525,17 +551,9 @@ function verifyRegistry() {
   return waitForPublishedRegistry({
     expectedVersion: version,
     expected,
-    attempts: 8,
-    initialDelayMs: 5_000,
-    maxDelayMs: 30_000,
-    probe: () => command('npm', [
-      'view',
-      PACKAGE_NAME + '@' + version,
-      'version',
-      'dist.integrity',
-      'dist.shasum',
-      '--json',
-    ]),
+    budgetMs: Number(process.env.REGISTRY_BUDGET_MS || 600_000),
+    delayMs: Number(process.env.REGISTRY_DELAY_MS || 15_000),
+    probe: (_attempt, remainingMs) => publishedRegistryProbe(version, remainingMs),
   }).then(({ attempts, metadata }) => {
     if (attempts > 1) console.log('npm registry propagation completed after ' + attempts + ' bounded checks.');
     console.log('npm registry identity verified: ' + version + ' ' + metadata.integrity + '.');
