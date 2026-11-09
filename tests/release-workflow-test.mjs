@@ -850,6 +850,8 @@ test('original log anchors and all four byte hashes reject substitution and miss
 
 test('recovery workflow has only read permissions and one fixed verification entry with no input interpolation in shell', () => {
   assert.match(recoveryWorkflow, /workflow_dispatch:/);
+  // Invalid dispatch contexts must reach the JS guard and fail, never skip the job.
+  assert.doesNotMatch(recoveryWorkflow, /^\s+if:/m);
   assert.doesNotMatch(recoveryWorkflow, /^\s*(release|push|pull_request|workflow_run|schedule):/m);
   assert.match(recoveryWorkflow, /permissions:\n  contents: read\n  actions: read/);
   assert.doesNotMatch(recoveryWorkflow, /:\s*write|id-token:|secrets\.|npm publish|gh release|git tag|upload-artifact|workflow_call/);
@@ -989,4 +991,22 @@ test('recovery CLI blocks unavailable or modified evidence and all npm mismatche
       assert.ok(fixture.commands().every(({ bin, args }) => bin !== 'gh' || args[2] === 'GET'));
     } finally { rmSync(root, { recursive: true, force: true }); }
   }
+});
+
+test('invalid recovery dispatch contexts fail explicitly before any external command', () => {
+  const root = mkdtempSync(join(tmpdir(), 'triad-recovery-context-'));
+  try {
+    const fixture = createRecoveryCliFixture(root);
+    for (const env of [
+      { GITHUB_EVENT_NAME: 'push' },
+      { GITHUB_REF: 'refs/heads/feature' },
+      { GITHUB_REPOSITORY: 'fork/triad-plus-engineering-loop' },
+      { GITHUB_ACTOR: 'other-owner' },
+    ]) {
+      const rejected = fixture.run(env);
+      assert.equal(rejected.status, 1, JSON.stringify(env) + ': ' + rejected.stdout + rejected.stderr);
+      assert.match(rejected.stdout, /BLOCKED\/MISMATCH: Recovery requires owner dispatch on the canonical repository main branch/);
+      assert.deepEqual(fixture.commands(), [], 'Invalid context must fail before GitHub, git, or npm access');
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
