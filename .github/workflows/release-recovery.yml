@@ -1,0 +1,45 @@
+name: Verify original npm publication (no publishing)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact approved stable tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      expected_commit:
+        description: Exact approved full lowercase release commit SHA
+        required: true
+        type: string
+      original_run_id:
+        description: Original release publication run ID (first attempt only)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the trusted recovery implementation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify original provenance, archive, assets, and npm identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          ORIGINAL_RUN_ID: ${{ inputs.original_run_id }}
+        run: node scripts/release/recovery-verify.mjs
