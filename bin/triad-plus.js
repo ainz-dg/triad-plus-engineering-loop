@@ -85,6 +85,7 @@ Usage:
   npx triad-plus adapter add <adapter-id> --control <path> [--apply]
   npx triad-plus adapter upgrade <adapter-id> --control <path> [--apply]
   npx triad-plus adapter remove <adapter-id> --control <path> [--apply]
+  npx triad-plus entry refresh --host <codex|hermes> --control <path> [--apply --expected-state <sha256>]
   npx triad-plus import-bmad-story --source <story.md> --output <card.md> [--target-repository <id>] [--provenance <record.json>] [--required-gate <id>] [--depends-on <card-id>]
   npx triad-plus cockpit [--control <path>] [--port <n>] [--no-open]
 
@@ -103,6 +104,7 @@ function parseArgs(args) {
   const [command, ...arguments_] = args;
   const rest = [...arguments_];
   const options = { command, global: false, allowProductRepo: false, apply: false, noOpen: false, requiredGates: [], dependsOn: [] };
+  if (command === 'entry' && rest.shift() !== 'refresh') throw new Error('Use entry refresh with --host and --control.');
   if (command === 'adapter') {
     options.adapterCommand = rest.shift();
     if (!['add', 'list', 'doctor', 'upgrade', 'remove'].includes(options.adapterCommand)) throw new Error('Use adapter add, list, doctor, upgrade, or remove.');
@@ -124,7 +126,7 @@ function parseArgs(args) {
       index += 1;
     }
     else if (['--host', '--control', '--team-config', '--hook-config', '--source', '--output', '--target-repository', '--provenance'].includes(argument)
-      || (argument === '--port' && command === 'cockpit')) {
+      || (argument === '--port' && command === 'cockpit') || (argument === '--expected-state' && command === 'entry')) {
       const value = rest[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value.`);
       options[argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
@@ -327,7 +329,15 @@ async function replaceManagedPath(source, destination, backup, apply) {
 }
 
 async function refreshAssets(assets, root, installContext, backupRoot, apply) {
-  for (const asset of assets) {
+  // Parent directory assets can contain nested file assets from the same
+  // registry. Replace parents first so later, more specific files survive.
+  const orderedAssets = await Promise.all(assets.map(async (asset, index) => ({
+    asset,
+    index,
+    depth: resolveDestination(asset.destination, root, installContext).split(sep).filter(Boolean).length
+  })));
+  orderedAssets.sort((left, right) => left.depth - right.depth || left.index - right.index);
+  for (const { asset } of orderedAssets) {
     const destination = resolveDestination(asset.destination, root, installContext);
     if (asset.source === 'shared-skills') {
       for (const name of sharedSkillNames) await replaceManagedPath(join(packageRoot, 'skills', name), join(destination, name), join(backupRoot, name), apply);
@@ -1022,7 +1032,7 @@ async function upgradeRunStateDelivery(controlRoot, backupRoot, apply) {
 async function upgrade(options) {
   const adapter = getAdapter(options.host);
   if (!adapter) throw new Error(`Choose --host ${listAdapters().map((item) => item.id).join(', ')}.`);
-  if (options.global && adapter.globalEntry) throw new Error(`Global ${adapter.label} entry updates are available only through the interactive setup wizard, which previews the exact profile files and requires confirmation. No files were changed.`);
+  if (options.global && adapter.globalEntry) throw new Error(`Global ${adapter.label} entry refresh requires exact-path consent. Upgrade project assets separately, then use entry refresh --host ${adapter.id} --control <exact-workspace>. No files were changed.`);
   if (!options.control) throw new Error('Provide --control <project-control-path>.');
   const controlRoot = resolve(options.control);
   await requireExistingDirectory(controlRoot);
@@ -2459,6 +2469,145 @@ function hostEntryBindingText(adapterId, workspace, manifest, globalAssets) {
   }, null, 2)}\n`;
 }
 
+const entryRefreshAdapters = new Set(['codex', 'hermes']);
+const entryRefreshFail = (message) => { throw Object.assign(new Error(message), { code: 'ENTRY_REFRESH_BLOCKED' }); };
+
+async function planEntryRefresh(options) {
+  const adapter = getAdapter(options.host);
+  if (!entryRefreshAdapters.has(adapter?.id) || !options.control) entryRefreshFail('Select a supported global entry host and an exact Control Workspace.');
+  if (options.global || options.teamConfig || options.hookConfig || options.source || options.output || options.targetRepository
+    || options.provenance || options.allowProductRepo || options.requiredGates.length || options.dependsOn.length) entryRefreshFail('entry refresh accepts only --host, --control and --apply --expected-state.');
+  const root = resolve(options.control);
+  await assertNoSymlinkPath(root, { allowMissing: false });
+  if (await realpath(root) !== root) entryRefreshFail('Use the canonical Control Workspace path.');
+  const manifestPath = installationManifestPath(root);
+  if (!await safeProjectAssetInfo(root, manifestPath)) entryRefreshFail('An existing installation manifest is required.');
+  const loaded = await loadInstallationManifest(root);
+  const manifestBytes = await readFile(manifestPath);
+  if (JSON.stringify(JSON.parse(manifestBytes)) !== JSON.stringify(loaded?.manifest)) entryRefreshFail('Installation ownership changed while reading the preview.');
+  const records = adapterRecords(loaded?.manifest);
+  const record = records.find((item) => item.id === adapter.id);
+  if (!record?.scopes.global || record.scope_status.project !== 'installed' || record.scope_status.global !== 'installed') entryRefreshFail('Refresh requires an existing project/global installation; it does not claim missing or unowned entries.');
+  if (loaded.manifest.triad_version !== packageVersion) entryRefreshFail('Upgrade project assets with the trusted package first; entry refresh does not upgrade the workspace.');
+  const installContext = { ...context(root), bindingWorkspace: root };
+  const projectPairs = await adapterAssetPairs(adapter, root, installContext, records, record);
+  const projectAssets = await plannedAdapterRecords(projectPairs, root);
+  const projectFiles = record.managed_assets.filter((asset) => asset.scope === 'project' && asset.kind === 'file');
+  if (projectAssets.length !== projectFiles.length) entryRefreshFail('Project asset membership differs from the trusted package; upgrade project assets first.');
+  for (const asset of projectAssets) {
+    const owned = projectFiles.find((item) => item.path === asset.path);
+    const target = join(root, asset.path);
+    if (!owned || owned.sha256 !== asset.sha256 || !await safeProjectAssetInfo(root, target) || await sha256File(target) !== asset.sha256) entryRefreshFail('Project assets differ from the trusted package or recorded ownership; refresh cannot bless changed workspace code.');
+  }
+  await assertManagedBlocksMatch(root, record.managed_assets, 'entry refresh');
+  for (const target of adapter.legacyGlobalPaths?.(installContext) ?? []) if (await safeGlobalAssetInfo(target)) entryRefreshFail('Legacy shortcut collision preserved; entry refresh does not migrate or delete unowned shortcuts.');
+  const pairs = await materializedAssetPairs(adapter.globalAssets, root, installContext);
+  const globalAssets = await plannedAdapterRecords(pairs, root, 'global');
+  const bindingPath = resolve(adapter.globalBindingPath(installContext));
+  const globals = record.managed_assets.filter((asset) => asset.scope === 'global');
+  const allowed = new Set([...globalAssets.map((asset) => asset.path), bindingPath]);
+  if (globals.length !== allowed.size || globals.some((asset) => asset.kind !== 'file' || !allowed.has(asset.path))) entryRefreshFail('Global ownership does not match the exact current profile paths; no profile migration is inferred.');
+  const actions = [];
+  for (const asset of globals) {
+    if (!await safeGlobalAssetInfo(asset.path) || await sha256File(asset.path) !== asset.sha256) entryRefreshFail('A recorded global entry is missing, modified or unsafe; restore/review it separately.');
+  }
+  let oldBinding;
+  try { oldBinding = JSON.parse(await readFile(bindingPath, 'utf8')); } catch { entryRefreshFail('Existing owner binding is malformed; no file was changed.'); }
+  const shape = (assets) => assets.map(({ path: assetPath, kind, sha256 }) => ({ path: assetPath, kind, sha256 })).sort((a, b) => a.path.localeCompare(b.path));
+  if (oldBinding?.schema_version !== 1 || oldBinding.adapter !== adapter.id || oldBinding.workspace !== root
+    || oldBinding.installation_manifest !== '.triad-plus/installation.json' || !Array.isArray(oldBinding.expected_project_assets)
+    || !Array.isArray(oldBinding.expected_global_assets)
+    || JSON.stringify(shape(oldBinding.expected_global_assets)) !== JSON.stringify(shape(globals.filter((asset) => asset.path !== bindingPath)))) entryRefreshFail('Existing binding does not attest this workspace and its recorded global files.');
+  const bindingText = hostEntryBindingText(adapter.id, root, loaded.manifest, globalAssets);
+  for (const [index, asset] of globalAssets.entries()) actions.push({ target: asset.path, previous: globals.find((item) => item.path === asset.path).sha256,
+    next: asset.sha256, bytes: await readFile(pairs[index].source) });
+  actions.push({ target: bindingPath, previous: globals.find((item) => item.path === bindingPath).sha256, next: sha256Text(bindingText), bytes: Buffer.from(bindingText) });
+  const changed = actions.filter((action) => action.previous !== action.next);
+  if (changed.some((action) => action.target !== bindingPath)) {
+    // Native skill/wrapper files may be shared by multiple bound workspaces.
+    if ((await readdir(dirname(bindingPath))).some((name) => name !== basename(bindingPath))) entryRefreshFail('Shared global files have other workspace bindings; a coordinated refresh requires separate review.');
+    if (records.some((other) => other.id !== adapter.id && other.managed_assets.some((asset) => asset.scope === 'global' && changed.some((action) => action.target === asset.path)))) entryRefreshFail('Global files have another adapter owner; coordinated refresh is required.');
+  }
+  const state = sha256Text(JSON.stringify({ adapter: adapter.id, root, version: packageVersion, manifest: sha256Text(manifestBytes),
+    project: projectAssets, actions: actions.map(({ target, previous, next }) => ({ target, previous, next })) }));
+  return { adapter, root, manifestPath, manifestBytes, manifest: loaded.manifest, records, record, projectAssets, actions, changed, bindingPath, state };
+}
+
+async function replaceEntryFile(target, bytes, expected) {
+  const info = await safeGlobalAssetInfo(target);
+  if (!info || await sha256File(target) !== expected) entryRefreshFail('Entry changed after preview; no overwrite is authorized.');
+  const temporary = await mkdtemp(join(dirname(target), '.triad-entry-'));
+  try {
+    const pending = join(temporary, 'pending');
+    await writeFile(pending, bytes, { flag: 'wx', mode: info.mode & 0o777 });
+    if (!await safeGlobalAssetInfo(target) || await sha256File(target) !== expected) entryRefreshFail('Entry changed during refresh; inspect the exact files before retrying.');
+    await rename(pending, target);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+}
+
+async function refreshGlobalEntry(options) {
+  try {
+    const plan = await planEntryRefresh(options);
+    process.stdout.write(`Global entry refresh ${options.apply ? 'request' : 'preview'}: ${plan.adapter.id}; no host/model probe or loop execution.\n`);
+    for (const action of plan.actions) process.stdout.write(`  ${action.previous === action.next ? 'UNCHANGED' : 'REPLACE after consent'} ${JSON.stringify(action.target)} before=${action.previous} after=${action.next}\n`);
+    process.stdout.write(`  Manifest ${JSON.stringify(plan.manifestPath)}; backups under .triad-plus/backups/entry-refresh-*; temporary files beside listed global files are removed.\nExpected state: ${plan.state}\n`);
+    if (!options.apply) {
+      if (options.expectedState) entryRefreshFail('--expected-state applies only with --apply.');
+      process.stdout.write('Preview only. Review every exact path, then explicitly use --apply --expected-state <this-sha256>. No consent is inferred.\n');
+      return;
+    }
+    if (!/^[a-f0-9]{64}$/.test(options.expectedState ?? '') || options.expectedState !== plan.state) entryRefreshFail('Missing or stale --expected-state; review a fresh preview.');
+    if (!plan.changed.length) { process.stdout.write('Entry already current; no files changed. Workspace readiness and model identity are separate checks.\n'); return; }
+    if ((await planEntryRefresh(options)).state !== plan.state) entryRefreshFail('Inputs changed before refresh; inspect again.');
+    const backupParent = join(plan.root, '.triad-plus', 'backups');
+    await ensureSafeProjectParents(plan.root, join(backupParent, 'placeholder'));
+    const backup = await mkdtemp(join(backupParent, 'entry-refresh-'));
+    await writeFile(join(backup, 'installation.json'), plan.manifestBytes, { flag: 'wx', mode: 0o600 });
+    await writeFile(join(backup, 'plan.json'), JSON.stringify(plan.changed.map(({ target, previous, next }, index) => ({ target, previous, next, backup: `${index}.before` })), null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    const replaced = [];
+    try {
+      for (const [index, action] of plan.changed.entries()) {
+        const prior = await readGateSource(action.target);
+        if (prior.status !== 'read' || prior.sha256 !== action.previous || sha256Text(action.bytes) !== action.next) entryRefreshFail('Entry bytes changed after preview.');
+        const before = Buffer.from(prior.text);
+        if (sha256Text(before) !== action.previous) entryRefreshFail('Entry bytes are not a supported UTF-8 bridge file.');
+        await writeFile(join(backup, `${index}.before`), before, { flag: 'wx', mode: 0o600 });
+        await replaceEntryFile(action.target, action.bytes, action.previous);
+        replaced.push({ ...action, before });
+      }
+      // Check owner state, active profile and project bytes again before committing the binding manifest.
+      const currentPairs = await materializedAssetPairs(plan.adapter.globalAssets, plan.root, { ...context(plan.root), bindingWorkspace: plan.root });
+      if (JSON.stringify(currentPairs.map((pair) => pair.target)) !== JSON.stringify(plan.actions.slice(0, -1).map((action) => action.target))
+        || !await safeProjectAssetInfo(plan.root, plan.manifestPath) || await sha256File(plan.manifestPath) !== sha256Text(plan.manifestBytes)) entryRefreshFail('Profile or installation ownership changed during refresh.');
+      for (const asset of plan.projectAssets) if (!await safeProjectAssetInfo(plan.root, join(plan.root, asset.path)) || await sha256File(join(plan.root, asset.path)) !== asset.sha256) entryRefreshFail('Project bytes changed during refresh.');
+      await assertManagedBlocksMatch(plan.root, plan.record.managed_assets, 'entry refresh');
+      for (const action of plan.actions) if (!await safeGlobalAssetInfo(action.target) || await sha256File(action.target) !== action.next) entryRefreshFail('Global entry bytes changed during refresh.');
+      if (plan.changed.some((action) => action.target !== plan.bindingPath)
+        && (await readdir(dirname(plan.bindingPath))).some((name) => name !== basename(plan.bindingPath))) entryRefreshFail('Another workspace binding appeared during refresh.');
+      const now = new Date().toISOString();
+      const globals = plan.actions.map(({ target, next }) => ({ scope: 'global', path: target, kind: 'file', sha256: next }));
+      const assets = [...plan.record.managed_assets.filter((asset) => asset.scope !== 'global'), ...globals];
+      const manifest = plan.manifest.schema_version === MULTI_ADAPTER_MANIFEST_SCHEMA_VERSION
+        ? buildMultiAdapterManifest({ triadVersion: packageVersion, installedAt: plan.manifest.installed_at, updatedAt: now,
+          adapters: plan.records.map((record) => record.id === plan.adapter.id ? { ...record, updated_at: now, managed_assets: assets } : record) })
+        : buildInstallationManifest({ triadVersion: packageVersion, adapter: plan.adapter.id, installedAt: plan.manifest.installed_at,
+          updatedAt: now, scopes: plan.record.scopes, scopeStatus: plan.record.scope_status, managedAssets: assets, status: plan.manifest.status });
+      await writeInstallationManifest(plan.root, manifest);
+      process.stdout.write(`Entry refreshed; backups ${JSON.stringify(backup)}. Re-run workspace preflight; no model identity or READY was asserted.\n`);
+    } catch (error) {
+      let recovery = false;
+      for (const action of replaced.reverse()) {
+        try { await replaceEntryFile(action.target, action.before, action.next); } catch { recovery = true; }
+      }
+      if (recovery) entryRefreshFail(`Concurrent file changes prevented safe rollback; inspect backups at ${JSON.stringify(backup)}. No success is asserted.`);
+      throw error;
+    }
+  } catch (error) {
+    if (error.code === 'ENTRY_REFRESH_BLOCKED') throw error;
+    entryRefreshFail('Entry refresh evidence is unavailable or unsafe; inspect locally. No host command or model probe was run.');
+  }
+}
+
 async function planGlobalEntryAdapters(adapters, selectedAdapters, controlRoot) {
   const bindingWorkspace = await canonicalProspectivePath(controlRoot);
   if (selectedAdapters.length && bindingWorkspace !== resolve(controlRoot)) {
@@ -2898,6 +3047,7 @@ try {
   }
   else if (options.command === 'init') await init(options);
   else if (options.command === 'quality-gates') await qualityGatesCommand(options);
+  else if (options.command === 'entry') await refreshGlobalEntry(options);
   else if (options.command === 'adapter') await adapterCommand(options);
   else if (options.command === 'doctor') await doctor(options);
   else if (options.command === 'version') await versionCommand(options);

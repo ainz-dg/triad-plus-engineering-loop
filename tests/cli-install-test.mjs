@@ -159,14 +159,14 @@ try {
     'bin/triad-plus.js', 'upgrade', '--host', 'codex', '--control', configuredControl, '--global'
   ], { cwd: repositoryRoot, env: { ...process.env, CODEX_HOME: configuredCodexHome }, encoding: 'utf8' });
   assert.equal(plannedUpgrade.status, 2);
-  assert.match(plannedUpgrade.stderr, /only through the interactive setup wizard/);
+  assert.match(plannedUpgrade.stderr, /requires exact-path consent/);
   assert.doesNotMatch(await readFile(legacyRunState, 'utf8'), /^delivery:/m);
   assert.equal(await readFile(join(configuredControl, '.triad-plus', 'team.json'), 'utf8'), codexProfileBeforeBlockedUpgrade);
   const appliedUpgrade = spawnSync(process.execPath, [
     'bin/triad-plus.js', 'upgrade', '--host', 'codex', '--control', configuredControl, '--global', '--apply'
   ], { cwd: repositoryRoot, env: { ...process.env, CODEX_HOME: configuredCodexHome }, encoding: 'utf8' });
   assert.equal(appliedUpgrade.status, 2);
-  assert.match(appliedUpgrade.stderr, /only through the interactive setup wizard/);
+  assert.match(appliedUpgrade.stderr, /requires exact-path consent/);
   assert.match(await readFile(instructionPath, 'utf8'), /Keep this note/);
   assert.equal(await readFile(instructionPath, 'utf8'), instructionBeforeBlockedUpgrade,
     'blocked global upgrade preserves project instructions byte-for-byte');

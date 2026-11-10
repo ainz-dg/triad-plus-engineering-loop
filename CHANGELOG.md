@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add an explicit Codex/Hermes global entry refresh: preview exact owned paths
+  and apply only with current-state consent, backups and rollback. Require a
+  package-matching local install; preserve modified files and stop on shared
+  workspace/profile conflicts. Model routing and coordinated old multi-adapter
+  project upgrades remain separate limitations.
 - Add a common guided workspace preflight to the six native entry paths, with
   explicit host-default consent, per-repository gate selection and persistent
   confirmations. Automation without consent fails closed; dispatch/verifier
