@@ -7,6 +7,11 @@ type `install` at the final preview. No global file is written when that
 optional entry is skipped. Direct global `init`/`upgrade` and the legacy
 `install.sh --global` path refuse to bypass this consent.
 
+After a supported project upgrade, refresh an existing owner-bound shortcut with
+the [exact-path consent flow](global-entry-refresh.md). Preview first; application
+requires its current state hash. It never selects models or repairs a global
+profile by rewriting unreviewed hashes.
+
 Open the Control Workspace and run `$triad <absolute-prd-path>`. The prompt
 checks that exact workspace before doing Triad work, but runs after the host
 model has been invoked; it is not a pre-LLM security boundary.

@@ -144,12 +144,13 @@ rewritten by preflight.
 Codex/Hermes wrappers still verify owner-bound paths and bytes before running
 local code; scoped approvals use that same temporary trusted snapshot. After
 a project/runtime upgrade an older global binding can stop for byte drift.
-Do not patch hashes or bypass it with changed local code. The current installer
-refuses direct global upgrades and preserves shared global files on removal;
-a supported, explicitly consented global refresh/migration still needs separate
-implementation/review before the final release. The trusted package terminal
-route is available for workspace configuration, not proof that a stale native
-global entry was repaired.
+Do not patch hashes or bypass it with changed local code. The installer preserves
+shared global files on removal. For a current, package-matching project install,
+use the separately consented [global entry refresh](global-entry-refresh.md):
+preview exact existing paths, then apply with the current state hash. Old
+multi-adapter installations requiring coordinated shared project upgrades remain
+a limitation. The trusted package terminal route for workspace configuration
+alone is not proof that a stale native global entry was repaired.
 
 Evidence here is six-adapter contract coverage, actual terminal error → model
 correction → READY, current-source/catalog/branch adversarial cases, and trusted

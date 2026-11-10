@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { buildMultiAdapterManifest, loadInstallationManifest, writeInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
+import { buildInstallationManifest, buildMultiAdapterManifest, loadInstallationManifest, writeInstallationManifest } from '../runtime/lib/installation-manifest.mjs';
 import { validateHostEntry } from '../runtime/triad-host-entry.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,6 +50,14 @@ function runEntry(adapter, cwd, env = {}, extraArgs = []) {
 
 function runPreflight(workspace, cwd = workspace.root, extra = {}, args = []) {
   return run(process.execPath, [workspace.preflightPath, '--adapter', workspace.adapter, ...args], cwd, { ...workspace.env, ...extra });
+}
+
+async function runDocumentedHermesPreflight(workspace, cwd = workspace.root, env = workspace.env) {
+  const skillPath = path.join(env.HERMES_HOME, 'skills/triad/SKILL.md');
+  const skill = await readFile(skillPath, 'utf8');
+  const command = /^node "\$HOME\/.hermes\/triad-plus\/host-entry-preflight\.mjs" --adapter hermes --json$/m.exec(skill)?.[0];
+  assert.ok(command, 'installed Hermes skill documents the canonical wrapper invocation');
+  return run('/bin/sh', ['-c', command], cwd, env);
 }
 
 function git(cwd, args) {
@@ -101,7 +109,7 @@ async function makeRepo(root) {
   git(root, ['commit', '-m', 'temporary host-entry baseline']);
 }
 
-async function makeWorkspace(adapter, name, { activeHermesProfile = null, confirm = true } = {}) {
+async function makeWorkspace(adapter, name, { activeHermesProfile = null, explicitHermesHome = false, confirm = true } = {}) {
   const base = path.join(fixture, name);
   const root = path.join(base, 'control');
   const home = path.join(base, 'home');
@@ -110,7 +118,10 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null, confir
   await mkdir(root, { recursive: true });
   await mkdir(home, { recursive: true });
   await mkdir(codexHome, { recursive: true });
-  const env = { HOME: home, CODEX_HOME: codexHome, HERMES_HOME: null, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' };
+  const explicitHermesProfile = activeHermesProfile ? path.join(hermesHome, 'profiles', activeHermesProfile) : hermesHome;
+  const env = { HOME: home, CODEX_HOME: codexHome,
+    HERMES_HOME: adapter === 'hermes' && explicitHermesHome ? explicitHermesProfile : null,
+    GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' };
   const init = runCli(['init', '--host', adapter, '--control', root], root, env);
   assert.equal(init.status, 0, `${init.stdout}\n${init.stderr}`);
 
@@ -338,7 +349,147 @@ async function validateInEnvironment(workspace, cwd = workspace.root, adapter = 
   }
 }
 
+async function staleOwnedEntry(workspace) {
+  const loaded = await loadInstallationManifest(workspace.root);
+  const record = loaded.manifest.adapters.find((item) => item.id === workspace.adapter);
+  const binding = JSON.parse(await readFile(workspace.bindingPath, 'utf8'));
+  for (const asset of record.managed_assets.filter((item) => item.scope === 'global' && item.path !== workspace.bindingPath)) {
+    const suffix = asset.path.endsWith('.mjs') ? '\n// Earlier owned bridge\n' : asset.path.endsWith('.sh') ? '\n# Earlier owned bridge\n' : '\n<!-- Earlier owned bridge -->\n';
+    await writeFile(asset.path, await readFile(asset.path, 'utf8') + suffix);
+    binding.expected_global_assets.find((item) => item.path === asset.path).sha256 = digest(await readFile(asset.path));
+  }
+  binding.expected_project_assets[0].sha256 = '0'.repeat(64);
+  await writeFile(workspace.bindingPath, JSON.stringify(binding, null, 2) + '\n');
+  for (const asset of record.managed_assets.filter((item) => item.scope === 'global')) asset.sha256 = digest(await readFile(asset.path));
+  await writeInstallationManifest(workspace.root, buildMultiAdapterManifest({ triadVersion: loaded.manifest.triad_version,
+    installedAt: loaded.manifest.installed_at, updatedAt: loaded.manifest.updated_at, adapters: loaded.manifest.adapters }));
+}
+
 try {
+  for (const adapter of ['codex', 'hermes']) {
+    const workspace = await makeWorkspace(adapter, adapter + '-entry-refresh', { activeHermesProfile: adapter === 'hermes' ? 'owner-profile' : null });
+    await staleOwnedEntry(workspace);
+    assert.equal(runPreflight(workspace).status, 2, 'stale owner binding blocks the native wrapper');
+    const secret = 'PRIVATE-FIXTURE-CREDENTIAL-DO-NOT-PRINT';
+    const privateFile = path.join(workspace.home, 'unrelated-credentials.txt');
+    await writeFile(privateFile, secret);
+    const args = ['entry', 'refresh', '--host', adapter, '--control', workspace.root];
+    const before = await snapshot(workspace.base);
+    const preview = runCli(args, workspace.root, workspace.env);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.ok(preview.stdout.includes(JSON.stringify(workspace.bindingPath)));
+    assert.ok(preview.stdout.includes(JSON.stringify(workspace.preflightPath)));
+    const state = /Expected state: ([a-f0-9]{64})/.exec(preview.stdout)?.[1];
+    assert.ok(state);
+    assert.deepEqual(await snapshot(workspace.base), before, 'preview cannot mutate local or global files');
+    for (const extra of [['--apply'], ['--apply', '--expected-state', '0'.repeat(64)]]) {
+      const denied = runCli([...args, ...extra], workspace.root, workspace.env);
+      assert.equal(denied.status, 2);
+      assert.deepEqual(await snapshot(workspace.base), before, 'automation fails closed without current explicit consent');
+      assert.doesNotMatch(denied.stdout + denied.stderr, new RegExp(secret));
+    }
+    const projectBefore = await snapshot(path.join(workspace.root, '.triad-runtime'));
+    const receiptBefore = await readFile(path.join(workspace.root, '.triad-plus/readiness.json'));
+    const applied = runCli([...args, '--apply', '--expected-state', state], workspace.root, workspace.env);
+    assert.equal(applied.status, 0, applied.stderr);
+    assert.match(applied.stdout, /Entry refreshed/);
+    assert.doesNotMatch(applied.stdout + applied.stderr, new RegExp(secret + '|READY:'));
+    assert.deepEqual(await snapshot(path.join(workspace.root, '.triad-runtime')), projectBefore);
+    assert.deepEqual(await readFile(path.join(workspace.root, '.triad-plus/readiness.json')), receiptBefore);
+    assert.equal(await readFile(privateFile, 'utf8'), secret);
+    assert.equal(runPreflight(workspace).status, 0, 'actual trusted native wrapper recovers after scoped refresh');
+    const currentPreview = runCli(args, workspace.root, workspace.env);
+    const currentState = /Expected state: ([a-f0-9]{64})/.exec(currentPreview.stdout)[1];
+    const current = await snapshot(workspace.base);
+    const unchanged = runCli([...args, '--apply', '--expected-state', currentState], workspace.root, workspace.env);
+    assert.equal(unchanged.status, 0, unchanged.stderr);
+    assert.deepEqual(await snapshot(workspace.base), current, 'current refresh is idempotent, including backups and manifest');
+    const bindingBefore = await readFile(workspace.bindingPath);
+    const manifestFile = path.join(workspace.root, '.triad-plus/installation.json');
+    const manifestBeforeCorruption = await readFile(manifestFile);
+    for (const body of ['{"secret":"' + secret, JSON.stringify({ ...JSON.parse(bindingBefore), workspace: workspace.base })]) {
+      await writeFile(workspace.bindingPath, body);
+      const manifest = JSON.parse(manifestBeforeCorruption);
+      const record = manifest.adapters.find((item) => item.id === adapter);
+      record.managed_assets.find((asset) => asset.path === workspace.bindingPath).sha256 = digest(Buffer.from(body));
+      await writeInstallationManifest(workspace.root, buildMultiAdapterManifest({ triadVersion: manifest.triad_version,
+        installedAt: manifest.installed_at, updatedAt: manifest.updated_at, adapters: manifest.adapters }));
+      const corrupt = await snapshot(workspace.base);
+      const rejected = runCli(args, workspace.root, workspace.env);
+      assert.equal(rejected.status, 2);
+      assert.doesNotMatch(rejected.stdout + rejected.stderr, new RegExp(secret));
+      assert.deepEqual(await snapshot(workspace.base), corrupt, 'malformed/foreign bindings cannot be refreshed even with recorded fixture hashes');
+    }
+    await writeFile(workspace.bindingPath, bindingBefore);
+    await writeFile(manifestFile, manifestBeforeCorruption);
+    const originalWrapper = await readFile(workspace.preflightPath);
+    await writeFile(workspace.preflightPath, secret);
+    const tampered = await snapshot(workspace.base);
+    const blocked = runCli(args, workspace.root, workspace.env);
+    assert.equal(blocked.status, 2);
+    assert.doesNotMatch(blocked.stdout + blocked.stderr, new RegExp(secret));
+    assert.deepEqual(await snapshot(workspace.base), tampered, 'modified global bytes are preserved');
+    await writeFile(workspace.preflightPath, originalWrapper);
+    await rm(workspace.preflightPath);
+    await symlink(privateFile, workspace.preflightPath);
+    const linked = await snapshot(workspace.base);
+    assert.equal(runCli(args, workspace.root, workspace.env).status, 2);
+    assert.deepEqual(await snapshot(workspace.base), linked, 'symlinked entries are preserved and never followed for refresh');
+    await rm(workspace.preflightPath);
+    await writeFile(workspace.preflightPath, originalWrapper);
+    if (adapter === 'hermes') {
+      const active = path.join(workspace.hermesHome, 'active_profile');
+      await writeFile(active, 'different-profile\n');
+      const changedProfile = await snapshot(workspace.base);
+      assert.equal(runCli([...args, '--apply', '--expected-state', currentState], workspace.root, workspace.env).status, 2);
+      assert.deepEqual(await snapshot(workspace.base), changedProfile, 'profile switch never retargets consent');
+      await writeFile(active, 'owner-profile\n');
+    }
+    const projectEntry = path.join(workspace.root, '.triad-runtime/triad-host-entry.mjs');
+    const projectBytes = await readFile(projectEntry);
+    await writeFile(projectEntry, secret);
+    assert.equal(runCli(args, workspace.root, workspace.env).status, 2, 'refresh cannot bless changed project code');
+    await writeFile(projectEntry, projectBytes);
+    await staleOwnedEntry(workspace);
+    await writeFile(path.join(path.dirname(workspace.bindingPath), 'another-workspace.json'), '{}');
+    const shared = await snapshot(workspace.base);
+    assert.equal(runCli(args, workspace.root, workspace.env).status, 2);
+    assert.deepEqual(await snapshot(workspace.base), shared, 'shared global files require coordinated owner review');
+    await rm(path.join(path.dirname(workspace.bindingPath), 'another-workspace.json'));
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+      const retryPreview = runCli(args, workspace.root, workspace.env);
+      const retryState = /Expected state: ([a-f0-9]{64})/.exec(retryPreview.stdout)[1];
+      const globalsBefore = await snapshot(workspace.adapter === 'codex' ? workspace.codexHome : workspace.hermesHome);
+      const manifestBefore = await readFile(path.join(workspace.root, '.triad-plus/installation.json'));
+      // A later target cannot be replaced: earlier global replacements must roll back.
+      await chmod(path.dirname(workspace.preflightPath), 0o500);
+      try {
+        assert.equal(runCli([...args, '--apply', '--expected-state', retryState], workspace.root, workspace.env).status, 2);
+      } finally { await chmod(path.dirname(workspace.preflightPath), 0o700); }
+      assert.deepEqual(await snapshot(workspace.adapter === 'codex' ? workspace.codexHome : workspace.hermesHome), globalsBefore);
+      assert.deepEqual(await readFile(path.join(workspace.root, '.triad-plus/installation.json')), manifestBefore);
+    }
+    // A supported legacy project upgrade leaves global bytes/binding untouched;
+    // the separately approved refresh must then recover the real trusted entry.
+    const loaded = await loadInstallationManifest(workspace.root);
+    const record = loaded.manifest.adapters.find((item) => item.id === adapter);
+    const oldProjectPath = path.join(workspace.root, '.triad-runtime/triad-host-entry.mjs');
+    await writeFile(oldProjectPath, '// Earlier project runtime\n' + await readFile(oldProjectPath, 'utf8'));
+    record.managed_assets.find((asset) => asset.path === '.triad-runtime/triad-host-entry.mjs').sha256 = digest(await readFile(oldProjectPath));
+    await writeInstallationManifest(workspace.root, buildInstallationManifest({ adapter, triadVersion: '1.22.2',
+      installedAt: record.installed_at, updatedAt: record.updated_at, scopes: record.scopes,
+      scopeStatus: record.scope_status, managedAssets: record.managed_assets, status: 'installed' }));
+    assert.equal(runCli(args, workspace.root, workspace.env).status, 2, 'old project version must be upgraded separately');
+    const upgraded = runCli(['upgrade', '--host', adapter, '--control', workspace.root, '--apply'], workspace.root, workspace.env);
+    assert.equal(upgraded.status, 0, upgraded.stderr);
+    assert.equal(runPreflight(workspace).status, 2, 'project upgrade does not silently rebind global entry');
+    const migrationPreview = runCli(args, workspace.root, workspace.env);
+    assert.equal(migrationPreview.status, 0, migrationPreview.stderr);
+    const migrationState = /Expected state: ([a-f0-9]{64})/.exec(migrationPreview.stdout)[1];
+    const migrated = runCli([...args, '--apply', '--expected-state', migrationState], workspace.root, workspace.env);
+    assert.equal(migrated.status, 0, migrated.stderr);
+    assert.equal(runPreflight(workspace).status, 0, 'legacy project upgrade plus separately consented refresh recovers native entry');
+  }
   const pending = await makeWorkspace('codex', 'pending-readiness', { confirm: false });
   const pendingBefore = await snapshot(pending.base);
   let pendingResult = runPreflight(pending, pending.root, {}, ['--json']);
@@ -367,7 +518,7 @@ try {
   const beforeBlockedUpgrade = await snapshot(codex.base);
   const blockedUpgrade = runCli(['upgrade', '--host', 'codex', '--control', codex.root, '--global'], codex.root, codex.env);
   assert.equal(blockedUpgrade.status, 2);
-  assert.match(blockedUpgrade.stderr, /Global Codex entry updates are available only through the interactive setup wizard/);
+  assert.match(blockedUpgrade.stderr, /Global Codex entry refresh requires exact-path consent/);
   assert.deepEqual(await snapshot(codex.base), beforeBlockedUpgrade, 'direct global upgrade cannot bypass exact-path consent');
 
   const invalidRoot = path.join(codex.base, 'wrong-cwd');
@@ -522,6 +673,33 @@ try {
   assert.match(profileChanged.stderr, /global entry is not recorded at/);
   await writeFile(marker, markerBytes);
   assert.deepEqual(await snapshot(hermes.base), hermesSnapshot, 'active-profile mismatch does not mutate files');
+
+  const hermesExplicit = await makeWorkspace('hermes', 'hermes-explicit-profile', {
+    activeHermesProfile: 'named-profile', explicitHermesHome: true,
+  });
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit)).status, 0,
+    'the installed skill command works with explicit HERMES_HOME');
+  await staleOwnedEntry(hermesExplicit);
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit)).status, 2,
+    'the documented named-profile command blocks a stale binding');
+  const refreshArgs = ['entry', 'refresh', '--host', 'hermes', '--control', hermesExplicit.root];
+  const wrongProfile = path.join(hermes.hermesHome, 'profiles', 'wrong-profile');
+  const beforeWrongProfile = await snapshot(hermesExplicit.base);
+  assert.equal(runCli(refreshArgs, hermesExplicit.root, { ...hermesExplicit.env, HERMES_HOME: wrongProfile }).status, 2,
+    'explicit refresh refuses a different HERMES_HOME profile');
+  assert.deepEqual(await snapshot(hermesExplicit.base), beforeWrongProfile);
+  const refreshPreview = runCli(refreshArgs, hermesExplicit.root, hermesExplicit.env);
+  assert.equal(refreshPreview.status, 0, refreshPreview.stderr);
+  const refreshState = /Expected state: ([a-f0-9]{64})/.exec(refreshPreview.stdout)[1];
+  assert.equal(runCli([...refreshArgs, '--apply', '--expected-state', refreshState], hermesExplicit.root, hermesExplicit.env).status, 0);
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit)).status, 0,
+    'consented refresh restores the exact documented named-profile preflight');
+  const foreignWorkspace = path.join(hermesExplicit.base, 'foreign-control');
+  await mkdir(foreignWorkspace);
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit, foreignWorkspace)).status, 2,
+    'documented wrapper refuses an unrelated Control Workspace');
+  assert.equal(runCli(['entry', 'refresh', '--host', 'hermes', '--control', foreignWorkspace], foreignWorkspace, hermesExplicit.env).status, 2,
+    'consented refresh refuses an unrelated Control Workspace');
 
   const unsafeMarker = path.join(hermes.hermesHome, 'active_profile.unsafe-target');
   await writeFile(unsafeMarker, 'team-profile\n');
