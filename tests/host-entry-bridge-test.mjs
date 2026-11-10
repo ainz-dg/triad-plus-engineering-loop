@@ -52,6 +52,14 @@ function runPreflight(workspace, cwd = workspace.root, extra = {}, args = []) {
   return run(process.execPath, [workspace.preflightPath, '--adapter', workspace.adapter, ...args], cwd, { ...workspace.env, ...extra });
 }
 
+async function runDocumentedHermesPreflight(workspace, cwd = workspace.root, env = workspace.env) {
+  const skillPath = path.join(env.HERMES_HOME, 'skills/triad/SKILL.md');
+  const skill = await readFile(skillPath, 'utf8');
+  const command = /^node "\$HOME\/.hermes\/triad-plus\/host-entry-preflight\.mjs" --adapter hermes --json$/m.exec(skill)?.[0];
+  assert.ok(command, 'installed Hermes skill documents the canonical wrapper invocation');
+  return run('/bin/sh', ['-c', command], cwd, env);
+}
+
 function git(cwd, args) {
   const result = run('git', ['-C', cwd, ...args], cwd, { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' });
   assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
@@ -101,7 +109,7 @@ async function makeRepo(root) {
   git(root, ['commit', '-m', 'temporary host-entry baseline']);
 }
 
-async function makeWorkspace(adapter, name, { activeHermesProfile = null, confirm = true } = {}) {
+async function makeWorkspace(adapter, name, { activeHermesProfile = null, explicitHermesHome = false, confirm = true } = {}) {
   const base = path.join(fixture, name);
   const root = path.join(base, 'control');
   const home = path.join(base, 'home');
@@ -110,7 +118,10 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null, confir
   await mkdir(root, { recursive: true });
   await mkdir(home, { recursive: true });
   await mkdir(codexHome, { recursive: true });
-  const env = { HOME: home, CODEX_HOME: codexHome, HERMES_HOME: null, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' };
+  const explicitHermesProfile = activeHermesProfile ? path.join(hermesHome, 'profiles', activeHermesProfile) : hermesHome;
+  const env = { HOME: home, CODEX_HOME: codexHome,
+    HERMES_HOME: adapter === 'hermes' && explicitHermesHome ? explicitHermesProfile : null,
+    GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' };
   const init = runCli(['init', '--host', adapter, '--control', root], root, env);
   assert.equal(init.status, 0, `${init.stdout}\n${init.stderr}`);
 
@@ -662,6 +673,33 @@ try {
   assert.match(profileChanged.stderr, /global entry is not recorded at/);
   await writeFile(marker, markerBytes);
   assert.deepEqual(await snapshot(hermes.base), hermesSnapshot, 'active-profile mismatch does not mutate files');
+
+  const hermesExplicit = await makeWorkspace('hermes', 'hermes-explicit-profile', {
+    activeHermesProfile: 'named-profile', explicitHermesHome: true,
+  });
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit)).status, 0,
+    'the installed skill command works with explicit HERMES_HOME');
+  await staleOwnedEntry(hermesExplicit);
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit)).status, 2,
+    'the documented named-profile command blocks a stale binding');
+  const refreshArgs = ['entry', 'refresh', '--host', 'hermes', '--control', hermesExplicit.root];
+  const wrongProfile = path.join(hermes.hermesHome, 'profiles', 'wrong-profile');
+  const beforeWrongProfile = await snapshot(hermesExplicit.base);
+  assert.equal(runCli(refreshArgs, hermesExplicit.root, { ...hermesExplicit.env, HERMES_HOME: wrongProfile }).status, 2,
+    'explicit refresh refuses a different HERMES_HOME profile');
+  assert.deepEqual(await snapshot(hermesExplicit.base), beforeWrongProfile);
+  const refreshPreview = runCli(refreshArgs, hermesExplicit.root, hermesExplicit.env);
+  assert.equal(refreshPreview.status, 0, refreshPreview.stderr);
+  const refreshState = /Expected state: ([a-f0-9]{64})/.exec(refreshPreview.stdout)[1];
+  assert.equal(runCli([...refreshArgs, '--apply', '--expected-state', refreshState], hermesExplicit.root, hermesExplicit.env).status, 0);
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit)).status, 0,
+    'consented refresh restores the exact documented named-profile preflight');
+  const foreignWorkspace = path.join(hermesExplicit.base, 'foreign-control');
+  await mkdir(foreignWorkspace);
+  assert.equal((await runDocumentedHermesPreflight(hermesExplicit, foreignWorkspace)).status, 2,
+    'documented wrapper refuses an unrelated Control Workspace');
+  assert.equal(runCli(['entry', 'refresh', '--host', 'hermes', '--control', foreignWorkspace], foreignWorkspace, hermesExplicit.env).status, 2,
+    'consented refresh refuses an unrelated Control Workspace');
 
   const unsafeMarker = path.join(hermes.hermesHome, 'active_profile.unsafe-target');
   await writeFile(unsafeMarker, 'team-profile\n');

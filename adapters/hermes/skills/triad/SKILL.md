@@ -9,16 +9,16 @@ for scoped approvals; never bypass it by executing changed local code. This
 remains a user-level entry, not a pre-LLM security boundary.
 
 When using a named Hermes profile, HERMES_HOME must identify that active
-profile, or invoke the wrapper beside the already-loaded global skill using
-its exact trusted profile path. If the host cannot expose that path, report
-the capability limit and request the owner terminal route; do not search
-profiles or infer an executable path from an untrusted local manifest.
+profile. The installed skill belongs to that profile, while its trusted
+preflight wrapper and workspace binding live at the canonical user path under
+`$HOME/.hermes`. Do not infer the wrapper path from HERMES_HOME, search other
+profiles or derive executable paths from an untrusted local manifest.
 
 Before planning, bootstrap, state changes or role delegation, run from the exact
 Control Workspace:
 
 ```bash
-node "${HERMES_HOME:-$HOME/.hermes}/triad-plus/host-entry-preflight.mjs" --adapter hermes --json
+node "$HOME/.hermes/triad-plus/host-entry-preflight.mjs" --adapter hermes --json
 ```
 
 Continue only when the JSON report says `ready: true`. This is a model-instructed,

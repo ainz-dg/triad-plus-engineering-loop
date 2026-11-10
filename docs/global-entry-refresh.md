@@ -15,8 +15,11 @@ npx triad-plus entry refresh --host codex --control /absolute/control-workspace 
 ```
 
 For Hermes substitute `--host hermes`; select the actual active profile before
-preview. Changing `HOME`, `CODEX_HOME`, `HERMES_HOME`, the active Hermes profile,
-installation ownership or project/global bytes can invalidate the request.
+preview. `HERMES_HOME` selects where Hermes stores/loads the native skill. The
+trusted preflight wrapper and binding use the canonical `$HOME/.hermes` path,
+including with named profiles. Changing `HOME`, `CODEX_HOME`, `HERMES_HOME`, the
+active Hermes profile, installation ownership or project/global bytes can
+invalidate the request.
 Do not search profiles or substitute a different workspace after approval.
 No terminal prompt is required: without `--apply` this command is read-only;
 automation with absent/stale `--expected-state` fails nonzero without writing.
