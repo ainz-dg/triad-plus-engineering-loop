@@ -89,13 +89,17 @@ async function readRegularFile(target, { root = null, label = target } = {}) {
 function parseArguments(argv) {
   let adapter = null;
   let workspace = null;
+  const forwarded = [];
+  const scoped = new Set(['--approve', '--expected-state', '--select', '--catalog', '--timeout', '--set-model', '--set-effort', '--review']);
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--adapter' && argv[index + 1]) adapter = argv[++index];
     else if (argv[index] === '--workspace' && argv[index + 1]) workspace = path.resolve(argv[++index]);
-    else throw new Error(`unsupported argument: ${argv[index]}`);
+    else if (argv[index] === '--json') forwarded.push('--json');
+    else if (scoped.has(argv[index]) && argv[index + 1] !== undefined && !argv[index + 1].startsWith('--')) forwarded.push(argv[index], argv[++index]);
+    else throw new Error('unsupported or incomplete preflight argument');
   }
   if (!SUPPORTED.has(adapter)) throw new Error('usage: host-entry-preflight.mjs --adapter <codex|hermes> [--workspace <exact-path>]');
-  return { adapter, workspace };
+  return { adapter, workspace, forwarded };
 }
 
 function assetList(value, label, { absolute = false } = {}) {
@@ -206,7 +210,7 @@ async function validateBinding({ adapter, workspace, bindingPath }) {
 }
 
 async function main() {
-  const { adapter, workspace: requestedWorkspace } = parseArguments(process.argv.slice(2));
+  const { adapter, workspace: requestedWorkspace, forwarded } = parseArguments(process.argv.slice(2));
   const current = path.resolve(process.cwd());
   const workspace = requestedWorkspace ?? current;
   if (workspace !== current) throw new Error('explicit workspace does not match the host current directory; reopen/restart the host from the bound workspace');
@@ -229,7 +233,7 @@ async function main() {
     const env = { ...process.env };
     delete env.NODE_OPTIONS;
     delete env.NODE_PATH;
-    const child = spawnSync(process.execPath, [snapshotEntry, '--adapter', adapter, '--workspace', workspace], {
+    const child = spawnSync(process.execPath, [snapshotEntry, '--adapter', adapter, '--workspace', workspace, '--onboarding', '--non-interactive', ...forwarded], {
       cwd: workspace,
       env,
       encoding: 'utf8',

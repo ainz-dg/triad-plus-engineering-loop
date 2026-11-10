@@ -509,22 +509,23 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
   const common = [
     rootLine,
     'Installation succeeded; adapter assets are installed, but project readiness was not checked.',
-    'Before a first loop: add root PRD.md and .loop/quality-gates.yaml; make an initial commit in each mapped repository, then create its mapped worktree.',
+    'Before a first loop: add root PRD.md; make an initial commit in each mapped repository, then create its mapped worktree. Confirm models, gate choices and prerequisites through guided preflight.',
+    `Guided readiness: npx triad-plus preflight --host ${adapter.id} --control . (confirmation required; no discovered commands executed).`,
     `Optional from this Control Workspace: npx triad-plus doctor --host ${adapter.id} --control . (host/install only; not readiness).`,
     'Inactive gate draft: .triad-plus/quality-gates.draft.json; inspect with npx triad-plus quality-gates --control . (no execution or activation).',
   ];
   let entry;
-  if (adapter.id === 'opencode') entry = 'After readiness — OpenCode: open this Control Workspace and run `/triad ./PRD.md`.';
-  else if (adapter.id === 'claude-code') entry = 'After readiness — Claude Code: open this Control Workspace and run `/triad ./PRD.md`.';
-  else if (adapter.id === 'copilot') entry = 'After readiness — GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.';
-  else if (adapter.id === 'antigravity') entry = 'After readiness — Antigravity: local assets are installed; native discovery still needs a host smoke test.';
+  if (adapter.id === 'opencode') entry = 'Entry with guided preflight — OpenCode: open this Control Workspace and run `/triad ./PRD.md`.';
+  else if (adapter.id === 'claude-code') entry = 'Entry with guided preflight — Claude Code: open this Control Workspace and run `/triad ./PRD.md`.';
+  else if (adapter.id === 'copilot') entry = 'Entry with guided preflight — GitHub Copilot: select the project-local triad-orchestrator agent in VS Code.';
+  else if (adapter.id === 'antigravity') entry = 'Entry with guided preflight — Antigravity: local assets are installed; native discovery still needs a host smoke test.';
   else if (adapter.id === 'codex') entry = globalEntryInstalled
-    ? 'After readiness — Codex: reopen it from this Control Workspace; the optional user-level $triad entry preflights the consent-bound workspace and runtime hashes.'
-    : 'After readiness — Codex: reopen it from this Control Workspace; project-local skill assets are installed, while optional user-level $triad was not selected.';
+    ? 'Entry with guided preflight — Codex: reopen it from this Control Workspace; the optional user-level $triad entry preflights the consent-bound workspace and runtime hashes.'
+    : 'Entry with guided preflight — Codex: reopen it from this Control Workspace; project-local skill assets are installed, while optional user-level $triad was not selected.';
   else if (adapter.id === 'hermes') entry = globalEntryInstalled
-    ? 'After readiness — Hermes: restart it from this Control Workspace; the optional user-level /triad entry preflights the consent-bound workspace and runtime hashes.'
-    : 'After readiness — Hermes: reopen it from this Control Workspace; project-local runtime is installed, while optional user-level /triad was not selected.';
-  else entry = `After readiness — native entry: ${adapter.entry ?? 'not declared'}.`;
+    ? 'Entry with guided preflight — Hermes: restart it from this Control Workspace; the optional user-level /triad entry preflights the consent-bound workspace and runtime hashes.'
+    : 'Entry with guided preflight — Hermes: reopen it from this Control Workspace; project-local runtime is installed, while optional user-level /triad was not selected.';
+  else entry = `Entry with guided preflight — native entry: ${adapter.entry ?? 'not declared'}.`;
   return [...common, entry, 'Quickstart: https://github.com/ainz-dg/triad-plus-engineering-loop/blob/main/docs/getting-started.md'];
 }
 

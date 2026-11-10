@@ -306,3 +306,13 @@ evaluation packets, report paths, or evidence directories manually.
 During a run the Orchestrator creates any Assignment Packet internally and
 passes its explicit product-worktree dispatch context to the delegated roles;
 there is no user-facing packet path to configure.
+
+## Guided first entry
+
+`npx triad-plus preflight --host <adapter> --control .` guides workspace
+readiness; `--non-interactive --json` fails closed without explicit consent.
+Native entries use the same contract and disclose post-LLM/capability limits.
+Model intent remains separate from unverified host identity and unapplied role
+overrides. See [universal readiness](universal-readiness.md) for copy/paste
+approval steps, per-repository catalogs, receipt guards and the existing global
+entry migration limitation. No partial onboarding release is implied.

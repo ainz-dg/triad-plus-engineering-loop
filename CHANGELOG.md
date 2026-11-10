@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add a common guided workspace preflight to the six native entry paths, with
+  explicit host-default consent, per-repository gate selection and persistent
+  confirmations. Automation without consent fails closed; dispatch/verifier
+  recheck current worktree/branch/source/catalog bindings. This does not verify
+  requested per-role models or complete the remaining native E2E/release gates.
+
 - Discover inactive npm quality-gate proposals per mapped repository/worktree
   during setup, preserving active catalogs. Add read-only inspection and
   structure-only lint, explicit draft refresh, source hashes and conservative

@@ -10,6 +10,7 @@ import { basename, dirname, join, parse, resolve, relative, sep } from 'node:pat
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { getAdapter, listAdapters, roleDefinitions, sharedSkillNames } from '../adapters/registry.mjs';
+import { parseReadinessArguments, readinessErrorMessage, runReadinessCommand } from '../runtime/lib/readiness.mjs';
 import { selectChecklist } from '../runtime/lib/interactive-tui.mjs';
 import { discoverQualityGates, GATE_DRAFT, readGateSource } from '../runtime/lib/gate-discovery.mjs';
 import { lintQualityGateSource } from '../runtime/lib/gates.mjs';
@@ -73,6 +74,8 @@ Usage:
   npx triad-plus --version
   npx triad-plus init --host <adapter-id> --control <path> [--global] [--team-config <path>] [--allow-product-repo]
   npx triad-plus doctor --host <adapter-id> --control <path> [--global] [--hook-config <path>]
+  npx triad-plus preflight --host <adapter-id> --control <path> [--non-interactive] [--json]
+  npx triad-plus preflight --host <adapter-id> --control <path> --approve <action-id> --expected-state <sha256> [--select <ids>|--catalog <relative-path>]
   npx triad-plus quality-gates --control <path> [--refresh --apply | --lint [--source <workspace-relative-catalog>]]
   npx triad-plus version --control <path>
   npx triad-plus upgrade --host <adapter-id> --control <path> [--global] [--apply]
@@ -2881,12 +2884,19 @@ async function interactiveInit() {
 
 try {
   const argv = process.argv.slice(2);
+  if (argv[0] === 'preflight' && argv.some((arg) => ['--help', '-h'].includes(arg))) usage(0);
   if (argv.length === 1 && ['--version', '-v'].includes(argv[0])) {
     process.stdout.write(`${packageVersion}\n`);
     process.exit(0);
   }
-  const options = parseArgs(argv);
-  if (options.command === 'init') await init(options);
+  const options = argv[0] === 'preflight' ? { command: 'preflight', ...parseReadinessArguments(argv.slice(1)) } : parseArgs(argv);
+  if (options.command === 'preflight') {
+    let result;
+    try { result = await runReadinessCommand({ ...options, cwd: options.cwd ?? process.cwd(), requireGlobalEntry: false, expectedVersion: packageVersion }); }
+    catch (error) { throw Object.assign(new Error(readinessErrorMessage(error)), { code: 'READINESS_BLOCKED' }); }
+    process.exitCode = result.ready ? 0 : 2;
+  }
+  else if (options.command === 'init') await init(options);
   else if (options.command === 'quality-gates') await qualityGatesCommand(options);
   else if (options.command === 'adapter') await adapterCommand(options);
   else if (options.command === 'doctor') await doctor(options);

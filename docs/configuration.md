@@ -108,6 +108,16 @@ skill/wrapper installation; any remediation of those files requires an explicit
 path preview and consent. The model configuration skill records requests; it does not claim that
 `upgrade --apply` applies the requested model.
 
+## Guided readiness and explicit consent
+
+Run `npx triad-plus preflight --host <adapter> --control .` for one-at-a-time
+correction and confirmation. `--non-interactive --json` returns actionable
+failures without granting consent. Native entries use the same checks, with
+explicit host capability limits. Confirmed catalogs remain per repository and
+are independently checked before dispatch/verifier execution. See
+[universal readiness](universal-readiness.md) for receipts, current-state-bound
+approvals, model limitations, automation and upgrade constraints.
+
 ## Inactive quality-gate proposals
 
 Setup also prepares an inactive `.triad-plus/quality-gates.draft.json` from

@@ -71,11 +71,12 @@ catalog.
 ## Review, execution and subsequent onboarding
 
 An owner must review the manifest and prerequisites and select, edit or reject
-candidates before constructing an active per-repository catalog. There is no
-automatic activation command in this increment. The shared first-entry guided
-confirmation/repair flow and persisted readiness receipts are still pending;
-this draft is their input, not a replacement for those acceptance criteria.
-Existing manual active-catalog configuration remains available.
+candidates before constructing an active per-repository catalog. Discovery/inspection never activates a command. The separate
+[guided preflight](universal-readiness.md) re-discovers current sources and
+requires explicit owner consent before creating/binding a per-repository
+catalog. A saved draft is not evidence of approval. Manual active-catalog
+configuration remains available, but newly onboarded assignments must bind the
+exact owner-approved path/hash and current worktree/branch/source state.
 
 Lint accepts the existing JSON / list-of-maps YAML contract, rejects missing,
 duplicate or placeholder commands, malformed fields, unsupported YAML blocks
