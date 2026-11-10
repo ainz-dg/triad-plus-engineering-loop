@@ -900,6 +900,11 @@ function createRecoveryCliFixture(root) {
     appendFileSync(process.env.COMMAND_LOG, JSON.stringify({ bin: 'gh', args }) + '\\n');
     if (args[0] !== 'api' || args[1] !== '--method' || args[2] !== 'GET') process.exit(90);
     const path = args.at(-1);
+    if (s.ghFailure && path.endsWith(s.ghFailure.path)) {
+      if (s.ghFailure.stdout) process.stdout.write(s.ghFailure.stdout);
+      if (s.ghFailure.stderr) process.stderr.write(s.ghFailure.stderr);
+      process.exit(s.ghFailure.status);
+    }
     let value;
     if (path.endsWith('/actions/runs/12345')) value = s.run;
     else if (path.endsWith('/releases/tags/v1.22.3')) value = s.release;
@@ -1007,6 +1012,75 @@ test('invalid recovery dispatch contexts fail explicitly before any external com
       assert.equal(rejected.status, 1, JSON.stringify(env) + ': ' + rejected.stdout + rejected.stderr);
       assert.match(rejected.stdout, /BLOCKED\/MISMATCH: Recovery requires owner dispatch on the canonical repository main branch/);
       assert.deepEqual(fixture.commands(), [], 'Invalid context must fail before GitHub, git, or npm access');
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('recovery diagnoses the first failed GET and never prints raw response diagnostics', () => {
+  const paths = [
+    'actions/runs/12345',
+    'releases/tags/v1.22.3',
+    'actions/runs/12345/attempts/1/jobs?per_page=100',
+    'actions/runs/12345/artifacts?per_page=100',
+    'actions/jobs/1/logs',
+    'actions/jobs/2/logs',
+    'actions/artifacts/987/zip',
+    'releases/assets/11',
+    'releases/assets/12',
+  ];
+  for (const [index, path] of paths.entries()) {
+    const root = mkdtempSync(join(tmpdir(), 'triad-recovery-get-failure-'));
+    try {
+      const fixture = createRecoveryCliFixture(root);
+      fixture.state.release.assets = [
+        { id: 11, name: fixture.state.name, digest: 'sha256:' + fixture.state.expected.archiveSha256 },
+        { id: 12, name: fixture.state.name + '.sha256', digest: 'sha256:' + fixture.state.expected.sidecarSha256 },
+      ];
+      fixture.state.ghFailure = { path, status: 1,
+        stdout: '{"private":"response-body-sentinel"}',
+        stderr: 'Authorization: Bearer token-sentinel\nhttps://secret.invalid/file?signature=signed-url-sentinel\n'
+          + 'gh: Resource not accessible by integration (HTTP 403)\n',
+      };
+      fixture.save();
+      const rejected = fixture.run();
+      const output = rejected.stdout + rejected.stderr;
+      assert.equal(rejected.status, 1);
+      assert.ok(output.includes('BLOCKED/MISMATCH: Read-only gh GET /repos/ainz-dg/triad-plus-engineering-loop/' + path + ' failed'));
+      assert.match(output, /exit=1, http_status=403, http_class=4xx, error=nonzero-exit/);
+      assert.doesNotMatch(output, /token-sentinel|signed-url-sentinel|response-body-sentinel|Authorization|secret\.invalid/);
+      assert.doesNotMatch(output, /VERIFIED/);
+      const calls = fixture.commands().filter(({ bin }) => bin === 'gh');
+      assert.equal(calls.length, index + 1, 'Failure must stop at the first failing GET');
+      assert.equal(calls.at(-1).args.at(-1), 'repos/ainz-dg/triad-plus-engineering-loop/' + path);
+      assert.ok(calls.every(({ args }) => args[2] === 'GET'));
+      assert.equal(fixture.commands().filter(({ bin }) => bin === 'npm').length, 0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test('recovery diagnostics distinguish gh HTTP classes, unknown errors, and malformed JSON without exposing bodies', () => {
+  const root = mkdtempSync(join(tmpdir(), 'triad-recovery-get-status-'));
+  try {
+    const fixture = createRecoveryCliFixture(root);
+    for (const [status, stderr, expected] of [
+      [1, 'gh: HTTP 404: hidden-response-sentinel (https://secret.invalid)\n', /http_status=404, http_class=4xx/],
+      [1, 'gh: hidden-response-sentinel (HTTP 429)\n', /http_status=429, http_class=4xx/],
+      [1, 'gh: hidden-response-sentinel (HTTP 503)\n', /http_status=503, http_class=5xx/],
+      [4, 'no HTTP status hidden-response-sentinel', /exit=4, http_status=unknown, http_class=unknown/],
+      [0, '', /returned invalid JSON/],
+    ]) {
+      fixture.state.ghFailure = { path: 'actions/runs/12345', status, stderr,
+        stdout: 'malformed-json-with-hidden-response-sentinel',
+      };
+      fixture.save();
+      const rejected = fixture.run();
+      const output = rejected.stdout + rejected.stderr;
+      assert.equal(rejected.status, 1);
+      assert.match(output, /BLOCKED\/MISMATCH: Read-only gh GET \/repos\/ainz-dg\/triad-plus-engineering-loop\/actions\/runs\/12345/);
+      assert.match(output, expected);
+      assert.doesNotMatch(output, /hidden-response-sentinel|secret\.invalid/);
+      assert.doesNotMatch(output, /VERIFIED/);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

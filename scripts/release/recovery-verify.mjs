@@ -129,13 +129,44 @@ export function verifyRecoveryBytes({ archive, sidecar, version, expected }) {
   return { archiveSha256, sidecarSha256: hash(sidecar), integrity, shasum };
 }
 
-function command(bin, args, binary = false) {
+function githubReadLabel(path) {
+  // Never echo arbitrary arguments, URLs, response bodies, or query values.
+  const known = /^(?:actions\/runs\/[1-9]\d*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?|actions\/jobs\/[1-9]\d*\/logs|actions\/artifacts\/[1-9]\d*\/zip|releases\/tags\/v\d+\.\d+\.\d+|releases\/assets\/[1-9]\d*)$/;
+  return 'GET /repos/' + REPOSITORY + '/' + (known.test(path) ? path : '[unrecognized-endpoint]');
+}
+
+function githubReadFailure(result, label) {
+  // Extract only a numeric status from gh's standard error formats. Discard all text.
+  const stderr = String(result.stderr || '');
+  const http = stderr.match(/^gh: HTTP ([1-5]\d{2})(?::|$)/m)?.[1]
+    || stderr.match(/^gh: [^\r\n]*\(HTTP ([1-5]\d{2})\)\s*$/m)?.[1];
+  const exit = Number.isInteger(result.status) ? result.status : 'none';
+  const code = result.error?.code;
+  const error = ['ENOENT', 'EACCES', 'ETIMEDOUT', 'ENOBUFS'].includes(code)
+    ? code : result.error ? 'spawn-error' : result.signal ? 'signal' : 'nonzero-exit';
+  return 'Read-only gh ' + label + ' failed (exit=' + exit + ', http_status=' + (http || 'unknown')
+    + ', http_class=' + (http ? http[0] + 'xx' : 'unknown') + ', error=' + error
+    + '); original evidence unavailable.';
+}
+
+function command(bin, args, binary = false, readLabel) {
   const result = spawnSync(bin, args, { encoding: binary ? undefined : 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 60_000 });
-  if (result.error || result.status !== 0) fail('Read-only ' + bin + ' command failed; original evidence unavailable.');
+  if (result.error || result.status !== 0) {
+    fail(readLabel ? githubReadFailure(result, readLabel) : 'Read-only ' + bin + ' command failed; original evidence unavailable.');
+  }
   return result.stdout;
 }
-const api = (path, binary = false) => command('gh', ['api', '--method', 'GET', 'repos/' + REPOSITORY + '/' + path], binary);
-const jsonApi = (path) => JSON.parse(api(path));
+const api = (path, binary = false, acceptBinary = false) => {
+  const label = githubReadLabel(path);
+  console.log('Recovery evidence: ' + label);
+  return command('gh', ['api', '--method', 'GET', ...(acceptBinary ? ['-H', 'Accept: application/octet-stream'] : []),
+    'repos/' + REPOSITORY + '/' + path], binary, label);
+};
+const jsonApi = (path) => {
+  const response = api(path);
+  try { return JSON.parse(response); }
+  catch { fail('Read-only gh ' + githubReadLabel(path) + ' returned invalid JSON; original evidence unavailable.'); }
+};
 
 function summary(message) {
   console.log(message);
@@ -182,7 +213,7 @@ export async function verifyRecovery() {
   // Verify every existing asset by bytes as well as by the GitHub API digest.
   for (const asset of release.assets) {
     if (!Number.isSafeInteger(asset.id)) fail('Invalid Release asset identity.');
-    const bytes = command('gh', ['api', '--method', 'GET', '-H', 'Accept: application/octet-stream', 'repos/' + REPOSITORY + '/releases/assets/' + asset.id], true);
+    const bytes = api('releases/assets/' + asset.id, true, true);
     if (!bytes.equals(asset.name === name ? archive : sidecar)) fail('Downloaded Release asset bytes mismatch.');
   }
   await waitForPublishedRegistry({ expectedVersion: input.version, expected: metadata,
