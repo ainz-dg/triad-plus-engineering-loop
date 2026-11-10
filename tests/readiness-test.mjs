@@ -82,6 +82,35 @@ try {
     await assert.rejects(() => resolveAssignmentContext({ ...assignment, gates_path: '.loop/quality-gates.yaml' }, { projectRoot: workspace.control }), /exact per-repository/);
     const succeeded = run(process.execPath, [cli, 'preflight', '--host', host, '--control', workspace.control, '--non-interactive'], workspace.control);
     assert.equal(succeeded.status, 0, succeeded.stderr);
+    const approvedCatalogBytes = await readFile(path.join(workspace.control, catalog.gates_path), 'utf8');
+    // Native entry instructions are post-LLM. The independent resolver must
+    // enforce global prerequisites even when repository gate consent is intact.
+    for (const change of ['missing-consent', 'changed-prd', 'missing-prd', 'empty-prd']) {
+      const receiptPath = path.join(workspace.control, READINESS_RECEIPT);
+      const beforeChange = JSON.parse(await readFile(receiptPath, 'utf8'));
+      if (change === 'missing-consent') {
+        delete beforeChange.prerequisites;
+        await writeFile(receiptPath, JSON.stringify(beforeChange));
+      } else if (change === 'missing-prd') await rm(path.join(workspace.control, 'PRD.md'));
+      else await writeFile(path.join(workspace.control, 'PRD.md'), change === 'empty-prd' ? ' \n' : '# Changed owner requirements\n');
+      let blocked = await inspectReadiness(workspace);
+      assert.equal(blocked.ready, false, change);
+      assert.ok(blocked.actions.some((action) => action.id === 'prerequisites'), change);
+      await assert.rejects(() => resolveAssignmentContext(assignment, { projectRoot: workspace.control }), /prerequisite|PRD/i, change);
+      await assert.rejects(() => validateReadinessAssignment({ projectRoot: workspace.control, assignment, worktree: assignment.worktree, repository: 'repo-0' }), /prerequisite|PRD/i, change);
+      if (change === 'missing-prd' || change === 'empty-prd') {
+        assert.ok(blocked.actions.some((action) => action.id === 'prd'));
+        await assert.rejects(() => approveReadiness({ ...workspace, approve: 'prerequisites', expectedState: blocked.state_sha256 }), /first confirmable/);
+        await writeFile(path.join(workspace.control, 'PRD.md'), '# Owner-restored requirements: ' + change + '\n');
+        blocked = await inspectReadiness(workspace);
+      }
+      const recovered = await approveReadiness({ ...workspace, approve: 'prerequisites', expectedState: blocked.state_sha256 });
+      assert.equal(recovered.ready, true, change);
+      assert.deepEqual(JSON.parse(await readFile(receiptPath, 'utf8')).repositories, beforeChange.repositories,
+        'reconfirming prerequisites must preserve per-repository catalog consent');
+      await resolveAssignmentContext(assignment, { projectRoot: workspace.control });
+      assert.equal(await readFile(path.join(workspace.control, catalog.gates_path), 'utf8'), approvedCatalogBytes);
+    }
     await absent(marker);
   }
 
@@ -97,6 +126,16 @@ try {
   const repo = multiple.mappings[0];
   const assignment = { worktree: repo.worktree, repository_id: repo.id, expected_branch: repo.project_branch,
     gates_path: ready.catalogs[0].gates_path, expected_gates_sha256: ready.catalogs[0].expected_gates_sha256 };
+  await resolveAssignmentContext(assignment, { projectRoot: multiple.control });
+  const otherPackagePath = path.join(multiple.mappings[1].worktree, 'package.json');
+  const otherPackageBytes = await readFile(otherPackagePath, 'utf8');
+  await writeFile(otherPackagePath, JSON.stringify({ scripts: { test: 'node --test' } }));
+  assert.equal((await inspectReadiness(multiple)).ready, false);
+  await assert.rejects(() => resolveAssignmentContext(assignment, { projectRoot: multiple.control }), /prerequisite/i,
+    'global prerequisite consent binds other mapped repositories, not only the assigned one');
+  await writeFile(otherPackagePath, otherPackageBytes);
+  assert.equal((await inspectReadiness(multiple)).ready, true);
+  await resolveAssignmentContext(assignment, { projectRoot: multiple.control });
   const packagePath = path.join(repo.worktree, 'package.json');
   const original = await readFile(packagePath, 'utf8');
   await writeFile(packagePath, JSON.stringify({ scripts: { test: 'node --test' } }));

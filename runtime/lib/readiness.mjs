@@ -88,6 +88,10 @@ function repositoryFingerprint(context, source) {
     common: context.gitCommon, base: context.base_branch, branch: context.project_branch, source: source.fingerprint });
 }
 
+function prerequisitesFingerprint(prd, repositories) {
+  return digest({ prd: prd.sha256, repositories, policy: 'prerequisites-v1' });
+}
+
 async function catalogAt(root, relative) {
   const target = await workspaceTarget(root, relative);
   const source = await readGateSource(target);
@@ -220,8 +224,8 @@ async function evaluate({ adapter, cwd = process.cwd(), requireGlobalEntry = fal
       review: 'Review the commands locally in this catalog; bodies are not emitted as agent instructions. Approval binds these exact bytes.',
     } : { path: 'unavailable', review: 'Manual catalog is unsafe, missing or invalid; no approval is possible.' };
   }
-  internal.prerequisitesFingerprint = digest({ prd: prd.sha256,
-    repositories: [...internal.repositories.values()].map(({ fingerprint }) => fingerprint), policy: 'prerequisites-v1' });
+  internal.prerequisitesFingerprint = prerequisitesFingerprint(prd,
+    [...internal.repositories.values()].map(({ fingerprint }) => fingerprint));
   if (receipt.prerequisites?.fingerprint !== internal.prerequisitesFingerprint) {
     report.actions.push(finding('prerequisites', 'Confirm the PRD, mapped worktrees/branches and reviewed tool/dependency prerequisites. Host credentials/effective model identity and command safety remain unverified.', 'fixable', 'confirm-prerequisites'));
   }
@@ -332,7 +336,9 @@ export async function validateReadinessAssignment({ projectRoot, assignment, wor
   const problems = [];
   const project = await readGateSource(path.join(root, 'project.yaml'));
   if (project.status !== 'read') fail('Current project mapping is missing or unsafe.');
-  const contexts = await checkDeclaredWorkspaces(root, problems, { strict: true, repositoryId: repository });
+  // Prerequisite consent is global: revalidate every mapped repository, even
+  // when the assignment executes gates in just one worktree.
+  const contexts = await checkDeclaredWorkspaces(root, problems, { strict: true });
   const context = contexts.find((item) => item.id === repository);
   if (problems.length || !context || context.worktreeRoot !== worktree) fail('Current repository/worktree/branch mapping is not approved.');
   const snapshot = await gateSourceSnapshot(worktree);
@@ -340,6 +346,17 @@ export async function validateReadinessAssignment({ projectRoot, assignment, wor
   if (assignment.gates_path !== record.catalog || assignment.expected_gates_sha256 !== record.catalog_sha256) fail('Assignment must bind the exact per-repository owner-approved catalog and SHA-256.');
   const catalog = await catalogAt(root, record.catalog);
   if (!catalog?.valid || catalog.sha256 !== record.catalog_sha256) fail('Owner-approved catalog bytes changed.');
+  const prd = await readGateSource(path.join(root, 'PRD.md'));
+  if (prd.status !== 'read' || !prd.text.trim()) fail('Current root PRD is missing, empty or unsafe; prerequisite consent is invalid.');
+  const fingerprints = [];
+  for (const mapped of contexts) {
+    const current = mapped.id === repository ? snapshot : await gateSourceSnapshot(mapped.worktreeRoot);
+    if (!current.valid) fail('Current repository sources are unsafe; prerequisite consent is invalid.');
+    fingerprints.push(repositoryFingerprint(mapped, current));
+  }
+  if (receipt.prerequisites?.fingerprint !== prerequisitesFingerprint(prd, fingerprints)) {
+    fail('Owner prerequisite consent is missing or stale; inspect readiness and explicitly reconfirm before dispatch.');
+  }
 }
 
 export function parseReadinessArguments(argv) {

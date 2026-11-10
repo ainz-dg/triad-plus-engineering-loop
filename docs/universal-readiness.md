@@ -124,6 +124,15 @@ or Reviewer verdict cannot substitute for that binding. Missing/deleted consent
 blocks newly installed workspaces. Legacy standalone verifier fixtures without
 an installed onboarding runtime retain their existing manual-catalog contract.
 
+The independent guard also requires current global prerequisite consent: a safe,
+non-empty root PRD with the confirmed hash and the current fingerprints of all
+mapped repositories. Removing that confirmation, changing the PRD or changing
+another mapped repository blocks new dispatch even if this assignment's catalog
+consent is unchanged. Inspect readiness and explicitly reconfirm prerequisites
+after review; this does not rewrite existing per-repository catalog approvals.
+This global check does not attest per-host model/default consent or effective
+model routing; those remain the native entry preflight's disclosed boundary.
+
 Do not combine repositories into a catalog executed in one worktree. Do not
 overwrite approved catalogs during bootstrap or mutate an existing assignment
 to adopt a new approval. Gate/source/branch changes require fresh consent and
