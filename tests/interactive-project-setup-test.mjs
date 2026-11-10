@@ -298,17 +298,17 @@ try {
   assert.match(projectLaunchHint({ id: 'codex' }, container).join('\n'), /optional user-level \$triad was not selected/);
   const launchHints = projectLaunchHint({ id: 'opencode', label: 'OpenCode' }, container).join('\n');
   assert.match(launchHints, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
-  assert.match(launchHints, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
+  assert.match(launchHints, /Before a first loop: add root PRD\.md;/);
   assert.match(launchHints, /make an initial commit in each mapped repository, then create its mapped worktree/);
   assert.match(launchHints, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \. \(host\/install only; not readiness\)/);
-  assert.match(launchHints, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
+  assert.match(launchHints, /Entry with guided preflight — OpenCode: .*`\/triad \.\/PRD\.md`/);
   assert.match(launchHints, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
   assert.doesNotMatch(launchHints, /PRD location or concise project request/);
   for (const id of ['opencode', 'claude-code', 'codex', 'copilot', 'antigravity', 'hermes']) {
     const hints = projectLaunchHint({ id, label: id }, container, { globalEntryInstalled: true }).join('\n');
     assert.match(hints, /project readiness was not checked/, `${id} does not imply readiness`);
     assert.match(hints, new RegExp(`doctor --host ${id} --control \\.`, 'u'), `${id} uses its selected adapter for optional diagnostics`);
-    assert.match(hints, /After readiness —/, `${id} entry is staged after prerequisites`);
+    assert.match(hints, /Entry with guided preflight —/, `${id} entry is staged after prerequisites`);
   }
   const teamPreview = formatSetupPreview({
     root: emptyRoot,

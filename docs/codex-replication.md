@@ -11,8 +11,10 @@ Open the Control Workspace and run `$triad <absolute-prd-path>`. The prompt
 checks that exact workspace before doing Triad work, but runs after the host
 model has been invoked; it is not a pre-LLM security boundary.
 
-Codex uses role profiles for the Orchestrator, Developer, Reviewer, and optional
-Evaluator+. Verification uses explicit dispatch by default, even when a complete,
+Codex can use native role profiles, but current generated assets do not apply
+or verify requested per-role model overrides. The shared preflight requires
+explicit host-default consent and per-repository gate approvals; see
+[guided readiness](universal-readiness.md) and its global migration limits. Verification uses explicit dispatch by default, even when a complete,
 version-compatible async `SubagentStop` hook is installed. This keeps the normal
 unattended path on the directly auditable verifier route.
 

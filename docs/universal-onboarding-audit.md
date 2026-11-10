@@ -15,7 +15,7 @@ it is not a claim that all hosts already have a guided readiness flow.
 | Hermes | `/triad`, consent-installed active-profile skill and binding | Same trusted, post-LLM wrapper model as Codex | Conversation and explicit blocked-path remediation | Active profile determines global path; local CLI availability is not a proven native session |
 
 Source evidence: [adapter registry](../adapters/registry.mjs), each adapter's
-`runtime.json` and entry assets, [host validator](../runtime/triad-host-entry.mjs),
+`runtime.json` and entry assets, [host validator](../runtime/lib/host-entry-validation.mjs),
 [trusted wrapper](../runtime/triad-host-entry-preflight.mjs),
 [Codex hook](../integrations/codex/hooks.json),
 [Claude hook](../integrations/claude-code/hooks.json), and
@@ -101,3 +101,20 @@ Host references checked during the audit:
 [Copilot custom agent fields](https://docs.github.com/en/copilot/reference/custom-agents-configuration).
 The installed assets and explicit capability limits take precedence over
 assuming all harnesses expose an identical prompt, catalog, or pre-LLM hook.
+
+## Third increment: shared guided workspace readiness
+
+The six native entry/fallback assets now invoke the same readiness protocol
+before loop planning/delegation. Terminal preflight supports one-at-a-time
+correction, explicit current-state-bound approval and non-interactive failure.
+Receipts preserve host-default consent and per-repository gate/prerequisite
+approvals; unchanged confirmations need no repeated questions. The shared
+assignment resolver independently rechecks the approved catalog/source and
+branch/worktree, including on verifier execution. Codex/Hermes approvals retain
+the owner-bound trusted snapshot route.
+
+These remain post-LLM/model-instructed entry checks, not native pre-LLM hooks.
+Host defaults do not verify/apply requested role models. See
+[universal readiness](universal-readiness.md) for exact scope, controlled/PTY
+coverage, global-entry upgrade constraints and the still-open native model/E2E
+and release acceptance criteria.

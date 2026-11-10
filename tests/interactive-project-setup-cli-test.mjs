@@ -42,51 +42,57 @@ function terminalInput(cwd, actions, env) {
     return { status: 77, stdout: '', stderr: 'No supported local pseudo-terminal runner.' };
   }
   const pythonPty = [
-    'import fcntl, os, pty, select, signal, struct, sys, termios, time',
-    'argv = sys.argv[1:]',
-    'pid, fd = pty.fork()',
-    'if pid == 0: os.execvpe(argv[0], argv, os.environ)',
-    'rows = int(os.environ.get("TRIAD_TEST_PTY_ROWS", "48"))',
-    'cols = int(os.environ.get("TRIAD_TEST_PTY_COLS", "220"))',
-    'fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))',
-    'payload = sys.stdin.buffer.read().splitlines(keepends=True)',
-    'output = bytearray()',
-    'deadline = time.monotonic() + 20',
-    'def drain(seconds):',
-    '  end = time.monotonic() + seconds',
-    '  while time.monotonic() < end:',
-    '    ready, _, _ = select.select([fd], [], [], min(0.05, max(0, end - time.monotonic())))',
-    '    if ready:',
-    '      try: output.extend(os.read(fd, 65536))',
-    '      except OSError: return',
-    'injected = False',
-    'inject = os.environ.get("TRIAD_TEST_INJECT_CONFLICT")',
-    'status = None',
-    'keys = {b"up": b"\\x1b[A", b"down": b"\\x1b[B", b"space": b" ", b"enter": b"\\r", b"escape": b"\\x1b", b"ctrl-c": b"\\x03"}',
-    'for token in payload:',
-    '  if time.monotonic() >= deadline: break',
-    '  drain(0.15)',
-    '  token = token.rstrip(b"\\r\\n")',
-    '  if token.startswith(b"L"): data = token[1:] + b"\\r"',
-    '  elif token.startswith(b"K"): data = keys[token[1:]]',
-    '  else: raise ValueError("PTY input actions must start with L or K")',
-    '  try: os.write(fd, data)',
-    '  except OSError: break',
-    '  drain(0.15)',
-    '  if inject and not injected and b"Type install to apply this exact plan" in output:',
-    '    os.makedirs(os.path.dirname(inject), exist_ok=True)',
-    '    with open(inject, "w", encoding="utf8") as conflict: conflict.write("introduced after preview\\n")',
-    '    injected = True',
-    'while time.monotonic() < deadline:',
-    '  drain(0.1)',
-    '  done, status = os.waitpid(pid, os.WNOHANG)',
-    '  if done: break',
-    'if status is None: os.kill(pid, signal.SIGKILL); _, status = os.waitpid(pid, 0)',
-    'sys.stdout.buffer.write(output)',
-    'sys.exit(os.waitstatus_to_exitcode(status))',
+    "import fcntl, os, pty, re, select, signal, struct, sys, termios, time",
+    "argv = sys.argv[1:]",
+    "pid, fd = pty.fork()",
+    "if pid == 0: os.execvpe(argv[0], argv, os.environ)",
+    "rows = int(os.environ.get(\"TRIAD_TEST_PTY_ROWS\", \"48\"))",
+    "cols = int(os.environ.get(\"TRIAD_TEST_PTY_COLS\", \"220\"))",
+    "fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack(\"HHHH\", rows, cols, 0, 0))",
+    "payload = sys.stdin.buffer.read().splitlines()",
+    "output = bytearray(); boundary = 0; done = 0; status = None",
+    "last_output = time.monotonic(); deadline = time.monotonic() + 30",
+    "injected = False; inject = os.environ.get(\"TRIAD_TEST_INJECT_CONFLICT\")",
+    "keys = {b\"up\": b\"\\x1b[A\", b\"down\": b\"\\x1b[B\", b\"space\": b\" \", b\"enter\": b\"\\r\", b\"escape\": b\"\\x1b\", b\"ctrl-c\": b\"\\x03\"}",
+    "def pump():",
+    " global done, status, last_output, injected",
+    " ready, _, _ = select.select([fd], [], [], 0.03)",
+    " if ready:",
+    "  try:",
+    "   chunk = os.read(fd, 65536); output.extend(chunk)",
+    "   if chunk: last_output = time.monotonic()",
+    "  except OSError: pass",
+    " if inject and not injected and b\"Type install to apply this exact plan\" in output:",
+    "  os.makedirs(os.path.dirname(inject), exist_ok=True)",
+    "  with open(inject, \"w\", encoding=\"utf8\") as conflict: conflict.write(\"introduced after preview\\n\")",
+    "  injected = True",
+    " if not done: done, status = os.waitpid(pid, os.WNOHANG)",
+    "for token in payload:",
+    " token = token.rstrip(b\"\\r\\n\")",
+    " while time.monotonic() < deadline and not done:",
+    "  pump()",
+    "  raw_fresh = bytes(output[boundary:])",
+    "  inline_checklist = b\"\\r\" in raw_fresh and b\"\\n\" not in raw_fresh",
+    "  fresh = re.sub(rb\"\\x1b\\[[0-?]*[ -/]*[@-~]\", b\"\", bytes(output[boundary:])).replace(b\"\\r\", b\"\")",
+    "  prompt = re.search(rb\":\\s*$\", fresh) is not None",
+    "  checklist = b\"Esc \" in fresh or bytes.fromhex(\"e28691e28693\") in fresh",
+    "  if time.monotonic() - last_output > 0.05 and (prompt or (token.startswith(b\"K\") and (checklist or inline_checklist))): break",
+    " if done or time.monotonic() >= deadline: break",
+    " boundary = len(output)",
+    " if token.startswith(b\"L\"): data = token[1:] + b\"\\r\"",
+    " elif token.startswith(b\"K\"): data = keys[token[1:]]",
+    " else: raise ValueError(\"PTY actions must start with L or K\")",
+    " try: os.write(fd, data)",
+    " except OSError: break",
+    "while not done and time.monotonic() < deadline: pump()",
+    "if not done:",
+    " os.kill(pid, signal.SIGKILL); _, status = os.waitpid(pid, 0)",
+    " sys.stdout.buffer.write(output); sys.exit(124)",
+    "sys.stdout.buffer.write(output)",
+    "sys.exit(os.waitstatus_to_exitcode(status))",
   ].join('\n');
   return spawnSync('python3', ['-c', pythonPty, process.execPath, cli], {
-    cwd, env: { ...safeParentEnvironment(), ...env }, input, encoding: 'utf8', timeout: 25_000,
+    cwd, env: { ...safeParentEnvironment(), ...env }, input, encoding: 'utf8', timeout: 35_000,
     maxBuffer: 4 * 1024 * 1024,
   });
 }
@@ -305,6 +311,11 @@ try {
       assert.equal(executable.status, 0, `the local ${command} fixture executable is available`);
       await symlink(executable.stdout.trim(), path.join(hostlessPath, command));
     }
+    // Apple's /usr/bin/git creates xcrun_db even for --version. Establish the
+    // system cache baseline before asserting that setup adds no global files.
+    const gitCacheWarmup = run('git', ['--version'], root, { TMPDIR: isolatedTmp });
+    assert.equal(gitCacheWarmup.status, 0, gitCacheWarmup.stderr);
+    const systemTmpFiles = await filesUnder(isolatedTmp);
     const runtimeProbeLog = path.join(fixture, 'runtime-probe.log');
     for (const command of ['codex', 'opencode']) {
       const executable = path.join(hostlessPath, command);
@@ -351,6 +362,7 @@ try {
       LC_ALL: 'C.UTF-8',
     });
     assert.equal(setup.status, 0, `${setup.stderr}\n${setup.stdout}`);
+    assert.match(setup.stdout, /Triad\+ installed/, setup.stdout);
     for (const role of ['orchestrator', 'developer', 'reviewer', 'evaluator']) {
       assert.equal(await stat(path.join(codexHome, 'agents', `triad_${role}.toml`)).then(() => true, () => false), false,
         'the consented Codex entry never adds role model overrides from legacy intent');
@@ -379,10 +391,10 @@ try {
     assert.match(setup.stdout, /Optional; only exact files shown in the final preview can be installed/);
     assert.ok(setup.stdout.includes(`CREATE ${path.join(codexHome, 'skills', 'triad', 'SKILL.md')}`), 'the final preview names the exact absolute Codex-native skill path');
     assert.match(setupText, /Installation succeeded; adapter assets are installed, but project readiness was not checked/);
-    assert.match(setupText, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
+    assert.match(setupText, /Before a first loop: add root PRD\.md;/);
     assert.match(setupText, /make an initial commit in each mapped repository, then create its mapped worktree/);
     assert.match(setupText, /Optional from this Control Workspace: npx triad-plus doctor --host opencode --control \./);
-    assert.match(setupText, /After readiness — OpenCode: .*`\/triad \.\/PRD\.md`/);
+    assert.match(setupText, /Entry with guided preflight — OpenCode: .*`\/triad \.\/PRD\.md`/);
     assert.match(setupText, /Quickstart: https:\/\/github\.com\/ainz-dg\/triad-plus-engineering-loop\/blob\/main\/docs\/getting-started\.md/);
     const successText = setupText.slice(setupText.lastIndexOf('\nTriad+ installed'));
     assert.equal(successText.split('\n').filter((line) => line.startsWith('Control Workspace: ')).length, 1, 'success output names the Control Workspace once');
@@ -529,7 +541,7 @@ try {
       .map(({ path: assetPath, kind, sha256 }) => ({ path: assetPath, kind, sha256 }))
       .sort((left, right) => left.path.localeCompare(right.path)));
     for (const directory of [home, xdgHome, hermesHome, isolatedTmp]) {
-      assert.deepEqual(await filesUnder(directory), [], `local-only setup wrote no global files under ${directory}`);
+      assert.deepEqual(await filesUnder(directory), directory === isolatedTmp ? systemTmpFiles : [], `local-only setup wrote no global files under ${directory}`);
     }
     const isolatedHostEnv = { HOME: home, XDG_CONFIG_HOME: xdgHome, CODEX_HOME: codexHome, HERMES_HOME: hermesHome, PATH: hostlessPath };
     const fixtureBeforeDiagnostics = await treeSnapshot(fixture);
@@ -619,15 +631,27 @@ try {
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_NOSYSTEM: '1',
     };
+    // Workspace readiness now requires explicit controlled-fixture consent.
+    for (let step = 0; step < 6; step += 1) {
+      const args = ['preflight', '--host', 'codex', '--control', managedRoot, '--non-interactive', '--json'];
+      let result = runCli(args, managedRoot, managedRuntimeEnv);
+      let report = JSON.parse(result.stdout);
+      if (report.ready) break;
+      const action = report.actions[0];
+      const selection = action.kind === 'confirm-gates' ? ['--catalog', '.loop/quality-gates.yaml'] : [];
+      if (selection.length) { result = runCli([...args, ...selection], managedRoot, managedRuntimeEnv); report = JSON.parse(result.stdout); }
+      result = runCli([...args, ...selection, '--approve', action.id, '--expected-state', report.state_sha256], managedRoot, managedRuntimeEnv);
+      assert.ok([0, 2].includes(result.status), result.stderr);
+    }
     const runManagedPreflight = () => run(process.execPath, [managedPreflight, '--adapter', 'codex'], managedRoot, managedRuntimeEnv);
-    const runManagedEntry = () => run(process.execPath, [managedEntryPath, '--adapter', 'codex'], managedRoot, managedRuntimeEnv);
+    const runManagedEntry = () => run(process.execPath, [managedEntryPath, '--adapter', 'codex', '--structural-only'], managedRoot, managedRuntimeEnv);
     const assertManagedReady = (label) => {
       const preflight = runManagedPreflight();
       assert.equal(preflight.status, 0, `${label}: ${preflight.stderr}\n${preflight.stdout}`);
-      assert.match(preflight.stdout, /READY: codex Triad\+ workspace validated/);
+      assert.match(preflight.stdout, /READY: workspace preflight/);
       const entry = runManagedEntry();
       assert.equal(entry.status, 0, `${label}: ${entry.stderr}\n${entry.stdout}`);
-      assert.match(entry.stdout, /READY: codex Triad\+ workspace validated/);
+      assert.match(entry.stdout, /STRUCTURE OK: codex Triad\+ workspace validated/);
     };
     const assertManagedBlocked = (label) => {
       const preflight = runManagedPreflight();
@@ -838,7 +862,7 @@ try {
     assert.equal(await readFile(codexGlobalEntry, 'utf8'), await readFile(path.join(repositoryRoot, 'adapters/codex/skills/triad/SKILL.md'), 'utf8'));
     const secondPreflight = run(process.execPath, [path.join(codexHome, 'triad-plus/host-entry-preflight.mjs'), '--adapter', 'codex'], secondWorkspace, isolatedHostEnv);
     assert.equal(secondPreflight.status, 2, 'incomplete second workspace is rejected by its local validator after binding succeeds');
-    assert.match(secondPreflight.stderr, /BLOCKED: Triad not started/);
+    assert.match(secondPreflight.stdout, /BLOCKED: workspace preflight/);
     assert.doesNotMatch(secondPreflight.stderr, /owner-bound Control Workspace/, 'second workspace resolves its separate binding rather than inheriting the first');
     const removeSecond = runCli(['adapter', 'remove', 'codex', '--control', secondWorkspace, '--apply'], secondWorkspace, isolatedHostEnv);
     assert.equal(removeSecond.status, 0, `${removeSecond.stderr}\n${removeSecond.stdout}`);
@@ -1000,7 +1024,7 @@ try {
     const greenText = green.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
     assert.match(green.stdout, /INIT local Git only \(after approval; no remote\/push\)/);
     assert.doesNotMatch(green.stdout, /Readiness:|Workspace ready|NOT READY/);
-    assert.match(greenText, /Before a first loop: add root PRD\.md and \.loop\/quality-gates\.yaml/);
+    assert.match(greenText, /Before a first loop: add root PRD\.md;/);
     const greenRepo = path.join(greenRoot, 'sample-app');
     assert.equal(git(greenRepo, ['branch', '--show-current']), 'main');
     assert.equal(git(greenRepo, ['remote']), '');

@@ -3,6 +3,46 @@ name: triad
 description: Start or resume a Triad+ Engineering Loop in Antigravity from a PRD source, target repositories, and measurable delivery goals. Use when the owner invokes /triad or asks Antigravity to orchestrate a Triad+ project.
 ---
 
+Before planning, bootstrap, state changes or role delegation, run from the exact
+Control Workspace:
+
+```bash
+node .triad-runtime/triad-host-entry.mjs --adapter antigravity --onboarding --non-interactive --json
+```
+
+Continue only when the JSON report says `ready: true`. This is a model-instructed,
+post-LLM gate, not a host-enforced pre-LLM security boundary. Do not infer host
+availability or effective model identity from READY. If this host cannot run
+shell tools/interact, disclose that capability limit and ask the owner to run
+`npx triad-plus preflight --host <this-host> --control <exact-workspace>` in a
+terminal; never fabricate readiness or silently skip the check.
+
+For a fixable finding, present only the first action and ask one owner choice
+at a time. Never auto-approve, guess consent, or execute discovered commands.
+Show the repository/worktree/branch, proposed command, source hashes,
+prerequisites and limits: package scripts execute arbitrary project code;
+`ignore-scripts` does not certify safety. Ask the owner to inspect script bodies
+locally. Only after explicit owner confirmation, invoke the same preflight
+command with `--approve <action-id> --expected-state <report-state-sha256>` and
+`--select <explicit-ids>` or `--catalog <workspace-relative-path>` for gates.
+Stage a manual catalog with `--catalog <path> --json` first and review its exact
+hash before asking consent. `--set-model ROLE=ID` / `--set-effort ROLE=VARIANT`
+corrects one canonical intent field with the same current-state binding; it
+never applies or verifies a native override. Use `--review gates:<repository>`
+only when the owner explicitly reopens a declined proposal. Exit 2 means the
+loop remains blocked, including while other confirmations remain. On fatal
+integrity/path findings stop for trusted installer remediation; do not alter
+hashes, scan neighboring projects or modify external files by inference.
+
+An explicit host-default receipt preserves requested intent without claiming
+that those per-role models were selected. Do not treat unapplied intent as
+native evidence or silently waive a required exact-model contract. Bind each
+assignment's `gates_path` and `expected_gates_sha256` from the READY report's
+catalog for that exact repository. Never combine repositories into one worktree
+catalog, overwrite a confirmed catalog with a template, or run gates as part of
+onboarding. The assignment resolver and independent verifier recheck approval,
+branch/worktree and source hashes before dispatch/execution.
+
 # Triad+ workflow
 
 Operate the current conversation as the Triad+ Orchestrator for the owner's

@@ -3,26 +3,56 @@ name: triad
 description: Start or resume a Triad run in Hermes Agent from a PRD source, declared repositories, and measurable goals. Evaluator+ runs automatically after approval when enabled in team configuration.
 ---
 
-# Triad in Hermes
+The installed global wrapper validates the exact owner-bound workspace and
+asset hashes before running a temporary trusted snapshot. Use that same wrapper
+for scoped approvals; never bypass it by executing changed local code. This
+remains a user-level entry, not a pre-LLM security boundary.
 
-This is a user-level entry point, not a pre-LLM security boundary. Before any
-Triad analysis, filesystem change, or role delegation, run the installed
-global preflight from the current directory:
+When using a named Hermes profile, HERMES_HOME must identify that active
+profile, or invoke the wrapper beside the already-loaded global skill using
+its exact trusted profile path. If the host cannot expose that path, report
+the capability limit and request the owner terminal route; do not search
+profiles or infer an executable path from an untrusted local manifest.
+
+Before planning, bootstrap, state changes or role delegation, run from the exact
+Control Workspace:
 
 ```bash
-node "$HOME/.hermes/triad-plus/host-entry-preflight.mjs" --adapter hermes
+node "${HERMES_HOME:-$HOME/.hermes}/triad-plus/host-entry-preflight.mjs" --adapter hermes --json
 ```
 
-Continue only when it prints `READY`. The installed, built-ins-only preflight
-checks the exact owner-approved Control Workspace path, its installation
-manifest, and byte hashes bound during the consent-gated setup before running a
-temporary snapshot of the local validator. The local manifest alone is not
-treated as owner trust. On `BLOCKED`, Triad has not started: do not search for
-another workspace, inspect neighboring projects, change state, or delegate.
-Ask the owner to open/restart Hermes from the exact Control Workspace used to
-approve setup, or rerun the consent-gated setup there. This remains post-LLM:
-Hermes has selected and read this skill before it can invoke the preflight; it
-does not provide host-level pre-LLM enforcement.
+Continue only when the JSON report says `ready: true`. This is a model-instructed,
+post-LLM gate, not a host-enforced pre-LLM security boundary. Do not infer host
+availability or effective model identity from READY. If this host cannot run
+shell tools/interact, disclose that capability limit and ask the owner to run
+`npx triad-plus preflight --host <this-host> --control <exact-workspace>` in a
+terminal; never fabricate readiness or silently skip the check.
+
+For a fixable finding, present only the first action and ask one owner choice
+at a time. Never auto-approve, guess consent, or execute discovered commands.
+Show the repository/worktree/branch, proposed command, source hashes,
+prerequisites and limits: package scripts execute arbitrary project code;
+`ignore-scripts` does not certify safety. Ask the owner to inspect script bodies
+locally. Only after explicit owner confirmation, invoke the same preflight
+command with `--approve <action-id> --expected-state <report-state-sha256>` and
+`--select <explicit-ids>` or `--catalog <workspace-relative-path>` for gates.
+Stage a manual catalog with `--catalog <path> --json` first and review its exact
+hash before asking consent. `--set-model ROLE=ID` / `--set-effort ROLE=VARIANT`
+corrects one canonical intent field with the same current-state binding; it
+never applies or verifies a native override. Use `--review gates:<repository>`
+only when the owner explicitly reopens a declined proposal. Exit 2 means the
+loop remains blocked, including while other confirmations remain. On fatal
+integrity/path findings stop for trusted installer remediation; do not alter
+hashes, scan neighboring projects or modify external files by inference.
+
+An explicit host-default receipt preserves requested intent without claiming
+that those per-role models were selected. Do not treat unapplied intent as
+native evidence or silently waive a required exact-model contract. Bind each
+assignment's `gates_path` and `expected_gates_sha256` from the READY report's
+catalog for that exact repository. Never combine repositories into one worktree
+catalog, overwrite a confirmed catalog with a template, or run gates as part of
+onboarding. The assignment resolver and independent verifier recheck approval,
+branch/worktree and source hashes before dispatch/execution.
 
 Only after the validator passes, operate the current Hermes session as the
 Triad Orchestrator. Load

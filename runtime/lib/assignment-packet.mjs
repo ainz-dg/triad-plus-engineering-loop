@@ -352,6 +352,8 @@ export async function resolveAssignmentContext(assignment, { projectRoot = proce
     error.repositoryContext = repositoryContext;
     throw error;
   }
+  const { validateReadinessAssignment } = await import('./readiness.mjs');
+  await validateReadinessAssignment({ projectRoot: root, assignment, worktree, repository });
   return {
     projectRoot: root,
     controlWorkspace: root,

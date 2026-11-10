@@ -304,6 +304,13 @@ existing `.triad-runtime/adapter.json` selector. Different hosts are never
 blended within an Attempt. Read [configuration](docs/configuration.md) and
 [runtime details](docs/runtimes.md).
 
+Before loop work, native entries require the shared guided preflight. Use
+`npx triad-plus preflight --host <adapter> --control .` for terminal correction
+and explicit model/default, per-repository gate and prerequisite confirmation.
+`--non-interactive --json` fails closed without consent. See
+[guided readiness](docs/universal-readiness.md) for receipts, host limits and
+remaining native model/E2E acceptance criteria.
+
 The installed `triad-model-configuration` Agent Skill lets the host agent
 inspect or change requested role models while preserving `team.json` as the
 source of truth and reporting host-specific binding limits.

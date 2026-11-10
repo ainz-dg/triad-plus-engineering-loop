@@ -27,12 +27,29 @@ function runCli(args, cwd, env = {}) {
   return run(process.execPath, [path.join(repositoryRoot, 'bin/triad-plus.js'), ...args], cwd, env);
 }
 
-function runEntry(adapter, cwd, env = {}, extraArgs = []) {
-  return run(process.execPath, [path.join(repositoryRoot, 'runtime/triad-host-entry.mjs'), '--adapter', adapter, ...extraArgs], cwd, env);
+// Explicit controlled-fixture owner confirmations, never implicit production consent.
+function confirmFixtureReadiness(adapter, root, env) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const base = ['preflight', '--host', adapter, '--control', root, '--non-interactive', '--json'];
+    let result = runCli(base, root, env);
+    let report = JSON.parse(result.stdout);
+    if (report.ready) return;
+    const action = report.actions[0];
+    assert.notEqual(action.kind, 'manual', JSON.stringify(report));
+    const extra = action.kind === 'confirm-gates' ? ['--catalog', '.loop/quality-gates.yaml'] : [];
+    if (extra.length) { result = runCli([...base, ...extra], root, env); report = JSON.parse(result.stdout); }
+    result = runCli([...base, ...extra, '--approve', action.id, '--expected-state', report.state_sha256], root, env);
+    assert.ok([0, 2].includes(result.status), result.stderr);
+  }
+  assert.fail('fixture readiness did not converge');
 }
 
-function runPreflight(workspace, cwd = workspace.root, extra = {}) {
-  return run(process.execPath, [workspace.preflightPath, '--adapter', workspace.adapter], cwd, { ...workspace.env, ...extra });
+function runEntry(adapter, cwd, env = {}, extraArgs = []) {
+  return run(process.execPath, [path.join(repositoryRoot, 'runtime/triad-host-entry.mjs'), '--adapter', adapter, '--structural-only', ...extraArgs], cwd, env);
+}
+
+function runPreflight(workspace, cwd = workspace.root, extra = {}, args = []) {
+  return run(process.execPath, [workspace.preflightPath, '--adapter', workspace.adapter, ...args], cwd, { ...workspace.env, ...extra });
 }
 
 function git(cwd, args) {
@@ -84,7 +101,7 @@ async function makeRepo(root) {
   git(root, ['commit', '-m', 'temporary host-entry baseline']);
 }
 
-async function makeWorkspace(adapter, name, { activeHermesProfile = null } = {}) {
+async function makeWorkspace(adapter, name, { activeHermesProfile = null, confirm = true } = {}) {
   const base = path.join(fixture, name);
   const root = path.join(base, 'control');
   const home = path.join(base, 'home');
@@ -195,6 +212,7 @@ async function makeWorkspace(adapter, name, { activeHermesProfile = null } = {})
     adapters: [record],
   });
   await writeInstallationManifest(root, multi);
+  if (confirm) confirmFixtureReadiness(adapter, root, env);
   return { adapter, base, root, home, codexHome, hermesHome, env, repo, worktree, globalAssets, preflightPath, bindingPath };
 }
 
@@ -289,6 +307,8 @@ async function makeOpenCodePrimaryMultiAdapterWorkspace(name) {
     adapters,
   }));
 
+  confirmFixtureReadiness('codex', root, env);
+  confirmFixtureReadiness('hermes', root, env);
   return { adapter: 'codex', base, root, home, codexHome, hermesHome, env, repo, worktree };
 }
 
@@ -319,6 +339,21 @@ async function validateInEnvironment(workspace, cwd = workspace.root, adapter = 
 }
 
 try {
+  const pending = await makeWorkspace('codex', 'pending-readiness', { confirm: false });
+  const pendingBefore = await snapshot(pending.base);
+  let pendingResult = runPreflight(pending, pending.root, {}, ['--json']);
+  assert.equal(pendingResult.status, 2);
+  assert.deepEqual(await snapshot(pending.base), pendingBefore, 'native unconsented entry is read-only');
+  let pendingReport = JSON.parse(pendingResult.stdout);
+  for (let i = 0; i < 6 && !pendingReport.ready; i += 1) {
+    const action = pendingReport.actions[0];
+    const selection = action.kind === 'confirm-gates' ? ['--catalog', '.loop/quality-gates.yaml'] : [];
+    pendingReport = JSON.parse(runPreflight(pending, pending.root, {}, ['--json', ...selection]).stdout);
+    pendingResult = runPreflight(pending, pending.root, {}, ['--json', ...selection, '--approve', action.id, '--expected-state', pendingReport.state_sha256]);
+    pendingReport = JSON.parse(pendingResult.stdout);
+  }
+  assert.equal(pendingReport.ready, true, 'scoped approvals use the same owner-bound temporary snapshot');
+  assert.equal(runPreflight(pending).status, 0);
   const codex = await makeWorkspace('codex', 'codex');
   const validCodex = await validateInEnvironment(codex);
   assert.equal(validCodex.ready, true, validCodex.problems.join('\n'));

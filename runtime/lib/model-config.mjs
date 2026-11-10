@@ -1,6 +1,5 @@
-import { roleDefinitions } from '../../adapters/registry.mjs';
-
-const roleIds = new Set(roleDefinitions.map((role) => role.id));
+// Standalone runtime data: installed validators cannot import the package registry.
+const roleIds = new Set(['orchestrator', 'developer', 'reviewer', 'evaluator']);
 const modelFields = new Set(['model', 'reasoning_effort']);
 
 function nullableString(value, field) {
@@ -9,7 +8,7 @@ function nullableString(value, field) {
 }
 
 function adapterModelRoles(adapter) {
-  return new Set(adapter?.modelRoles ?? roleDefinitions.map((role) => role.id));
+  return new Set(adapter?.modelRoles ?? [...roleIds]);
 }
 
 function defaultSourceForHostField(field) {
@@ -92,18 +91,18 @@ export function validateTeamConfiguration(team) {
   if (!team.roles || typeof team.roles !== 'object' || Array.isArray(team.roles)) {
     throw new Error('team config must contain roles.');
   }
-  for (const role of roleDefinitions) {
-    const configuration = team.roles[role.id];
+  for (const roleId of roleIds) {
+    const configuration = team.roles[roleId];
     if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
-      throw new Error(`team config has an invalid ${role.id} role definition.`);
+      throw new Error(`team config has an invalid ${roleId} role definition.`);
     }
     if (typeof configuration.displayName !== 'string' || !configuration.displayName.trim()) {
-      throw new Error(`team config has an invalid ${role.id} displayName.`);
+      throw new Error(`team config has an invalid ${roleId} displayName.`);
     }
-    nullableString(configuration.model, `${role.id}.model`);
-    nullableString(configuration.reasoning_effort, `${role.id}.reasoning_effort`);
+    nullableString(configuration.model, `${roleId}.model`);
+    nullableString(configuration.reasoning_effort, `${roleId}.reasoning_effort`);
     if (configuration.enabled !== undefined && typeof configuration.enabled !== 'boolean') {
-      throw new Error(`team config has an invalid ${role.id}.enabled value.`);
+      throw new Error(`team config has an invalid ${roleId}.enabled value.`);
     }
   }
   return team;

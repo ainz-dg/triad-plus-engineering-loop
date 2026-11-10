@@ -3,6 +3,17 @@ name: triad-loop-bootstrap
 description: Create an isolated Triad project-control workspace from a PRD, including a frozen PRD baseline, manifest, feature plan, core work queue, verification templates, and delivery evidence templates. Use before the Orchestrator starts a new software initiative.
 ---
 
+Before loop work, require the current adapter's READY onboarding report from
+its native entry (or `npx triad-plus preflight --host <explicit-host> --control
+<exact-workspace> --non-interactive --json`). Without owner confirmations,
+remain blocked and guide one fix at a time; never infer consent. READY records
+explicit host defaults, not verified requested per-role models. Preserve
+confirmed per-repository catalogs during bootstrap. Before assignment creation,
+read the current report's repository catalog and bind `gates_path` plus
+`expected_gates_sha256` for that repository/worktree; the resolver independently
+rechecks owner consent and current source/branch identity. Do not substitute the
+legacy global placeholder catalog or regenerate a confirmed catalog.
+
 # Triad Bootstrap
 
 Create the project-control workspace outside product repositories. It is the

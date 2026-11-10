@@ -3,6 +3,17 @@ name: triad-loop-orchestrator
 description: Coordinate a Triad engineering run from declared feature cards through development, environment-derived verification, independent review, commits, normal pushes, and owner-controlled delivery. Use when operating an initialized Triad project-control workspace.
 ---
 
+Before loop work, require the current adapter's READY onboarding report from
+its native entry (or `npx triad-plus preflight --host <explicit-host> --control
+<exact-workspace> --non-interactive --json`). Without owner confirmations,
+remain blocked and guide one fix at a time; never infer consent. READY records
+explicit host defaults, not verified requested per-role models. Preserve
+confirmed per-repository catalogs during bootstrap. Before assignment creation,
+read the current report's repository catalog and bind `gates_path` plus
+`expected_gates_sha256` for that repository/worktree; the resolver independently
+rechecks owner consent and current source/branch identity. Do not substitute the
+legacy global placeholder catalog or regenerate a confirmed catalog.
+
 # Triad Orchestrator
 
 Maintain the goal and operational context. Decide the next step; do not perform
