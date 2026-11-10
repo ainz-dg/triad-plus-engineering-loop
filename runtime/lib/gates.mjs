@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { redactAndCap, writeLog } from "./evidence.mjs";
 import { describeCommandProvenance, runProcess } from "./process.mjs";
 
@@ -57,10 +58,90 @@ export function parseQualityGates(source) {
   return gates;
 }
 
+/** Structure-only lint for the existing JSON / list-of-maps YAML contract.
+ * Does not resolve executables, probe versions, invoke a shell or run any gate.
+ */
+export function lintQualityGateSource(source) {
+  const issues = [];
+  let gates;
+  try {
+    const document = JSON.parse(source);
+    if (!document || typeof document !== 'object' || Array.isArray(document)
+      || document.active === false || !Array.isArray(document.gates)) {
+      return { valid: false, executed: false, gate_count: 0, issues: ['Expected an active gate catalog, not a proposal or another JSON document.'] };
+    }
+    if (document.version !== undefined && ![1, 2].includes(document.version)) issues.push('Unsupported gate catalog version.');
+    gates = document.gates;
+  } catch {
+    const rootFields = new Set();
+    let entryFields = new Set();
+    let entryIndent = null;
+    const parents = [];
+    for (const raw of String(source).split(/\r?\n/)) {
+      const line = raw.replace(/\s+#.*$/, '');
+      if (!line.trim() || line.trimStart().startsWith('#')) continue;
+      const match = line.match(/^( *)(-\s+)?([a-z_][a-z0-9_]*):\s*(.*?)\s*$/i);
+      if (!match || raw.includes('\t')) { issues.push('Unsupported YAML syntax; use the documented list-of-maps format or JSON.'); break; }
+      const [, spaces, item, key, value] = match;
+      const indent = spaces.length;
+      if (!indent && !['version', 'gates'].includes(key)) { issues.push('Unsupported root YAML field.'); break; }
+      if (!indent && key === 'version' && !['1', '2'].includes(value)) issues.push('Unsupported gate catalog version.');
+      if (!indent && key === 'gates' && value !== '' && value !== '[]') issues.push('gates must be a list.');
+      if (item) {
+        if (!indent || !rootFields.has('gates') || (entryIndent !== null && indent !== entryIndent)) issues.push('Malformed YAML gate list indentation.');
+        entryIndent = indent;
+        entryFields = new Set(); parents.length = 0;
+      }
+      while (parents.length && parents.at(-1).indent >= indent) parents.pop();
+      if (!item && indent && (entryIndent === null || indent <= entryIndent || (!parents.length && indent !== entryIndent + 2))) issues.push('Malformed YAML gate field indentation.');
+      const field = [...parents.map((parent) => parent.key), key].join('.');
+      const seen = indent ? entryFields : rootFields;
+      if (seen.has(field)) { issues.push('Duplicate YAML field.'); break; }
+      seen.add(field);
+      if (/^[>|][-+]?\s*$/.test(value) || /^[&*!]/.test(value)) { issues.push('YAML blocks, tags and aliases are unsupported; use a scalar command.'); break; }
+      if ((value.startsWith('"') && !value.endsWith('"')) || (value.startsWith("'") && !value.endsWith("'"))) issues.push('Unterminated YAML scalar.');
+      if (!value && key !== 'gates') parents.push({ indent, key });
+    }
+    if (!rootFields.has('gates')) issues.push('Missing gates list.');
+    gates = parseQualityGates(String(source));
+  }
+  if (!gates.length) issues.push('At least one gate is required; commands must be explicitly configured.');
+  const ids = new Set();
+  gates.forEach((gate, index) => {
+    const label = `Gate ${index + 1}`;
+    if (!gate || typeof gate !== 'object' || Array.isArray(gate)) { issues.push(`${label}: invalid definition.`); return; }
+    if (typeof gate.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(gate.id) || ids.has(gate.id)) issues.push(`${label}: missing, unsafe or duplicate ID.`);
+    ids.add(gate.id);
+    if (typeof gate.command !== 'string' || !gate.command.trim() || /REPLACE_ME/.test(gate.command)
+      || /[\u0000-\u001f\u007f]/.test(gate.command) || gate.command.length > 8192) issues.push(`${label}: missing, placeholder or malformed command.`);
+    if ((gate.executor ?? 'control-plane') !== 'control-plane') issues.push(`${label}: executor must be control-plane.`);
+    if (gate.required !== undefined && typeof gate.required !== 'boolean') issues.push(`${label}: required must be boolean.`);
+    if (gate.timeout_seconds !== undefined && (!Number.isInteger(gate.timeout_seconds) || gate.timeout_seconds < 1 || gate.timeout_seconds > 3600)) issues.push(`${label}: timeout_seconds must be 1..3600 (default 600).`);
+    for (const key of ['toolchain', 'provenance']) {
+      const binding = gate[key];
+      if (binding === undefined) continue;
+      if (!binding || typeof binding !== 'object' || Array.isArray(binding)
+        || Object.keys(binding).length === 0 || Object.keys(binding).some((field) => !['executable', 'sha256', 'version'].includes(field))
+        || (binding.executable !== undefined && (typeof binding.executable !== 'string' || !path.isAbsolute(binding.executable)))
+        || (binding.sha256 !== undefined && !/^[a-f0-9]{64}$/i.test(binding.sha256))
+        || (binding.version !== undefined && (typeof binding.version !== 'string' || !binding.version.trim() || binding.version.length > 500))) {
+        issues.push(`${label}: invalid toolchain binding (identity is not probed by lint).`);
+      }
+    }
+  });
+  return { valid: issues.length === 0, executed: false, gate_count: gates.length, issues: [...new Set(issues)] };
+}
+
 export async function loadTrustedGates(gatesPath, expectedHash) {
   const source = await readFile(gatesPath, "utf8");
   const actualHash = createHash("sha256").update(source).digest("hex");
   if (!expectedHash || actualHash !== expectedHash) {
+    return { valid: false, actualHash, gates: [] };
+  }
+  // A correctly hashed proposal is still not an approved verifier catalog.
+  let document;
+  try { document = JSON.parse(source); } catch {}
+  if (document?.active === false || document?.discovery === 'manifest-read-only') {
     return { valid: false, actualHash, gates: [] };
   }
   return { valid: true, actualHash, gates: parseQualityGates(source) };

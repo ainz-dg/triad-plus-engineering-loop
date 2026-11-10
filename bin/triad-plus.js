@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access, copyFile, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile, lstat, readdir, realpath } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile, lstat, readdir, realpath } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -11,6 +11,8 @@ import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { getAdapter, listAdapters, roleDefinitions, sharedSkillNames } from '../adapters/registry.mjs';
 import { selectChecklist } from '../runtime/lib/interactive-tui.mjs';
+import { discoverQualityGates, GATE_DRAFT, readGateSource } from '../runtime/lib/gate-discovery.mjs';
+import { lintQualityGateSource } from '../runtime/lib/gates.mjs';
 import { writeImportedCard } from '../integrations/bmad/story-importer.mjs';
 import {
   hostModelField,
@@ -71,6 +73,7 @@ Usage:
   npx triad-plus --version
   npx triad-plus init --host <adapter-id> --control <path> [--global] [--team-config <path>] [--allow-product-repo]
   npx triad-plus doctor --host <adapter-id> --control <path> [--global] [--hook-config <path>]
+  npx triad-plus quality-gates --control <path> [--refresh --apply | --lint [--source <workspace-relative-catalog>]]
   npx triad-plus version --control <path>
   npx triad-plus upgrade --host <adapter-id> --control <path> [--global] [--apply]
   npx triad-plus uninstall --host <adapter-id> --control <path> [--global] [--apply]
@@ -88,6 +91,7 @@ The control path is a project-control workspace, not a product repository.
 Installation refuses conflicting asset overwrites; identical global assets may be reused. Upgrade is a dry run unless --apply is supplied.
 cockpit serves a read-only web view of the control workspace on 127.0.0.1 only; it never starts agents. Without --control it validates the current directory. A local interactive launch may open the one-time URL in your browser; --no-open disables this.
 Multi-adapter installation records membership and exact local asset ownership. Attempt-bound host dispatch is not available in this version.
+Quality-gate discovery produces an inactive draft only. Inspection/lint never runs gates or probes executables.
 `);
   process.exit(exitCode);
 }
@@ -104,6 +108,8 @@ function parseArgs(args) {
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
     if (argument === '--global') options.global = true;
+    else if (argument === '--refresh' && command === 'quality-gates') options.refresh = true;
+    else if (argument === '--lint' && command === 'quality-gates') options.lint = true;
     else if (argument === '--allow-product-repo') options.allowProductRepo = true;
     else if (argument === '--apply') options.apply = true;
     else if (argument === '--no-open' && command === 'cockpit') options.noOpen = true;
@@ -419,6 +425,68 @@ async function writeTeamConfig(controlRoot, team) {
   await assertNoSymlinkPath(target);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, `${JSON.stringify(team, null, 2)}\n`, 'utf8');
+}
+
+async function saveGateDraft(controlRoot, draft, { replace = false } = {}) {
+  const target = join(controlRoot, GATE_DRAFT);
+  await assertNoSymlinkPath(target);
+  const previous = await readGateSource(target);
+  if (!['read', 'missing'].includes(previous.status)) throw new Error('Inactive gate draft is not a safe regular file; no draft was changed.');
+  if (previous.status === 'read' && !replace) return false;
+  const content = `${JSON.stringify(draft, null, 2)}\n`;
+  if (previous.text === content) return false;
+  await mkdir(dirname(target), { recursive: true });
+  if (previous.status === 'missing') {
+    await writeFile(target, content, { flag: 'wx', mode: 0o600 });
+    return true;
+  }
+  const temporary = await mkdtemp(join(dirname(target), '.gate-draft-'));
+  try {
+    const file = join(temporary, 'draft.json');
+    await writeFile(file, content, { flag: 'wx', mode: 0o600 });
+    await assertNoSymlinkPath(target);
+    if ((await readGateSource(target)).sha256 !== previous.sha256) throw new Error('Inactive gate draft changed during refresh; no replacement was made.');
+    await rename(file, target);
+    return true;
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+}
+
+async function qualityGatesCommand(options) {
+  if (!options.control) throw new Error('Provide --control <project-control-path>.');
+  if (options.host || options.global || options.teamConfig || options.hookConfig || options.targetRepository
+    || options.output || options.provenance || options.requiredGates.length || options.dependsOn.length || options.allowProductRepo) {
+    throw new Error('quality-gates accepts only --control, --refresh, --apply, --lint and --source.');
+  }
+  if (options.lint && (options.refresh || options.apply)) throw new Error('Lint is read-only; do not combine it with --refresh or --apply.');
+  if (options.apply && !options.refresh) throw new Error('Use --refresh --apply to replace only the inactive draft.');
+  if (options.source && !options.lint) throw new Error('--source is available only with --lint.');
+  const root = resolve(options.control);
+  await requireExistingDirectory(root);
+  await assertNoSymlinkPath(root, { allowMissing: false });
+  if (options.lint) {
+    const sourcePath = resolve(root, options.source ?? '.loop/quality-gates.yaml');
+    if (!sourcePath.startsWith(root + sep)) throw new Error('Gate catalog must be inside the selected Control Workspace.');
+    const source = await readGateSource(sourcePath);
+    if (source.status !== 'read') throw new Error(`Gate catalog ${source.status}; no commands executed.`);
+    const result = lintQualityGateSource(source.text);
+    process.stdout.write(`${result.valid ? 'LINT OK' : 'BLOCKED'}: gate catalog structure; commands not executed, executables/versions/worktrees not probed.\n`);
+    for (const issue of result.issues) process.stdout.write(`  - ${issue}\n`);
+    if (!result.valid) process.exitCode = 2;
+    return;
+  }
+  const draft = await discoverQualityGates(root);
+  if (options.refresh && options.apply) await saveGateDraft(root, draft, { replace: true });
+  process.stdout.write(`INACTIVE quality-gate proposal: ${draft.status}; no commands executed or gates activated.\n`);
+  for (const repository of draft.repositories) {
+    process.stdout.write(`  ${repository.id ?? 'invalid-mapping'}: ${repository.status}; ${repository.candidates.length} candidate(s); ${repository.source_context ?? 'no source'}; context not verified.\n`);
+    if (repository.source) process.stdout.write(`    package.json sha256=${repository.source.sha256}\n`);
+    for (const note of repository.notes ?? []) process.stdout.write(`    ${note}\n`);
+    for (const candidate of repository.candidates) process.stdout.write(`    ${candidate.id} (${candidate.category}): ${candidate.command}; timeout ${candidate.timeout_seconds}s; confirmation required.\n`);
+    for (const exclusion of repository.excluded ?? []) process.stdout.write(`    ${exclusion.script}: excluded (${exclusion.reason}).\n`);
+  }
+  process.stdout.write(options.refresh && options.apply
+    ? `Draft saved at ${GATE_DRAFT}. Active .loop/quality-gates.yaml was not changed.\n`
+    : `Read-only preview; --refresh --apply saves only ${GATE_DRAFT}.\n`);
 }
 
 async function applyMarkdownModel(target, configuration, fields = ['model'], cleanupFields = []) {
@@ -836,6 +904,10 @@ async function init(options) {
     throw new Error('This workspace has a multi-adapter installation record. Use `adapter add` instead of `init`.');
   }
   const installContext = context(controlRoot);
+  const existingDraft = await readGateSource(join(controlRoot, GATE_DRAFT));
+  if (!['read', 'missing'].includes(existingDraft.status)) throw new Error('Inactive gate draft path is unsafe or unreadable; installation stopped before writes.');
+  const gateDraft = existingDraft.status === 'missing' && !options.planOnly
+    ? options.gateDraft ?? await discoverQualityGates(controlRoot) : null;
   const projectPlanned = [
     ...adapter.projectPaths(controlRoot, installContext),
     ...(writesTeam ? [teamConfigPath(controlRoot)] : [])
@@ -890,9 +962,10 @@ async function init(options) {
     previous: previousManifest
   });
   await writeInstallationManifest(controlRoot, manifest);
+  if (gateDraft) await saveGateDraft(controlRoot, gateDraft);
   if (!options.quiet) {
     process.stdout.write(`Triad+ adapter assets installed for ${adapter.label} in ${controlRoot}\n`);
-    process.stdout.write('This init command does not configure repository mappings, PRD, quality gates, or worktrees. Verify project readiness separately before invoking /triad.\n');
+    process.stdout.write('This init command does not configure repository mappings, PRD, active quality gates, or worktrees. An inactive gate draft uses only existing mapped manifests. Verify project readiness separately before invoking /triad.\n');
     if (adapter.globalEntry) {
       process.stdout.write(`The optional user-level ${adapter.entry} entry is installed only through the consent-gated interactive setup wizard; this init wrote no global files.\n`);
     }
@@ -2438,6 +2511,9 @@ async function planGlobalEntryAdapters(adapters, selectedAdapters, controlRoot) 
 }
 
 async function preflightInteractiveSetup({ root, repositories, adapters, projectYamlPlan, team, useExistingTeam, globalEntryAdapters = [] }) {
+  const gateDraft = await discoverQualityGates(root, repositories);
+  const existingDraft = await readGateSource(join(root, GATE_DRAFT));
+  if (!['read', 'missing'].includes(existingDraft.status)) throw new Error('Inactive gate draft path is unsafe or unreadable; no setup was started.');
   const adapterPlans = new Map();
   const first = await init({ host: adapters[0].id, control: root, planOnly: true, team, useExistingTeam });
   adapterPlans.set(adapters[0].id, first);
@@ -2462,6 +2538,7 @@ async function preflightInteractiveSetup({ root, repositories, adapters, project
   return {
     root, repositories, adapters, adapterPlans, projectYamlPlan,
     roleOverlayPlan, roleBindingActions, globalEntryPlans,
+    gateDraft, gateDraftAction: existingDraft.status === 'missing' ? 'CREATE' : 'PRESERVE unchanged',
     teamMode: useExistingTeam ? 'reuse existing without rewriting' : team ? 'create requested team config' : 'leave unconfigured',
     team,
     useExistingTeam,
@@ -2596,7 +2673,7 @@ async function applyInteractiveSetup(plan) {
       projectYamlWritten = true;
     }
     process.stdout.write('Applying Triad+ workspace setup...\n');
-    await init({ host: plan.adapters[0].id, control: plan.root, team: plan.team, useExistingTeam: plan.useExistingTeam, quiet: true });
+    await init({ host: plan.adapters[0].id, control: plan.root, team: plan.team, useExistingTeam: plan.useExistingTeam, gateDraft: plan.gateDraft, quiet: true });
     installedAdapters.push(plan.adapters[0].id);
     for (const adapter of plan.adapters.slice(1)) {
       await adapterAdd({ adapterCommand: 'add', host: adapter.id, control: plan.root, apply: true, quiet: true });
@@ -2810,6 +2887,7 @@ try {
   }
   const options = parseArgs(argv);
   if (options.command === 'init') await init(options);
+  else if (options.command === 'quality-gates') await qualityGatesCommand(options);
   else if (options.command === 'adapter') await adapterCommand(options);
   else if (options.command === 'doctor') await doctor(options);
   else if (options.command === 'version') await versionCommand(options);

@@ -108,6 +108,15 @@ skill/wrapper installation; any remediation of those files requires an explicit
 path preview and consent. The model configuration skill records requests; it does not claim that
 `upgrade --apply` applies the requested model.
 
+## Inactive quality-gate proposals
+
+Setup also prepares an inactive `.triad-plus/quality-gates.draft.json` from
+mapped manifests. Inspect it with `npx triad-plus quality-gates --control .`;
+it never activates commands or replaces `.loop/quality-gates.yaml`. Use
+`--lint` for structure-only validation without execution. See
+[quality-gate discovery](quality-gate-discovery.md) for sources, per-worktree
+binding, exclusions and the remaining guided-confirmation limitations.
+
 ## Retry and scope policy
 
 New control workspaces use separate finite budgets for environment recovery and

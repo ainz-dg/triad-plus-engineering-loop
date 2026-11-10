@@ -272,6 +272,14 @@ personas, models, and supported effort/options. Existing schema-version-1 team
 files remain valid. Core roles are always enabled; Evaluator+ is enabled only
 when `roles.evaluator.enabled` is `true`.
 
+Setup silently reads existing mapped manifests into the inactive
+`.triad-plus/quality-gates.draft.json`; no discovered commands or executable
+probes run, and active catalogs remain unchanged. Existing drafts are preserved.
+`npx triad-plus quality-gates --control .` shows a read-only preview;
+`--refresh --apply` replaces only the draft, and `--lint` checks an active
+catalog's structure without executing it. See
+[quality-gate discovery](quality-gate-discovery.md) for limits and provenance.
+
 The shared `triad-model-configuration` skill is installed with the selected
 adapter. Ask the host agent to inspect or change a role model; it keeps
 `.triad-plus/team.json` as the source of requested intent. Generated host assets

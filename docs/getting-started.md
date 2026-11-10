@@ -61,7 +61,11 @@ At the Control Workspace root, create `PRD.md` with a small goal, one
 observable acceptance criterion, and a deterministic verification command.
 Also add `.loop/quality-gates.yaml`, make an initial commit in each mapped
 repository, and create the declared worktree. Setup does not create these
-inputs implicitly. Immediately after install, the wizard gives these staged
+inputs implicitly. It does prepare an inactive per-repository gate draft from
+mapped manifests. Inspect it with `npx triad-plus quality-gates --control .`;
+no discovered commands are executed or activated. See
+[quality-gate discovery](quality-gate-discovery.md) before selecting or editing
+a catalog. Immediately after install, the wizard gives these staged
 next steps and an optional host/install diagnostic command; it does not imply
 that project readiness has been established. Follow this
 [quickstart](../README.md#one-quickstart-root-control-workspace-and-root-prd)
