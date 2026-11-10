@@ -16,7 +16,7 @@ implementation, review, and orchestration.
 | | What changes |
 | --- | --- |
 | **Independent review** | A Reviewer examines the candidate and verifier evidence instead of asking the Developer to grade its own work. |
-| **Different models per role** | Choose models, personas, and supported effort per role within one selected runtime. |
+| **Role model intent** | Record requested models and effort per role; generated agents inherit host defaults until host selection is confirmed. |
 | **Evidence-backed verification** | A claim that tests passed is not proof: `triad-verify` records environment-derived gate evidence. |
 | **Works across coding agents** | Use Codex, Claude Code, OpenCode, Antigravity, Hermes Agent, or GitHub Copilot through peer adapters. |
 
@@ -308,8 +308,10 @@ The installed `triad-model-configuration` Agent Skill lets the host agent
 inspect or change requested role models while preserving `team.json` as the
 source of truth and reporting host-specific binding limits.
 
-On OpenCode, `team.json`'s `reasoning_effort` is materialized as the native
-per-agent `variant`; the OpenCode session default is a separate host setting.
+Generated agent assets inherit host model and effort defaults. Requests in
+`team.json` are recorded intent, not proof of host selection; Triad+ does not
+inject unverified IDs into native agent files. See
+[model configuration](docs/configuration.md#configure-models-through-the-agent).
 
 `triad-verify` validates assignment/candidate binding, runs declared
 control-plane gates, detects mutation, and writes evidence. It supports the

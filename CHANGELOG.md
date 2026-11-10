@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Preserve requested role models in `team.json` while generated native agents
+  inherit host defaults, preventing an invalid request from blocking host entry.
+  Setup rejects malformed model IDs without guessing a replacement; managed
+  upgrade removes stale overrides without changing canonical intent.
+
 ## 1.22.3
 
 Patch release for PR #42. No Core changes.

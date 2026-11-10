@@ -30,8 +30,8 @@ schema-v2 installation can record multiple project-local adapters, but this
 does not yet select a host per Attempt: no host is inferred from install order,
 and dispatch is explicitly unsupported until Attempt-bound liveness and
 selection are implemented. The team file records role-level models and effort,
-but an adapter writes those into host-native profiles only where the selected
-host supports that facility. A blank model means the host default. Never put
+while generated profiles inherit host defaults. A requested model is not an
+attestation of host selection or availability. A blank model means no request. Never put
 tokens, API keys, or private deployment data in this file.
 
 ## Installation ownership and version
@@ -82,28 +82,31 @@ The installed `triad-model-configuration` skill lets an owner ask the selected
 agent to show or change role models without editing host-specific files. The
 agent reads `.triad-runtime/adapter.json`, validates `.triad-plus/team.json`,
 changes only the explicitly requested `model` or `reasoning_effort` fields, and
-uses the existing managed binding path to materialize supported values. It
-reports whether each request was applied host-natively, recorded only in the
-team file, left at the host default, or unsupported. It never invents model IDs
-and never puts credentials in the configuration.
+reports the request separately from the effective host configuration. It never
+invents model IDs or puts credentials in configuration.
 
-The skill follows the adapter metadata: `global-profiles` writes native
-user-level profiles, `project-frontmatter` writes only the declared native
-fields (OpenCode supports model plus its native `variant`, Copilot supports
-model plus `reasoningEffort`, and Claude Code currently supports model only),
-and `team-record` records intent without fabricating a host binding. A null or
-blank value deliberately means host default. Reasoning levels are host-specific
-and are never translated between providers.
+Generated agent assets use **host default** for model and effort on every
+adapter. Triad+ cannot verify an arbitrary ID against every host's available
+providers before that host loads its files. An unknown native override can
+prevent the host from starting the command at all. Therefore setup and upgrade
+omit managed `model`, `variant`, `reasoningEffort`, and Codex
+`model_reasoning_effort` overrides; canonical requests remain unchanged in
+`team.json`, including legacy invalid requests so they can be corrected.
 
-For project-frontmatter adapters, `.triad-plus/team.json` remains the canonical
-source of truth. Managed installation and `upgrade --apply` re-materialize each
-configured role's supported fields after refreshing agent assets. OpenCode maps
-`model` to `model` and `reasoning_effort` to its native `variant` field; Copilot
-maps the same canonical fields to `model` and `reasoningEffort`; Claude Code
-currently maps `model` only. Null or blank values are omitted so the host uses
-its session default. Other adapters may expose different controls; Triad+ only
-materializes fields supported by the selected host. A host/session default is
-distinct from a role-agent binding.
+The wizard rejects model IDs with spaces/control characters, and OpenCode
+requests must use its `provider/model` form. These are syntax checks only;
+passing them does not mean a provider or model is available. Use the host's
+native model picker to inspect available IDs and select the session model.
+Triad+ must report that selection as unobservable unless the host supplies
+reliable evidence. Reasoning/variant names are host-specific and are never
+translated between providers.
+
+Existing installations need the normal managed upgrade (with its preview and
+explicit apply) to remove old overrides. Do not manually patch generated
+agent files or edit an installation manifest to hide drift. Existing user-level Codex TOML profiles are not rewritten by the current
+skill/wrapper installation; any remediation of those files requires an explicit
+path preview and consent. The model configuration skill records requests; it does not claim that
+`upgrade --apply` applies the requested model.
 
 ## Retry and scope policy
 

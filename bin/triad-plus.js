@@ -15,12 +15,14 @@ import { writeImportedCard } from '../integrations/bmad/story-importer.mjs';
 import {
   hostModelField,
   materializedHostRoleConfiguration,
+  modelInputIssue,
   supportsNativeReasoning,
   validateTeamConfiguration
 } from '../runtime/lib/model-config.mjs';
 import {
   formatDoctorLine,
   formatDoctorSection,
+  formatModelValue,
   formatSetupSummary,
   formatCompactRetroHeader,
   formatRetroPixelHeader,
@@ -451,8 +453,7 @@ async function writeRoleProfiles(paths, team) {
     const profile = [
       `name = ${JSON.stringify(`triad_${role.id}`)}`,
       `description = ${JSON.stringify(`Triad+ ${role.label}: ${configuration.displayName}.`)}`,
-      ...(configuration.model ? [`model = ${JSON.stringify(configuration.model)}`] : []),
-      ...(configuration.reasoning_effort ? [`model_reasoning_effort = ${JSON.stringify(configuration.reasoning_effort)}`] : []),
+      '# Model and effort inherit host defaults; team.json records unverified intent.',
       `developer_instructions = ${JSON.stringify(instructions)}`,
       ''
     ].join('\n');
@@ -794,10 +795,19 @@ async function collectTeamConfiguration(prompt, adapter) {
     const persona = customize
       ? (await prompt.question(`${role.label} persona [professional and role-focused]: `)).trim() || 'professional and role-focused'
       : 'professional and role-focused';
-    const model = customize ? (await prompt.question(`${role.label} model ID [host default]: `)).trim() : '';
+    let model = '';
+    if (customize) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        model = (await prompt.question(`${role.label} model ID [host default]: `)).trim();
+        const issue = modelInputIssue(adapter, model);
+        if (!issue) break;
+        process.stdout.write(`${issue}\n`);
+        if (attempt === 2) throw new Error('Model ID still invalid after three attempts. Setup stopped before installation.');
+      }
+    }
     const reasoningEffort = customize && supportsNativeReasoning(adapter, role.id)
-      ? (await prompt.question(`${role.label} reasoning effort [${adapter.modelBinding === 'global-profiles' && model ? role.defaultEffort : 'host default'}]: `)).trim()
-        || (adapter.modelBinding === 'global-profiles' && model ? role.defaultEffort : null)
+      ? (await prompt.question(`${role.label} reasoning effort [host default]: `)).trim()
+        || null
       : null;
     roles[role.id] = { displayName, persona, model: model || null, reasoning_effort: reasoningEffort, enabled };
   }
@@ -1962,7 +1972,7 @@ async function doctor(options) {
           const field = hostModelField(adapter, entry.role.id, 'reasoning_effort');
           const desired = validTeam?.roles?.[entry.role.id];
           const desiredText = desired
-            ? `desired model=${desired.model || 'host default'}${field ? ` ${field}=${desired.reasoning_effort || 'host default'}` : ''}`
+            ? `desired model=${formatModelValue(desired.model)}${field ? ` ${field}=${formatModelValue(desired.reasoning_effort)}` : ''}`
             : 'desired unavailable';
           const observedText = entry.observed ? ` — materialized ${JSON.stringify(entry.observed)}` : '';
           process.stdout.write(`  ${formatDoctorLine(`${scope} ${entry.role.label}`, entry.status)} ${desiredText}${observedText}\n`);

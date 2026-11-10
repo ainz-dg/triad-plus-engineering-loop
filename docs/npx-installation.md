@@ -274,15 +274,13 @@ when `roles.evaluator.enabled` is `true`.
 
 The shared `triad-model-configuration` skill is installed with the selected
 adapter. Ask the host agent to inspect or change a role model; it keeps
-`.triad-plus/team.json` as the source of truth and re-materializes only fields
-the adapter declares as host-native. Unsupported fields are reported rather
-than silently substituted.
+`.triad-plus/team.json` as the source of requested intent. Generated host assets
+inherit host model/effort defaults; unverified requests are never native
+overrides, even when their spelling looks plausible. Setup checks model ID
+syntax without claiming catalog availability. Existing installations remove
+old managed overrides through the normal preview/apply upgrade path. See
+[model configuration](configuration.md#configure-models-through-the-agent).
 
-For OpenCode, the canonical `reasoning_effort` value is materialized as the
-native per-agent `variant` field. Copilot uses its own native
-`reasoningEffort` field; these host contracts are intentionally not inferred
-from one another. The active host/session default remains separate from a
-materialized role profile.
 
 | Role | Responsibility |
 | --- | --- |
