@@ -916,6 +916,11 @@ function createRecoveryCliFixture(root) {
     else if (path.endsWith('/releases/assets/11')) { process.stdout.write(readFileSync(join(s.packed, s.name))); process.exit(0); }
     else if (path.endsWith('/releases/assets/12')) { process.stdout.write(readFileSync(join(s.packed, s.name + '.sha256'))); process.exit(0); }
     else process.exit(91);
+    const isJobLog = path.endsWith('/jobs/1/logs') || path.endsWith('/jobs/2/logs');
+    if (isJobLog && value.includes(String.fromCharCode(27)) && !args.includes('--allow-escape-sequences')) {
+      process.stderr.write('the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway');
+      process.exit(1);
+    }
     process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value));
   `);
   writeExecutable(join(bin, 'npm'), `
@@ -1083,4 +1088,76 @@ test('recovery diagnostics distinguish gh HTTP classes, unknown errors, and malf
       assert.doesNotMatch(output, /VERIFIED/);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('only the two historical job log GETs opt in to captured ANSI bytes without exposing them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'triad-recovery-ansi-'));
+  try {
+    const fixture = createRecoveryCliFixture(root);
+    const summaryPath = join(root, 'summary.md');
+    writeFileSync(summaryPath, '');
+    fixture.state.gateLogs = '\x1b[36;1m' + fixture.state.gateLogs;
+    fixture.state.gateLogs += '\x1b[0m\nraw-gate-log-sentinel Authorization: token-sentinel\n';
+    fixture.state.publishLogs = '\x1b[39m' + fixture.state.publishLogs;
+    fixture.state.publishLogs += '\x1b[22m\nraw-publisher-log-sentinel https://secret.invalid/?signature=signed-url-sentinel\n';
+    // All strings above contain actual ESC bytes, not printable backslash escapes.
+    assert.ok(fixture.state.gateLogs.includes(String.fromCharCode(27)));
+    assert.ok(fixture.state.publishLogs.includes(String.fromCharCode(27)));
+    fixture.state.release.assets = [
+      { id: 11, name: fixture.state.name, digest: 'sha256:' + fixture.state.expected.archiveSha256 },
+      { id: 12, name: fixture.state.name + '.sha256', digest: 'sha256:' + fixture.state.expected.sidecarSha256 },
+    ];
+    fixture.save();
+    const result = fixture.run({ GITHUB_STEP_SUMMARY: summaryPath });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /VERIFIED v1.22.3/); // Controlled fixture only.
+    const exposed = result.stdout + result.stderr + readFileSync(summaryPath, 'utf8');
+    assert.doesNotMatch(exposed, /\x1b|raw-gate-log-sentinel|raw-publisher-log-sentinel|Authorization|token-sentinel|signed-url-sentinel|secret\.invalid/);
+    const calls = fixture.commands().filter(({ bin }) => bin === 'gh');
+    const logs = calls.filter(({ args }) => /\/actions\/jobs\/[12]\/logs$/.test(args.at(-1)));
+    assert.equal(logs.length, 2);
+    assert.deepEqual(logs.map(({ args }) => args.at(-1)), [
+      'repos/ainz-dg/triad-plus-engineering-loop/actions/jobs/1/logs',
+      'repos/ainz-dg/triad-plus-engineering-loop/actions/jobs/2/logs',
+    ]);
+    for (const { args } of calls) {
+      const isHistoricalLog = logs.some((call) => call.args === args);
+      assert.equal(args.filter((arg) => arg === '--allow-escape-sequences').length, isHistoricalLog ? 1 : 0);
+      assert.deepEqual(args.slice(0, 3), ['api', '--method', 'GET']);
+    }
+    const otherPaths = calls.filter((call) => !logs.includes(call)).map(({ args }) => args.at(-1));
+    for (const suffix of ['actions/runs/12345', 'releases/tags/v1.22.3',
+      'actions/runs/12345/attempts/1/jobs?per_page=100', 'actions/runs/12345/artifacts?per_page=100',
+      'actions/artifacts/987/zip', 'releases/assets/11', 'releases/assets/12']) {
+      assert.ok(otherPaths.some((path) => path.endsWith('/' + suffix)), 'Expected unflagged GET: ' + suffix);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ANSI job log CLI errors still stop immediately and redact stdout, stderr and summary', () => {
+  for (const [index, path] of ['actions/jobs/1/logs', 'actions/jobs/2/logs'].entries()) {
+    const root = mkdtempSync(join(tmpdir(), 'triad-recovery-ansi-error-'));
+    try {
+      const fixture = createRecoveryCliFixture(root);
+      const summaryPath = join(root, 'summary.md');
+      writeFileSync(summaryPath, '');
+      fixture.state.ghFailure = { path, status: 1,
+        stdout: '\x1b[36;1mraw-log-sentinel Authorization: token-sentinel\x1b[0m',
+        stderr: 'the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway\n'
+          + '\x1b[31mhttps://secret.invalid/?signature=signed-url-sentinel\x1b[0m',
+      };
+      fixture.save();
+      const result = fixture.run({ GITHUB_STEP_SUMMARY: summaryPath });
+      assert.equal(result.status, 1);
+      const exposed = result.stdout + result.stderr + readFileSync(summaryPath, 'utf8');
+      assert.ok(exposed.includes('BLOCKED/MISMATCH: Read-only gh GET /repos/ainz-dg/triad-plus-engineering-loop/' + path + ' failed'));
+      assert.match(exposed, /exit=1, http_status=unknown, http_class=unknown, error=nonzero-exit/);
+      assert.doesNotMatch(exposed, /\x1b|raw-log-sentinel|Authorization|token-sentinel|signed-url-sentinel|secret\.invalid|VERIFIED/);
+      const calls = fixture.commands().filter(({ bin }) => bin === 'gh');
+      assert.equal(calls.length, 5 + index);
+      assert.ok(calls.at(-1).args.includes('--allow-escape-sequences'));
+      assert.equal(calls.at(-1).args.at(-1), 'repos/ainz-dg/triad-plus-engineering-loop/' + path);
+      assert.equal(fixture.commands().filter(({ bin }) => bin === 'npm').length, 0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
 });

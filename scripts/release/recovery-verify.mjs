@@ -159,7 +159,9 @@ function command(bin, args, binary = false, readLabel) {
 const api = (path, binary = false, acceptBinary = false) => {
   const label = githubReadLabel(path);
   console.log('Recovery evidence: ' + label);
-  return command('gh', ['api', '--method', 'GET', ...(acceptBinary ? ['-H', 'Accept: application/octet-stream'] : []),
+  return command('gh', ['api', '--method', 'GET',
+    ...(/^actions\/jobs\/[1-9]\d*\/logs$/.test(path) ? ['--allow-escape-sequences'] : []),
+    ...(acceptBinary ? ['-H', 'Accept: application/octet-stream'] : []),
     'repos/' + REPOSITORY + '/' + path], binary, label);
 };
 const jsonApi = (path) => {
