@@ -41,46 +41,25 @@ field was applied.
 
 When a change is authorized, update only the requested keys in
 `.triad-plus/team.json`, preserving its JSON structure and all other values.
-Use the existing managed binding path to materialize the result (normally an
-`upgrade --apply` for the selected host). Do not duplicate frontmatter/TOML
-parsing in a shell command or in this skill. Preview the change first when the
-host workflow offers a dry run, then apply it only after the requested values
-are clear.
+The saved values are requested intent, not host selection. Generated native
+assets deliberately inherit host model and effort defaults: an unknown native
+model ID can prevent the host from loading Triad before preflight can run.
+Do not materialize requested model or effort overrides, manually patch managed
+profiles, or claim that `upgrade --apply` selected a requested model. The normal
+managed upgrade removes old overrides while preserving canonical intent.
 
 After applying, reread `team.json`, verify that only requested fields changed,
-and inspect the generated host assets. A failed materialization is a failed
-operation; do not claim success from the team file alone.
+and report **recorded only; host default**. If the host supplies a reliable
+native picker/catalog, guide the owner through that host's selection and
+confirm what is observable. Otherwise report that effective selection is
+unknown. Never turn a guessed ID, another provider's effort, or a user assertion
+into verification evidence. Syntax-valid does not mean host-available.
 
-## Adapter binding modes
-
-Read the adapter metadata rather than branching on a host name:
-
-- `global-profiles`: the adapter writes supported role values to its native
-  user-level profiles (for example Codex). Verify the resulting profile files.
-- `project-frontmatter`: the adapter writes only the fields listed by its
-  metadata to managed project agent definitions. OpenCode supports `model` and
-  its native `variant` field (the canonical `team.json.reasoning_effort` value
-  is materialized as that variant); Copilot supports `model` and
-  `reasoningEffort`; Claude Code currently materializes `model` only for its
-  supported roles. A field not listed by the adapter remains host/session
-  managed and must be reported as such.
-- `team-record`: the adapter records the owner's intent in `team.json` but has
-  no native model file to update. Report “recorded in team.json; host-native
-  materialization unavailable” and do not fabricate an agent binding.
-
-For every requested role/field, classify the result as **host-native applied**,
-**recorded only**, **host/session default**, or **unsupported**. Null or blank
-values mean host default and should not create artificial frontmatter/profile
-values. Reasoning levels are not portable across hosts; never translate a
-level or model ID from another provider. For OpenCode, inspect the host's
-available model variants (for example with `opencode models`) before requesting
-one; a role profile's `variant` is separate from the primary OpenCode session
-default.
-
-OpenCode's managed binding is the only writer for `.opencode/agents/*.md`.
-Never patch `reasoningEffort` into those profiles by analogy with Copilot. The
-same binding is reapplied after `upgrade --apply`, while null values remove
-stale managed fields and restore the host default.
+The adapter metadata describes potential native field names (`model`, OpenCode
+`variant`, Copilot `reasoningEffort`, Codex `model_reasoning_effort`) and
+unsupported roles. It does not authorize writing unverified overrides.
+`team-record` adapters have no native file to update. Null means no requested
+model/effort, with the host/session default still in effect.
 
 ## Safe completion report
 

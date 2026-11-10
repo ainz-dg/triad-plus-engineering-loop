@@ -63,12 +63,19 @@ export function hostModelField(adapter, roleId, source) {
 export function modelBindingSummary(adapter, roleId) {
   if (adapter?.modelBinding === 'team-record') return 'recorded in team.json (host-native binding unavailable)';
   if (!supportsNativeModel(adapter, roleId)) return 'recorded in team.json (role field unsupported by host)';
-  if (supportsNativeReasoning(adapter, roleId)) {
-    // Global profile adapters expose their native effort field through the
-    // profile writer rather than project frontmatter metadata.
-    return `host-native model + ${hostModelField(adapter, roleId, 'reasoning_effort') ?? 'reasoning'}`;
+  return 'host default; requested model/effort recorded only (not host-verified)';
+}
+
+/** Lexical checks only: passing these does not attest host availability. */
+export function modelInputIssue(adapter, value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'string' || value.length > 256 || !/^[A-Za-z0-9][A-Za-z0-9._:/#@+-]*$/.test(value)) {
+    return 'Use an exact model ID without spaces or control characters, or leave it blank for host default.';
   }
-  return 'host-native model; reasoning is host-managed';
+  if (adapter?.id === 'opencode' && !/^[^/#]+\/[^#]+(?:#[^/#]+)?$/.test(value)) {
+    return 'OpenCode needs the exact provider/model ID from its model picker; leave blank to use host default.';
+  }
+  return null;
 }
 
 /**
@@ -142,7 +149,7 @@ export function mergeTeamModelConfiguration(team, roleId, patch) {
   return updated;
 }
 
-/** Return only fields that the adapter can materialize in host-managed assets. */
+/** Legacy semantic projection of requested intent; never a native binding attestation. */
 export function materializedRoleConfiguration(adapter, roleId, configuration = {}) {
   const result = {};
   if (supportsNativeModel(adapter, roleId)) result.model = hostValue(configuration.model);
@@ -151,15 +158,14 @@ export function materializedRoleConfiguration(adapter, roleId, configuration = {
 }
 
 /**
- * Translate canonical semantic values into the exact host fields declared by
- * the adapter. Null values are retained so the managed writer can remove a
- * stale host binding and restore the host default.
+ * Unverified requests are intent, never native overrides. Hosts may reject an
+ * unknown model before any Triad preflight can run. Retain nulls so install and
+ * upgrade remove stale overrides. team.json retains the requested values.
  */
-export function materializedHostRoleConfiguration(adapter, roleId, configuration = {}) {
-  const semantic = materializedRoleConfiguration(adapter, roleId, configuration);
+export function materializedHostRoleConfiguration(adapter, roleId) {
   const result = {};
-  for (const { field, source } of modelFieldMappings(adapter, roleId)) {
-    result[field] = semantic[source] ?? null;
+  for (const { field } of modelFieldMappings(adapter, roleId)) {
+    result[field] = null;
   }
   return result;
 }

@@ -7,6 +7,7 @@ import {
   hostModelField,
   mergeTeamModelConfiguration,
   modelBindingSummary,
+  modelInputIssue,
   supportsNativeModel,
   supportsNativeReasoning,
   validateRequestedModelPatch,
@@ -15,6 +16,7 @@ import {
 import {
   colorEnabled,
   formatDoctorLine,
+  formatModelValue,
   formatSetupSummary,
   paint
 } from '../runtime/lib/terminal.mjs';
@@ -70,10 +72,10 @@ try {
     'Interaction: Italian — owner Ainz — direct',
     'Evaluator+: enabled'
   ]) assert.match(summary, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(summary, /Orchestrator\s+Solution — model: host default/);
-  assert.match(summary, /Developer\s+Builder — model: provider\/dev — variant: high/);
-  assert.match(summary, /Reviewer\s+Yuri — model: provider\/review — variant: low/);
-  assert.match(summary, /Evaluator\+\s+Gauntlet — model: provider\/eval — variant: medium/);
+  assert.match(summary, /Orchestrator\s+Solution — requested model: host default/);
+  assert.match(summary, /Developer\s+Builder — requested model: provider\/dev — variant: high/);
+  assert.match(summary, /Reviewer\s+Yuri — requested model: provider\/review — variant: low/);
+  assert.match(summary, /Evaluator\+\s+Gauntlet — requested model: provider\/eval — variant: medium/);
   assert.match(formatDoctorLine('GitHub Copilot', 'OK', { stream: nonTty }), /^GitHub Copilot\s+OK$/);
 
   assert.equal(supportsNativeModel(opencode, 'developer'), true);
@@ -88,7 +90,7 @@ try {
   assert.equal(supportsNativeReasoning(claude, 'developer'), false);
   assert.equal(supportsNativeModel(codex, 'reviewer'), true);
   assert.equal(supportsNativeReasoning(codex, 'reviewer'), true);
-  assert.match(modelBindingSummary(codex, 'reviewer'), /host-native model \+ reasoning$/);
+  assert.match(modelBindingSummary(codex, 'reviewer'), /host default; requested model\/effort recorded only/);
   assert.equal(supportsNativeModel(antigravity, 'developer'), false);
   assert.match(modelBindingSummary(antigravity, 'developer'), /recorded in team\.json/);
 
@@ -96,18 +98,41 @@ try {
     model: 'provider/dev', reasoning_effort: 'high'
   });
   assert.deepEqual(materializedHostRoleConfiguration(opencode, 'developer', team.roles.developer), {
-    model: 'provider/dev', variant: 'high'
+    model: null, variant: null
   });
   assert.deepEqual(materializedHostRoleConfiguration(opencode, 'orchestrator', team.roles.orchestrator), {
     model: null, variant: null
   });
   assert.deepEqual(materializedHostRoleConfiguration(opencode, 'developer', {
     model: 'provider/dev', reasoning_effort: '   '
-  }), { model: 'provider/dev', variant: null });
+  }), { model: null, variant: null });
   assert.deepEqual(materializedRoleConfiguration(claude, 'developer', team.roles.developer), {
     model: 'provider/dev'
   });
   assert.deepEqual(materializedRoleConfiguration(antigravity, 'developer', team.roles.developer), {});
+
+  for (const host of ['opencode', 'claude-code', 'codex', 'copilot', 'antigravity', 'hermes']) {
+    const adapter = getAdapter(host);
+    for (const model of ['gpt 6 luna medium', 'unknown/provider-model', '\u001b[31msecret']) {
+      const intent = structuredClone(team);
+      intent.roles.developer.model = model;
+      assert.equal(validateTeamConfiguration(intent), intent, 'legacy intent must remain recoverable');
+      assert.ok(Object.values(materializedHostRoleConfiguration(adapter, 'developer', intent.roles.developer)).every((value) => value === null));
+      assert.equal(intent.roles.developer.model, model, 'native defaults must not replace canonical intent');
+    }
+    assert.match(modelInputIssue(adapter, 'gpt 6 luna medium'), /exact model ID/);
+    assert.match(modelInputIssue(adapter, '\u001b[31mmodel'), /control characters/);
+    assert.equal(modelInputIssue(adapter, ''), null);
+    assert.equal(modelInputIssue(adapter, 'provider/model-name'), null, 'syntax is not a catalog attestation');
+  }
+  assert.match(modelInputIssue(opencode, 'gpt-6'), /provider\/model/);
+  assert.equal(modelInputIssue(opencode, 'provider/model#variant'), null);
+  assert.equal(modelInputIssue(opencode, 'openrouter/anthropic/model-name'), null);
+  assert.equal(modelInputIssue(opencode, 'vertex/model@001'), null);
+  assert.equal(formatModelValue('secret=never-show-this\u001b[31m'), 'invalid request (inspect team.json locally)');
+  const invalidSummary = structuredClone(team);
+  invalidSummary.roles.developer.model = 'secret=never-show-this\u001b[31m';
+  assert.doesNotMatch(formatSetupSummary({ adapter: opencode, control: '/tmp/control', team: invalidSummary, stream: nonTty }), /never-show-this|\u001b/);
 
   validateTeamConfiguration(team);
   assert.throws(() => validateTeamConfiguration({ ...team, roles: { ...team.roles, developer: { ...team.roles.developer, model: 42 } } }), /developer\.model must be a string or null/);

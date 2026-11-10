@@ -1,5 +1,5 @@
 import { roleDefinitions } from '../../adapters/registry.mjs';
-import { hostModelField, modelBindingSummary, supportsNativeReasoning } from './model-config.mjs';
+import { hostModelField, modelBindingSummary, modelInputIssue, supportsNativeReasoning } from './model-config.mjs';
 
 const ANSI = {
   reset: '\u001b[0m',
@@ -164,11 +164,11 @@ function display(value, fallback = 'host default') {
 }
 
 function roleModelLine(adapter, role, configuration, stream) {
-  const model = display(configuration?.model);
-  const parts = [`${role.label.padEnd(14)} ${display(configuration?.displayName, role.label)} — model: ${model}`];
+  const model = formatModelValue(configuration?.model);
+  const parts = [`${role.label.padEnd(14)} ${display(configuration?.displayName, role.label)} — requested model: ${model}`];
   if (supportsNativeReasoning(adapter, role.id)) {
     const field = hostModelField(adapter, role.id, 'reasoning_effort');
-    parts.push(`${field === 'variant' ? 'variant' : 'reasoning'}: ${display(configuration?.reasoning_effort)}`);
+    parts.push(`${field === 'variant' ? 'variant' : 'reasoning'}: ${formatModelValue(configuration?.reasoning_effort)}`);
   }
   parts.push(`binding: ${modelBindingSummary(adapter, role.id)}`);
   return `  ${parts.join(' — ')}`;
@@ -201,5 +201,6 @@ export function formatDoctorSection(title, { stream = process.stdout } = {}) {
 }
 
 export function formatModelValue(value) {
+  if (modelInputIssue(null, value)) return 'invalid request (inspect team.json locally)';
   return display(value);
 }

@@ -1,7 +1,8 @@
 import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { paint } from './terminal.mjs';
+import { formatModelValue, paint } from './terminal.mjs';
+import { roleDefinitions } from '../../adapters/registry.mjs';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const BRANCH = /^[A-Za-z0-9._/-]+$/;
@@ -526,7 +527,7 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
   return [...common, entry, 'Quickstart: https://github.com/ainz-dg/triad-plus-engineering-loop/blob/main/docs/getting-started.md'];
 }
 
-export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map(), stream = process.stdout }) {
+export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map(), stream = process.stdout }) {
   const label = (value) => paint(value, 'section', { stream });
   const directories = new Set();
   for (const adapter of adapters) {
@@ -548,8 +549,10 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
     ...(teamMode === 'leave unconfigured' ? [] : [
       `  .triad-plus/team.json: ${teamMode === 'reuse existing without rewriting' ? 'REUSE unchanged' : 'CREATE'}`,
       ...(roleOverlayPlan ? [`  AGENTS.md role instructions: ${roleOverlayPlan.action.toUpperCase()} ${roleOverlayPlan.target}`] : []),
+      '  Model/effort: host defaults; team.json stores unverified requested intent.',
+      ...roleDefinitions.map(({ id }) => `    ${id} — requested model: ${formatModelValue(team?.roles?.[id]?.model)}; effort: ${formatModelValue(team?.roles?.[id]?.reasoning_effort)}`),
       ...(roleBindingActions.length ? [
-        '  Host role model binding (project-local files only):',
+        '  Host role assets (project-local; model/effort overrides omitted):',
         ...roleBindingActions.map(({ adapterId, target }) => `    ${adapterId}: CONFIGURE ${target}`),
       ] : []),
     ]),
@@ -601,6 +604,7 @@ export function formatInteractiveSetupSummary({ root, repositories, adapters, pr
     `${label('Coding tools')}: ${adapters.map((adapter) => `${adapter.label} (${adapter.id})`).join(', ')}`,
     `${label('Changes planned')}: local tool entries; project settings ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'will be created' : 'will be updated' : 'stay unchanged'}.`,
     `${label('Team setup')}: ${teamMode === 'leave unconfigured' ? 'not configured (optional)' : teamMode}; Evaluator+: ${evaluator}`,
+    ...(team ? ['Model/effort: host defaults; team.json stores unverified requested intent.'] : []),
     `${label('Project settings')}: ${projectYamlPlan.changed ? projectYamlPlan.before === null ? 'new' : 'repository mapping update' : 'unchanged'}`,
     `${label('Files')}: setup-folder only${globalAdapters.length ? ` plus optional user-level shortcut files for ${globalAdapters.join(', ')}` : '; no user-level files'}`,
     paint('No files are written until you type "install".', 'warning', { stream }),

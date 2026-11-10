@@ -247,7 +247,7 @@ async function registryProjectAssetPaths(adapter) {
 function teamConfiguration() {
   const roles = {};
   for (const id of ['orchestrator', 'developer', 'reviewer', 'evaluator']) {
-    roles[id] = { displayName: id, persona: `${id} persona`, model: null, reasoning_effort: null, enabled: id !== 'evaluator' };
+    roles[id] = { displayName: id, persona: `${id} persona`, model: 'gpt 6 luna medium', reasoning_effort: 'not-a-verified-effort', enabled: id !== 'evaluator' };
   }
   return { schema_version: 1, interaction: { language: 'English', owner_name: 'Test Owner', communication_style: 'concise' }, roles };
 }
@@ -256,6 +256,38 @@ try {
   if (!pseudoTerminalAvailable) {
     process.stdout.write('Interactive setup CLI transcript: SKIPPED (no supported pseudo-terminal runner).\n');
   } else {
+    // New model input is corrected one field at a time, with a finite stop.
+    for (const recover of [false, true]) {
+      const modelRoot = path.join(fixture, recover ? 'MODEL-RECOVERY' : 'MODEL-BOUNDED-STOP');
+      await mkdir(modelRoot);
+      await makeRepo(path.join(modelRoot, 'sample-app'), 'model fixture source\n');
+      const input = [
+        line(''), line(''), key('space'), key('enter'), line(''),
+        key('down'), key('space'), key('enter'),
+        line('y'), line('n'), line('y'),
+        line(''), line(''), line(''), line(''), line(''),
+        line('gpt 6 luna medium'),
+        ...(recover
+          ? [line('fixture/explicit-request'), line(''), ...Array.from({ length: 12 }, () => line('')), line('details'), line('install')]
+          : [line('still invalid'), line('gpt 6 luna medium')]),
+      ];
+      const result = terminalInput(modelRoot, input, { HOME: path.join(fixture, `model-home-${recover}`), TERM: 'dumb' });
+      assert.equal(result.status, recover ? 0 : 2, `${result.stderr}\n${result.stdout}`);
+      assert.match(result.stdout, /Use an exact model ID without spaces/);
+      if (recover) {
+        const saved = JSON.parse(await readFile(path.join(modelRoot, '.triad-plus', 'team.json'), 'utf8'));
+        assert.equal(saved.roles.orchestrator.model, 'fixture/explicit-request');
+        const agent = await readFile(path.join(modelRoot, '.opencode', 'agents', 'triad-orchestrator.md'), 'utf8');
+        assert.doesNotMatch(agent, /^(?:model|variant):/m);
+        assert.match(result.stdout, /requested model: fixture\/explicit-request/);
+        assert.match(result.stdout, /host defaults; team.json stores unverified requested intent/);
+      } else {
+        assert.match(result.stdout, /after three attempts/);
+        assert.equal(await readFile(path.join(modelRoot, '.triad-plus', 'installation.json')).then(() => true, () => false), false);
+        assert.equal(await readFile(path.join(modelRoot, '.opencode', 'commands', 'triad.md')).then(() => true, () => false), false);
+      }
+    }
+
     // Single integrated first-install smoke: one non-Git Control Workspace,
     // one direct-child Git repository, and a real two-harness keyboard selection.
     const root = path.join(fixture, 'sample-workspace');
@@ -317,6 +349,10 @@ try {
       LC_ALL: 'C.UTF-8',
     });
     assert.equal(setup.status, 0, `${setup.stderr}\n${setup.stdout}`);
+    for (const role of ['orchestrator', 'developer', 'reviewer', 'evaluator']) {
+      assert.equal(await stat(path.join(codexHome, 'agents', `triad_${role}.toml`)).then(() => true, () => false), false,
+        'the consented Codex entry never adds role model overrides from legacy intent');
+    }
     assert.equal(await readFile(runtimeProbeLog).then(() => true, () => false), false, 'first-run setup never probes selected host runtimes');
     await saveTranscript('single-tty-two-harness-first-install', setup);
     const realRoot = await realpath(root);
