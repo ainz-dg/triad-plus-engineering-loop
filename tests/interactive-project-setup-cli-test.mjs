@@ -316,6 +316,8 @@ try {
     const sampleApp = path.join(root, 'sample-app');
     await makeRepo(sampleApp, 'sample app source\n');
     git(sampleApp, ['branch', '-m', 'develop']);
+    await writeFile(path.join(sampleApp, 'package.json'), JSON.stringify({ scripts: { test: 'node --test tests.mjs' } }));
+    await writeFile(path.join(sampleApp, 'tests.mjs'), 'import {test} from "node:test"; import assert from "node:assert/strict"; test("sample", () => assert.equal(1 + 1, 2));\n');
     const loopRoot = path.join(root, '.loop');
     await mkdir(path.join(loopRoot, 'evidence'), { recursive: true });
     await writeFile(path.join(loopRoot, 'run-state.yaml'), 'version: 1\nproject_decision: owner-state\n');
@@ -354,6 +356,13 @@ try {
         'the consented Codex entry never adds role model overrides from legacy intent');
     }
     assert.equal(await readFile(runtimeProbeLog).then(() => true, () => false), false, 'first-run setup never probes selected host runtimes');
+    const proposal = JSON.parse(await readFile(path.join(root, '.triad-plus', 'quality-gates.draft.json'), 'utf8'));
+    assert.equal(proposal.active, false);
+    assert.equal(proposal.repositories[0].id, 'ketchup2');
+    assert.equal(proposal.repositories[0].source_context, 'repository-preview');
+    assert.deepEqual(proposal.repositories[0].candidates.map((gate) => gate.id), ['test']);
+    assert.match(setup.stdout, /Inactive quality-gate draft/);
+    assert.ok(setup.stdout.includes(path.join(root, '.triad-plus', 'quality-gates.draft.json')));
     await saveTranscript('single-tty-two-harness-first-install', setup);
     const realRoot = await realpath(root);
     const setupText = setup.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');

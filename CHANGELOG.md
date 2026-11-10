@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Discover inactive npm quality-gate proposals per mapped repository/worktree
+  during setup, preserving active catalogs. Add read-only inspection and
+  structure-only lint, explicit draft refresh, source hashes and conservative
+  exclusions; the verifier rejects inactive proposals even with matching hashes.
 - Preserve requested role models in `team.json` while generated native agents
   inherit host defaults, preventing an invalid request from blocking host entry.
   Setup rejects malformed model IDs without guessing a replacement; managed

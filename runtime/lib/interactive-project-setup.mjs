@@ -511,6 +511,7 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
     'Installation succeeded; adapter assets are installed, but project readiness was not checked.',
     'Before a first loop: add root PRD.md and .loop/quality-gates.yaml; make an initial commit in each mapped repository, then create its mapped worktree.',
     `Optional from this Control Workspace: npx triad-plus doctor --host ${adapter.id} --control . (host/install only; not readiness).`,
+    'Inactive gate draft: .triad-plus/quality-gates.draft.json; inspect with npx triad-plus quality-gates --control . (no execution or activation).',
   ];
   let entry;
   if (adapter.id === 'opencode') entry = 'After readiness — OpenCode: open this Control Workspace and run `/triad ./PRD.md`.';
@@ -527,7 +528,7 @@ export function projectLaunchHint(adapter, controlRoot, { globalEntryInstalled =
   return [...common, entry, 'Quickstart: https://github.com/ainz-dg/triad-plus-engineering-loop/blob/main/docs/getting-started.md'];
 }
 
-export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map(), stream = process.stdout }) {
+export function formatSetupPreview({ root, repositories, adapters, adapterPlans, projectYamlPlan, currentVersion, teamMode = 'leave unconfigured', team = null, roleOverlayPlan = null, roleBindingActions = [], globalEntryPlans = new Map(), gateDraftAction = null, stream = process.stdout }) {
   const label = (value) => paint(value, 'section', { stream });
   const directories = new Set();
   for (const adapter of adapters) {
@@ -545,6 +546,7 @@ export function formatSetupPreview({ root, repositories, adapters, adapterPlans,
     `${label('Setup folder (Control Workspace)')}: ${root}`,
     `${label('Triad+ version')}: ${currentVersion}`,
     `${label('project.yaml')}: ${projectYamlPlan.changed ? `${projectYamlPlan.before === null ? 'CREATE' : 'UPDATE repositories mapping only'}` : 'unchanged'}`,
+    ...(gateDraftAction ? [`${label('Inactive quality-gate draft')}: ${gateDraftAction} ${path.join(root, '.triad-plus', 'quality-gates.draft.json')}; no commands executed, no active catalog changed.`] : []),
     `${label('Team configuration')}: ${teamMode}`,
     ...(teamMode === 'leave unconfigured' ? [] : [
       `  .triad-plus/team.json: ${teamMode === 'reuse existing without rewriting' ? 'REUSE unchanged' : 'CREATE'}`,

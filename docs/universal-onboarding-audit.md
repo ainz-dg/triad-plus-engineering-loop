@@ -43,8 +43,18 @@ the installation. These checks do not verify a model catalog.
 
 Native model selection remains the host's responsibility and must be confirmed
 or explicitly reported unobservable. The shared readiness/confirmation flow,
-inactive gate proposals, receipts and automation failures are a subsequent,
-strictly sequential increment; this first increment does not claim them.
+receipts and entry automation failures remain subsequent acceptance criteria;
+the first increment does not claim them.
+
+## Second increment: inactive gate proposals
+
+Setup now prepares a per-repository/worktree inactive draft, with source hashes,
+conservative npm-script candidates and prerequisite/context limitations.
+Inspection and structure-only lint run no commands; explicit refresh replaces
+only the draft. A correctly hashed inactive proposal is rejected by the verifier.
+See [quality-gate discovery](quality-gate-discovery.md) for the data contract,
+limits and controlled six-adapter/PTY evidence. Entry-time confirmation,
+remediation, persisted readiness and complete native E2E remain pending.
 
 ## Gate boundary to preserve
 
