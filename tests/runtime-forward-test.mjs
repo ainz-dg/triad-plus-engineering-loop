@@ -296,6 +296,10 @@ try {
   const handoffTemplate = await readFile(path.join(repositoryRoot, 'skills', 'triad-loop-bootstrap', 'assets', 'loop-template', 'handoff-report.template.md'), 'utf8');
   const projectTemplate = await readFile(path.join(repositoryRoot, 'skills', 'triad-loop-bootstrap', 'assets', 'project.yaml'), 'utf8');
   assert.match(handoffTemplate, /## Delivery closure record/);
+  assert.match(handoffTemplate, /## Effort estimate/);
+  assert.match(handoffTemplate, /\| Cost \(USD\) \|/);
+  assert.match(handoffTemplate, /not an invoice/i);
+  assert.match(handoffTemplate, /never invent a\s+figure/i);
   assert.match(handoffTemplate, /Remote access contract/);
   assert.match(projectTemplate, /remote_access: tailscale/);
   assert.match(projectTemplate, /remote_url:/);
