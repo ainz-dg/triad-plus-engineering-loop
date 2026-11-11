@@ -154,6 +154,7 @@ alone is not proof that a stale native global entry was repaired.
 
 Evidence here is six-adapter contract coverage, actual terminal error → model
 correction → READY, current-source/catalog/branch adversarial cases, and trusted
-wrapper fixtures. These are not fabricated native model sessions. Native model
-routing, real harness E2E, consented global compatibility/migration and final
-release gates remain open under delivery #26. No intermediate release is implied.
+wrapper fixtures. These are not six native model sessions. The v1.22.4 release
+acceptance adds one live OpenCode 1.19.3 host-default task; the other hosts and
+per-role model routing remain unverified. Consent and deterministic verification
+remain separate from model identity. See [release scope](releases/1.22.4.md).

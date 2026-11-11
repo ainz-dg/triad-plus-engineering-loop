@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.22.4
+
 - Add an explicit Codex/Hermes global entry refresh: preview exact owned paths
   and apply only with current-state consent, backups and rollback. Require a
   package-matching local install; preserve modified files and stop on shared
@@ -9,11 +11,11 @@
   `HERMES_HOME` and use the canonical preflight wrapper under `HOME/.hermes`.
   Model routing and coordinated old multi-adapter project upgrades remain
   separate limitations.
-- Add a common guided workspace preflight to the six native entry paths, with
+- Add a common guided workspace preflight to the six adapter entry paths, with
   explicit host-default consent, per-repository gate selection and persistent
   confirmations. Automation without consent fails closed; dispatch/verifier
   recheck current worktree/branch/source/catalog bindings. This does not verify
-  requested per-role models or complete the remaining native E2E/release gates.
+  requested per-role models or certify native sessions on all six hosts.
 
 - Discover inactive npm quality-gate proposals per mapped repository/worktree
   during setup, preserving active catalogs. Add read-only inspection and
@@ -23,6 +25,13 @@
   inherit host defaults, preventing an invalid request from blocking host entry.
   Setup rejects malformed model IDs without guessing a replacement; managed
   upgrade removes stale overrides without changing canonical intent.
+- Document the scoped live acceptance: OpenCode 1.19.3 host-default only. The
+  Orchestrator, Developer, and Reviewer shared `opencode/big-pickle`; per-role
+  model/effort routing remains unapplied and unverified. Six installable
+  adapters and contract/fixture coverage do not imply six native sessions.
+- Clarify that approved legacy gates without an optional toolchain binding may
+  pass with provenance `unbound`; this does not attest to script-body safety.
+- Release notes: [Triad+ 1.22.4](docs/releases/1.22.4.md).
 
 ## 1.22.3
 

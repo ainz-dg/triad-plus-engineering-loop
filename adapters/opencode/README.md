@@ -54,26 +54,26 @@ remain in a declared project workspace.
 
 ## Configure models deliberately
 
-`.triad-plus/team.json` is the source of truth for role-level model
-configuration. When a team file supplies values, Triad+ materializes the
-OpenCode-native `model` and `variant` frontmatter fields in each project agent
-definition during `init` and `upgrade --apply`:
+`.triad-plus/team.json` is the source of truth for requested role-level model
+and effort intent. In the current release scope, generated OpenCode agents omit
+`model` and `variant` frontmatter overrides so malformed or unavailable requests
+cannot prevent `/triad` from loading. The values are not applied as native
+per-role routing:
 
 ```text
-team.json model             → OpenCode model
-team.json reasoning_effort → OpenCode variant
+team.json model             → requested model intent (not applied)
+team.json reasoning_effort → requested effort intent (not applied)
 ```
 
 Do not treat generated `.opencode/agents/*.md` files as an independent
-configuration source; a later managed upgrade regenerates them from
-`.triad-plus/team.json`. A `null` or blank value leaves the corresponding field
-absent so OpenCode uses its host/session default.
+configuration source; a later managed upgrade regenerates them. Preflight
+requires an explicit host-default choice and records model identity as
+unobservable; it does not change `team.json`.
 
-The adapter only writes fields supported by this OpenCode materialization. Host
-and provider capabilities may still limit which model or reasoning levels are
-available. Inspect identifiers and variants with `opencode models` and keep
-role-specific routing explicit in the team file. OpenCode's role `variant` is
-not the same thing as the default model/session selected by the TUI:
+Use `opencode models` and the host's model picker to choose a session default.
+The v1.22.4 live package E2E observed Orchestrator, Developer, and Reviewer all
+using `opencode/big-pickle`, variant `default`. Distinct role models or effort
+were not verified; do not infer routing from `team.json`:
 
 | Agent | Recommended profile |
 | --- | --- |
@@ -83,15 +83,14 @@ not the same thing as the default model/session selected by the TUI:
 | `triad-reviewer` | Independent, reliable review model, medium reasoning. |
 
 Use `opencode models` to inspect the provider/model identifiers available in
-the local installation. Keep the developer, evaluator, and reviewer separately
-configured when independent model routing is required.
+the local installation. The table below is guidance for a future setup that
+supports verified per-role routing; Triad+ does not currently apply these
+separate profiles. All roles use the selected OpenCode session default.
 
-The adapter targets the installed OpenCode agent contract: `variant` is the
-host-native per-agent option, while `team.json` remains the canonical desired
-configuration. A null or blank model/effort removes the managed field and lets
-OpenCode use its host or session default. `upgrade --apply` refreshes managed
-agents and then reapplies this same binding; it does not rewrite `team.json`.
-OpenCode 1.18.x exposes this contract through the `AgentConfig.variant` field.
+OpenCode supports native per-agent `model` and `variant` fields, but Triad+
+does not materialize requested role values into those fields in this release.
+A managed `upgrade --apply` refreshes the agent assets while leaving the
+requested intent in `team.json`; it does not activate per-role routing.
 
 ## Start the loop
 

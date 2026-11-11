@@ -5,6 +5,11 @@ recorded evidence, the optional human-readable reports, and the read-only
 Cockpit. It is a procedure, not a promise that a full loop finishes within a
 fixed time.
 
+For v1.22.4, a separate package-tarball acceptance completed one small native
+OpenCode 1.19.3 task in host-default mode. The roles shared the same session
+default; this does not verify per-role model/effort routing or other host
+sessions. See [compatibility](../compatibility.md).
+
 ## Before you start
 
 - Node.js 20 or newer and npm.
@@ -177,9 +182,9 @@ agent run.*
   Cockpit will show the document as unavailable rather than generating it.
 - If a gate fails or evidence is stale, use the recorded failure and current
   diff to decide the next step. Do not call an agent claim a passing gate.
-- Steps that require an actual OpenCode model session are **not** demonstrated
-  by these screenshots or by the Cockpit package smoke. Run the interactive
-  `/triad` command in a configured OpenCode session to exercise that host path;
-  do not infer it from the presence of adapter files.
+- These screenshots and the Cockpit package smoke are not native-session
+  evidence. The separate v1.22.4 acceptance records a live `/triad` package
+  task on OpenCode 1.19.3 with a consented host default; adapter-file presence
+  alone still does not prove a working host session.
 
 For exact report-context fields, see [Human-readable reports](../human-readable-reports.md).
