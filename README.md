@@ -16,9 +16,9 @@ implementation, review, and orchestration.
 | | What changes |
 | --- | --- |
 | **Independent review** | A Reviewer examines the candidate and verifier evidence instead of asking the Developer to grade its own work. |
-| **Role model intent** | Record requested models and effort per role; generated agents inherit host defaults until host selection is confirmed. |
+| **Role model intent** | Record requested models and effort per role; generated agents omit unverified overrides, so requests are not active role routing. |
 | **Evidence-backed verification** | A claim that tests passed is not proof: `triad-verify` records environment-derived gate evidence. |
-| **Works across coding agents** | Use Codex, Claude Code, OpenCode, Antigravity, Hermes Agent, or GitHub Copilot through peer adapters. |
+| **Six host adapters** | Install project-local assets for Codex, Claude Code, OpenCode, Antigravity, Hermes Agent, or GitHub Copilot; adapter coverage does not certify a live session on every host. |
 
 Triad+ is for the moment after a coding agent says “done”: it gives that claim a
 separate reviewer, deterministic checks, and an orchestrator that decides what
@@ -90,6 +90,13 @@ For the step-by-step path, see [Getting started](docs/getting-started.md).
 For the complete OpenCode walkthrough—from setup and readiness through a first
 loop, its evidence, human-readable reports, and the read-only Cockpit—see the
 [OpenCode first-loop tutorial](docs/tutorials/opencode-first-loop.md).
+
+**Validation scope:** release acceptance currently includes one live OpenCode
+1.19.3 package E2E using the shared `opencode/big-pickle` host default. The six
+adapters are installable and covered by contracts/fixtures, but this does not
+mean six native sessions have been attested. `team.json` model and effort values
+are requested intent; generated agents do not apply or verify per-role routing.
+See [compatibility](docs/compatibility.md) for the evidence boundary.
 
 ```bash
 npx triad-plus
@@ -256,7 +263,9 @@ install. See the [Cockpit guide](cockpit/README.md).
 
 ## Quick start for every runtime
 
-Requirements: Node.js 20+ and one supported coding-agent host.
+Requirements: Node.js 20+ and a coding-agent host with a Triad+ adapter. Adapter
+availability does not imply live native-session acceptance; see the host
+evidence table below.
 
 Run `npx triad-plus` and use the setup wizard. Select Codex and/or Hermes under
 **Optional global entry bridge** if you want user-level commands. The final
@@ -284,14 +293,18 @@ It sees only the goal, quality target, final candidate, and verifier evidence.
 
 ## Supported coding agents
 
-| Runtime | Orchestrator | Developer | Reviewer | Evaluator+ | Verification dispatch |
-| --- | --- | --- | --- | --- | --- |
-| Codex | Yes | Yes | Yes | Yes | Explicit dispatch by default; experimental async hook opt-in |
-| Claude Code | Yes | Yes | Yes | Yes | Explicit fallback; validated hook when available |
-| OpenCode | Yes | Yes | Yes | Yes | Explicit dispatch |
-| Antigravity | Yes | Yes | Yes | Yes | Explicit dispatch |
-| Hermes Agent | Yes | Yes | Yes | Yes | Explicit dispatch |
-| GitHub Copilot | Yes | Yes | Yes | Yes | Explicit dispatch; no lifecycle hook |
+The role columns below describe adapter assets and contract/fixture coverage;
+they do not certify a native live session on that host. Current package-level
+live E2E acceptance is OpenCode 1.19.3 in host-default mode only.
+
+| Runtime | Orchestrator | Developer | Reviewer | Evaluator+ | Verification dispatch | Live native E2E in this scope |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex | Adapter | Adapter | Adapter | Adapter | Explicit dispatch by default; experimental async hook opt-in | Not attested |
+| Claude Code | Adapter | Adapter | Adapter | Adapter | Explicit fallback; validated hook when available | Not attested |
+| OpenCode | Adapter | Adapter | Adapter | Adapter | Explicit dispatch | 1.19.3 host-default; one-card task passed |
+| Antigravity | Adapter | Adapter | Adapter | Adapter | Explicit dispatch | Not attested |
+| Hermes Agent | Adapter | Adapter | Adapter | Adapter | Explicit dispatch | Not attested |
+| GitHub Copilot | Adapter | Adapter | Adapter | Adapter | Explicit dispatch; no lifecycle hook | Not attested |
 
 ## Configuration and verification
 
@@ -312,12 +325,15 @@ and explicit model/default, per-repository gate and prerequisite confirmation.
 remaining native model/E2E acceptance criteria.
 
 The installed `triad-model-configuration` Agent Skill lets the host agent
-inspect or change requested role models while preserving `team.json` as the
-source of truth and reporting host-specific binding limits.
+inspect or revise requested role model intent in `team.json` and report
+host-specific limits. It does not apply native per-role bindings in this
+release scope.
 
 Generated agent assets inherit host model and effort defaults. Requests in
 `team.json` are recorded intent, not proof of host selection; Triad+ does not
-inject unverified IDs into native agent files. See
+inject unverified IDs into native agent files. The live OpenCode acceptance
+observed Orchestrator, Developer, and Reviewer using the same session default;
+distinct role models or effort were not verified. See
 [model configuration](docs/configuration.md#configure-models-through-the-agent).
 
 `triad-verify` validates assignment/candidate binding, runs declared

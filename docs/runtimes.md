@@ -3,6 +3,11 @@
 Every adapter installs the same role skills and verifier runtime, while retaining
 host-specific entry points and configuration behavior.
 
+The table describes adapter-provided entry and verifier paths. Project asset,
+contract, and fixture coverage is not evidence of a native session on every
+host. In the v1.22.4 release scope, only OpenCode 1.19.3 has a live package E2E,
+using the shared host default; per-role model/effort routing is not verified.
+
 | Runtime | Prerequisite | Entry point | Verification | Hook limitation |
 | --- | --- | --- | --- | --- |
 | Codex | Codex CLI | `$triad` (optional user-level native skill) | Explicit dispatch by default; experimental async hook opt-in | Hook is optional, requires trusted configuration, and is not selected by `auto`. |
@@ -10,7 +15,7 @@ host-specific entry points and configuration behavior.
 | OpenCode | OpenCode | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
 | Antigravity | Antigravity | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
 | Hermes Agent | Hermes Agent | `/triad` | Explicit dispatch | No Triad lifecycle hook. |
-| GitHub Copilot | GitHub Copilot CLI and desktop app | `/triad` when the project skill is exposed, otherwise `/agent` → `triad-orchestrator` | Explicit dispatch | No adapter hook; desktop app supports the complete validated lifecycle. |
+| GitHub Copilot | GitHub Copilot CLI and desktop app | `/triad` when the project skill is exposed, otherwise `/agent` → `triad-orchestrator` | Explicit dispatch | No adapter hook; live desktop/CLI lifecycle is not attested in this release scope. |
 
 Run `npx triad-plus` for the first-install wizard. It can optionally install
 the Codex `$triad` skill or Hermes `/triad` wrapper after displaying each
@@ -54,14 +59,16 @@ Project agents are generated under `.github/agents/` and the Triad skill under
 select `triad-orchestrator` through `/agent` and provide the same request.
 Verification is explicit by default and no Copilot lifecycle hook is required.
 
-The desktop app has been validated with distinct Orchestrator, Developer, and
-Reviewer contexts through a complete unattended Triad run. The adapter uses
-explicit verification and has no lifecycle hook; the CLI and asset paths are
-validated independently as well.
+The project skill was recognized by Copilot CLI during isolated capability
+inspection. A native Copilot model session is not attested here. Its adapter
+uses explicit verification and has no lifecycle hook; CLI and asset contracts
+are distinct from a live desktop/CLI workflow.
 
 ## OpenCode
 
 Use the interactive OpenCode TUI for complete multi-step Triad runs. OpenCode
-1.18.x validated the full Orchestrator → Developer → verifier → Reviewer →
-configured Evaluator+ lifecycle in the TUI. `opencode run` is useful for
-one-shot work but does not retain that multi-step parent/subagent lifecycle.
+1.19.3 was used for the live package E2E in this release scope. The acceptance
+covered Orchestrator → Developer → verifier → Reviewer; all three roles used
+the shared host default. It did not validate per-role model routing or the
+configured Evaluator+ lifecycle. `opencode run` is useful for one-shot work but
+does not retain that multi-step parent/subagent lifecycle.

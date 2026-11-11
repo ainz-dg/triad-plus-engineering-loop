@@ -44,19 +44,17 @@ after developer completion.
 
 ## Model choices
 
-`.triad-plus/team.json` is the source of truth for project role model
-configuration. When a team file supplies a model, Triad+ materializes the
-Claude Code-native `model` frontmatter field in the Developer, Reviewer, and
-Evaluator agent definitions during `init` and `upgrade --apply`. A null or
-blank value leaves the field absent so Claude Code uses its host/session
-default. Generated `.claude/agents/*.md` files are managed outputs; do not use
-them as a separate configuration source.
+`.triad-plus/team.json` preserves requested project role model intent. Current
+generated `.claude/agents/*.md` files omit unverified `model` overrides, so
+these requests are not applied as native per-role routing. The host/session
+default is used after explicit preflight consent; its effective identity is not
+attested by READY. Generated agent files are managed outputs; do not use them
+as a separate configuration source.
 
-Claude Code does not expose a Triad-managed `reasoningEffort` frontmatter field
-in this adapter, so `team.json.reasoning_effort` remains host/session-managed.
-Keep the Developer on the strongest available implementation profile and keep
-Evaluator and Reviewer independently configured when separate judgement is
-important.
+`team.json.reasoning_effort` is requested intent and is not applied or verified
+by this adapter in the current release scope. Select any required model/effort
+through the host's native controls and do not treat that selection as verified
+unless the host supplies reliable session evidence.
 
 ## Global installation
 

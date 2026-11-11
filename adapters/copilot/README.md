@@ -13,8 +13,9 @@ surface does not expose the skill as a slash command, select
 `triad-orchestrator` with `/agent` and provide the same PRD request. The
 adapter always uses explicit verification dispatch and has no lifecycle hook.
 
-Role models are written to the official custom-agent `model` and
-`reasoningEffort` frontmatter fields when supplied by `team.json`; Copilot may
-fall back to its session/provider defaults when a requested model is not
-available. Copilot custom agents run in separate subagent contexts when the
-host delegates them; the desktop-app validation is a required release gate.
+`.triad-plus/team.json` preserves requested role model/effort intent. Current
+generated custom-agent assets omit unverified `model` and `reasoningEffort`
+overrides; no per-role routing is applied or verified. Use the host's explicit
+session/default controls when available. The CLI/IDE/desktop surfaces have
+different capabilities; skill discovery and adapter fixtures do not attest a
+native Copilot model session in the v1.22.4 release scope.

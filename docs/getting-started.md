@@ -55,6 +55,13 @@ setup behavior and limitations, see
 native host discovery or route an Attempt to that host. See the
 [adapter compatibility matrix](compatibility.md).
 
+The six adapter choices describe installable host assets, not six validated
+native sessions. The current release acceptance is one OpenCode 1.19.3
+host-default E2E. Requested model/effort values remain intent: generated role
+assets omit unverified overrides, and the live OpenCode Orchestrator, Developer,
+and Reviewer shared the same session default. Choose/confirm the host default
+explicitly in preflight; READY is not model identity or per-role routing proof.
+
 ## 2. Add the project inputs and check readiness
 
 At the Control Workspace root, create `PRD.md` with a small goal, one
