@@ -66,9 +66,10 @@ are distinct from a live desktop/CLI workflow.
 
 ## OpenCode
 
-Use the interactive OpenCode TUI for complete multi-step Triad runs. OpenCode
-1.19.3 was used for the live package E2E in this release scope. The acceptance
-covered Orchestrator → Developer → verifier → Reviewer; all three roles used
-the shared host default. It did not validate per-role model routing or the
-configured Evaluator+ lifecycle. `opencode run` is useful for one-shot work but
-does not retain that multi-step parent/subagent lifecycle.
+OpenCode 1.19.3 was used for the live package E2E in this release scope.
+The acceptance invoked `opencode run --command triad` and completed a one-shot
+task with separate Developer and Reviewer native tasks plus deterministic
+verification. All three roles used the shared host default; per-role model
+routing and the configured Evaluator+ lifecycle were not validated. The
+interactive OpenCode TUI remains the entry for ongoing sessions. The one-shot
+E2E does not establish session persistence or resume behavior.

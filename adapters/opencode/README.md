@@ -87,12 +87,10 @@ the local installation. The table below is guidance for a future setup that
 supports verified per-role routing; Triad+ does not currently apply these
 separate profiles. All roles use the selected OpenCode session default.
 
-The adapter targets the installed OpenCode agent contract: `variant` is the
-host-native per-agent option, while `team.json` remains the canonical desired
-configuration. A null or blank model/effort removes the managed field and lets
-OpenCode use its host or session default. `upgrade --apply` refreshes managed
-agents and then reapplies this same binding; it does not rewrite `team.json`.
-OpenCode 1.18.x exposes this contract through the `AgentConfig.variant` field.
+OpenCode supports native per-agent `model` and `variant` fields, but Triad+
+does not materialize requested role values into those fields in this release.
+A managed `upgrade --apply` refreshes the agent assets while leaving the
+requested intent in `team.json`; it does not activate per-role routing.
 
 ## Start the loop
 
